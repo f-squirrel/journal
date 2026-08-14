@@ -48,9 +48,11 @@ Explicitly **not** specified here, because they are not M1:
 | Randomness | OS CSPRNG | `getrandom`, see §2.1 |
 
 Rust crates: `argon2`, `chacha20poly1305`, `hkdf`, `hmac`, `sha2`, `zeroize`,
-`secrecy`, `getrandom`, `subtle`. No hand-rolled primitives, ever — including
-no hand-rolled base32; the encoder in §7.2 is a table-driven, constant-shape
-routine over a documented alphabet, and it never touches key material.
+`secrecy`, `getrandom`, `subtle`, and `base32` (for §7.2 and §8). No
+hand-rolled primitives, ever — and that extends to the encoding: the
+`base32` crate's `Alphabet::Crockford` is exactly the alphabet of §7.2, and
+its decoder already performs the case folding and confusable mapping that
+§7.3 requires, so neither the encoder nor the normalizer is written here.
 
 HKDF is used in **Expand-only** form wherever its input keying material is
 already a uniformly random 256-bit key (RFC 5869 §3.3 explicitly permits
@@ -623,12 +625,19 @@ mixed-case naming scheme a collision waiting to happen.
 Before any KDF work, normalize the input:
 
 1. Strip all hyphens, spaces, tabs, and newlines.
-2. Uppercase.
-3. Map confusables: `O` → `0`; `I` → `1`; `L` → `1`.
-4. Reject if the result is not exactly 32 characters, or contains a character
-   outside the alphabet. Reject cleanly — a malformed code is a typo, not an
-   exception, and never a panic.
-5. Decode to 20 bytes. Those bytes are the Argon2id password input (§3.3).
+2. Reject if the result is not exactly 32 characters. Reject cleanly — a
+   malformed code is a typo, not an exception, and never a panic.
+3. Decode with `base32::decode(Alphabet::Crockford, …)`, which folds case and
+   maps the confusables (`O`/`o` → `0`, `I`/`i`/`L`/`l` → `1`) as part of
+   decoding; reject if it returns `None` or anything other than 20 bytes.
+4. Those 20 bytes are the Argon2id password input (§3.3).
+
+Steps 2–3 are deliberately *not* a hand-written normalizer. An independent
+implementation (Task 16, Python) should reach for its own Crockford library
+rather than reproducing a mapping table; the behaviour to match is
+"Crockford Base32", which is a citable standard, not a table in this
+document. The mapping is stated in parentheses above only so a reviewer can
+confirm a candidate library does it.
 
 There is **no check character**. A typo that survives normalization costs one
 Argon2id run (~1 second) and reports the same generic failure as a wrong
@@ -649,7 +658,8 @@ K_name   = HKDF-Expand(DEK, info = §3.4 with purpose = 2, L = 32)
 h        = SHA-256(plaintext)                          # 32 bytes
 tag      = HMAC-SHA-256(K_name, b"JRNLNAM1" || kind_u8 || h)   # 41-byte input
 name_tag = tag[0..20]                                  # 160 bits
-name     = crockford_base32_lower(name_tag)            # exactly 32 chars
+name     = crockford_base32(name_tag), lowercased       # exactly 32 chars
+                                                        # `base32` crate, §2
 ```
 
 `name_tag` is the object's `object_id` in §3.4 and §5.6, so the name, the key,
@@ -782,5 +792,46 @@ part that will be hard to reconstruct later:
 - **Read-only on an unexpected `rollback_counter`** (§5.2). Chosen over
   ignoring the field so that M1 clients cannot silently undermine an M2
   client's rollback protection.
+
+### 11.1 Why this format rather than an off-the-shelf one
+
+Asked and answered before ratification, and recorded here so it is not
+re-litigated at implementation time. The survey found no crate that provides
+this format, and one — [`age`](https://github.com/C2SP/C2SP/blob/main/age.md)
+— that comes close enough to be worth ruling out explicitly.
+
+`age` is the only mature candidate: a reviewed spec, a maintained Rust
+implementation (`age`/rage, MIT/Apache-2.0), and a recipient-stanza header
+that is genuinely the same idea as §4's slot list. It was rejected on three
+points, each of which is a requirement rather than a preference:
+
+1. **The passphrase recipient is scrypt, not Argon2id.** Requirement F4 of
+   the parent design names Argon2, and §6's memory-hard calibration story is
+   built on Argon2id's `m`/`t`/`p`.
+2. **"An scrypt stanza, if present, MUST be the only stanza in the header."**
+   A passphrase-protected age file therefore cannot also carry a recovery
+   slot — which is the entire point of §4, and the extension point M3's
+   device key depends on.
+3. **No caller-supplied associated data.** age fixes `aad = ""`. §5.6's
+   binding of object kind, object ID, and format version into the AAD is what
+   stops object substitution and per-object rollback in the sync threat
+   model, and it has nowhere to live in an age file.
+
+Point 1 and 2 could be worked around by deriving an X25519 identity from an
+Argon2id output and using ordinary recipient stanzas; point 3 could not, and
+the workaround is exactly the sort of clever repurposing of a primitive that
+this document exists to prevent. The other crates surveyed
+(`aerovault`, `ferrocrypt`, `enc_file`, `rust-keyvault`) are single-author
+and months old, and at least one is GPL-3.0-only, which this MIT project
+could not take as a dependency regardless of its merits.
+
+The conclusion worth carrying forward: **this document specifies a container,
+not a cryptosystem.** Every primitive in §2 is an audited third-party crate —
+the RustCrypto ChaCha20-Poly1305 implementation has been reviewed by NCC
+Group — and the encoding of §7.2 is a third-party crate too. What is written
+here is framing, field offsets, and AAD layout: serialization code, whose
+requirements (keyed content-addressing, per-object AAD binding, a
+cross-device KDF ceiling, a reserved rollback field) are specific to this
+app and are not on offer anywhere.
 ```
 
