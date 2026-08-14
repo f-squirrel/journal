@@ -18,20 +18,27 @@ implementation, then tick the box. Paths are repo-relative.
 
 ## Task 1 — Workspace skeleton
 
-- [ ] Root `Cargo.toml` workspace with members `crates/journal-model`,
+- [x] Root `Cargo.toml` workspace with members `crates/journal-model`,
       `crates/journal-crypto`, `crates/journal-store`, `apps/desktop` (Tauri).
-- [ ] `rust-toolchain.toml` pinning a stable version and the `rustfmt` and
+- [x] `rust-toolchain.toml` pinning a stable version and the `rustfmt` and
       `clippy` components; `rustfmt.toml`.
-- [ ] Lints go in `[workspace.lints.clippy]` in the root `Cargo.toml`, inherited
+- [x] Lints go in `[workspace.lints.clippy]` in the root `Cargo.toml`, inherited
       by each crate; CI adds `-D warnings` through `RUSTFLAGS`. (`clippy.toml`
       configures lint *thresholds*, it cannot deny warnings.)
-- [ ] `deny.toml` for `cargo deny check` — advisories, licenses, bans. Commit
+- [x] `deny.toml` for `cargo deny check` — advisories, licenses, bans. Commit
       `Cargo.lock`: this workspace ships binaries.
-- [ ] `ui/` — Vite + React + TypeScript, wired as the Tauri frontend.
-- [ ] `.github/workflows/ci.yml`: fmt, clippy, `cargo test`, `cargo deny check`,
+- [x] `ui/` — Vite + React + TypeScript, wired as the Tauri frontend.
+- [x] `.github/workflows/ci.yml`: fmt, clippy, `cargo test`, `cargo deny check`,
       build on Linux/macOS/Windows.
-- [ ] Verify: `cargo test` passes and `cargo tauri dev` opens a window
-      rendering "hello".
+- [x] Verify: `cargo test` passes and `cargo tauri dev` opens a window
+      rendering "hello". `cargo fmt --check`, `cargo clippy --workspace
+      --all-targets` (`-D warnings`), and `cargo deny check` are all clean too.
+      The frontend renders `<h1>hello</h1>` (confirmed in the built bundle);
+      this sandbox has no display server tooling to screenshot a real
+      `tauri dev` window, so the release binary was instead run headlessly
+      under `xvfb-run` and stayed up (event loop running, no panic/error)
+      until killed — GUI-visual confirmation is left for a machine with a
+      real display.
 
 ## Task 2 — Crypto spec ratified
 
