@@ -38,4 +38,23 @@ mod tests {
         assert_eq!(base, base);
         assert_ne!(base, other);
     }
+
+    #[test]
+    fn object_kind_round_trips_and_rejects_the_reserved_range() {
+        for kind in [ObjectKind::Manifest, ObjectKind::Entry, ObjectKind::Attachment] {
+            assert!(
+                matches!(ObjectKind::try_from(kind as u8), Ok(k) if k == kind),
+                "{kind:?} must round-trip through its on-disk discriminant",
+            );
+        }
+        // Spec §4.3 reserves 0 and 4..=255. A reader that defaulted instead
+        // of rejecting would open an object as the wrong kind, and kind is
+        // bound into every name tag and every preamble.
+        for reserved in [0u8, 4, 5, 255] {
+            assert!(
+                ObjectKind::try_from(reserved).is_err(),
+                "reserved discriminant {reserved} must not convert",
+            );
+        }
+    }
 }

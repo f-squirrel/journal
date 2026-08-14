@@ -57,6 +57,11 @@ preferences:
   age carries no associated data and the age backend checks the binding from
   a preamble inside the plaintext. Never add an "open without binding" path,
   and never return plaintext before the binding verifies.
+- Under the age backend the X25519 **recipient** is key material, not a
+  public key: age authenticates no sender, so possessing it is enough to
+  forge any object. It never reaches disk, logs, IPC, or an export path
+  (crypto spec §8). This is what keeps the binding preamble a real defence
+  against a malicious storage provider.
 - See the design doc's §3 for what this app explicitly does *not* defend
   against — don't silently expand or narrow that list without updating it.
 

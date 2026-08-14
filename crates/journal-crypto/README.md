@@ -41,6 +41,11 @@ not bugs:
   (spec §10.1).
 - **Binding lives in the plaintext.** age fixes `aad = ""`, so the age backend
   prepends a 52-byte binding preamble and verifies it on open (spec §5.4).
+- **The X25519 recipient is secret.** age authenticates no sender, so anyone
+  holding `identity.to_public()` can forge a well-formed object under any
+  `Binding`. It is a public key by type only — never persist, log, export, or
+  send it across IPC (spec §8). The M2 native backend's symmetric DEK drops
+  this rule.
 
 ## Non-negotiable conventions
 
