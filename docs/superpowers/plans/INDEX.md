@@ -6,3 +6,4 @@ opening every plan file. Newest first.
 
 | Date | Plan | Status | Notes |
 |------|------|--------|-------|
+| 2026-08-14 | [M1 — Encrypted local vault](2026-08-14-m1-encrypted-local-vault.md) | Draft | Desktop only. Design: [journaling app](../specs/2026-08-14-journaling-app-design.md) |
