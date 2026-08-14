@@ -39,6 +39,8 @@ implementation, then tick the box. Paths are repo-relative.
       under `xvfb-run` and stayed up (event loop running, no panic/error)
       until killed — GUI-visual confirmation is left for a machine with a
       real display.
+- [x] Review docs (use `/docs-review-guide`) to ensure this change is reflected
+      in CLAUDE.md, workspace layout docs, and CI/build documentation.
 
 ## Task 2 — Crypto spec ratified
 
@@ -51,6 +53,8 @@ implementation, then tick the box. Paths are repo-relative.
 - [ ] Review it before writing crypto code. This task is a document, on
       purpose — the scheme is the expensive thing to get wrong, and Task 16's
       independent decryptor is written from this document alone.
+- [ ] Review docs (use `/docs-review-guide`) to ensure this spec is reflected
+      in CLAUDE.md security-critical conventions and linked from INDEX.md.
 
 ## Task 3 — `journal-model`
 
@@ -60,6 +64,8 @@ implementation, then tick the box. Paths are repo-relative.
       silent acceptance of unknown fields.
 - [ ] Verify (test first): round-trip tests, plus a golden-file test so an
       accidental format change fails loudly instead of migrating silently.
+- [ ] Review docs (use `/docs-review-guide`) to ensure workspace layout and
+      crate structure in CLAUDE.md match the implementation.
 
 ## Task 4 — `journal-crypto`: KDF and calibration
 
@@ -71,6 +77,8 @@ implementation, then tick the box. Paths are repo-relative.
 - [ ] Verify (tests first): known-answer tests against RFC 9106 vectors;
       calibration on the CI runner lands inside the documented bounds; opening
       a vault whose header parameters sit below the floor is rejected.
+- [ ] Review docs (use `/docs-review-guide`) to ensure crypto design and
+      calibration parameters are correctly documented in the specs.
 
 ## Task 5 — `journal-crypto`: envelope and key hierarchy
 
@@ -88,6 +96,9 @@ implementation, then tick the box. Paths are repo-relative.
       truncated envelope rejected; cross-object substitution rejected; version
       downgrade rejected; a `trybuild` compile-fail test asserting key types
       implement neither `Serialize` nor `Debug`; zeroization-on-drop test.
+- [ ] Review docs (use `/docs-review-guide`) to ensure CLAUDE.md security
+      conventions about key material, serialization, and Debug implementations
+      are still accurate.
 
 ## Task 6 — `journal-crypto`: key slots and recovery code
 
@@ -101,6 +112,8 @@ implementation, then tick the box. Paths are repo-relative.
       recovery slot; wrong passphrase rejected; after a passphrase change every
       object is byte-identical and the recovery code still works; malformed
       recovery codes are rejected without panicking.
+- [ ] Review docs (use `/docs-review-guide`) to ensure recovery code spec and
+      slot structure documentation in the crypto spec align with implementation.
 
 ## Task 7 — `journal-store`: vault format and atomic IO
 
@@ -116,6 +129,8 @@ implementation, then tick the box. Paths are repo-relative.
       killed-mid-write test (write the temp file, abort before rename) leaves
       the vault openable and unchanged; disk-full surfaces as an error rather
       than a panic or a half-written object.
+- [ ] Review docs (use `/docs-review-guide`) to ensure vault format versioning
+      and error handling are documented accurately.
 
 ## Task 8 — `journal-store`: manifest, entries, tombstones
 
@@ -128,6 +143,8 @@ implementation, then tick the box. Paths are repo-relative.
 - [ ] Verify (tests first): property test that any entry written reads back
       byte-identical; a deleted entry leaves listings and leaves a tombstone;
       concurrent writes from two handles do not corrupt the manifest.
+- [ ] Review docs (use `/docs-review-guide`) to ensure tombstone and manifest
+      design conventions are reflected in security-critical documentation.
 
 ## Task 9 — `journal-store`: attachments and object naming
 
@@ -138,6 +155,8 @@ implementation, then tick the box. Paths are repo-relative.
       blob's on-disk name equals no hash of its plaintext — this is the
       confirmation-oracle regression test and it should read like one; GC drops
       unreferenced blobs and keeps referenced ones.
+- [ ] Review docs (use `/docs-review-guide`) to ensure object naming and
+      blob storage design in the spec match the implementation.
 
 ## Task 10 — `journal-store`: in-memory index
 
@@ -150,6 +169,8 @@ implementation, then tick the box. Paths are repo-relative.
       vault; the index is empty after lock; the rebuild time for a 1,000-entry
       vault is printed by the test, so the threshold that would force an
       encrypted on-disk index is a measurement rather than a guess.
+- [ ] Review docs (use `/docs-review-guide`) to ensure search index design and
+      memory-only constraints in the spec match the code.
 
 ## Task 11 — Tauri commands and IPC surface
 
@@ -165,6 +186,9 @@ implementation, then tick the box. Paths are repo-relative.
 - [ ] Verify (tests first): an integration test per command, plus a test
       asserting every command's return type is on an explicit allow-list of
       types known to carry no secrets.
+- [ ] Review docs (use `/docs-review-guide`) to ensure CLAUDE.md security
+      conventions about IPC boundaries, key material, and logging policy
+      are upheld.
 
 ## Task 12 — Blob protocol and shell lockdown
 
@@ -178,6 +202,8 @@ implementation, then tick the box. Paths are repo-relative.
 - [ ] Verify: an unknown blob name 404s without revealing whether it exists;
       the CSP is asserted by a test rather than eyeballed; the on-disk cache
       behaviour is covered by Task 16's sweep.
+- [ ] Review docs (use `/docs-review-guide`) to ensure security constraints
+      and protocol design in CLAUDE.md align with implementation.
 
 ## Task 13 — Editor UI
 
@@ -189,6 +215,8 @@ implementation, then tick the box. Paths are repo-relative.
       corrupt, disk full.
 - [ ] Verify: run the app, create a vault, write an entry with a pasted image,
       restart, unlock, confirm it renders. Confirm a wrong passphrase fails.
+- [ ] Review docs (use `/docs-review-guide`) to ensure UI/frontend documentation
+      is updated if needed.
 
 ## Task 14 — Unlock, auto-lock, teardown
 
@@ -201,6 +229,8 @@ implementation, then tick the box. Paths are repo-relative.
 - [ ] Verify: after auto-lock the reloaded WebView shows the unlock screen with
       no entry content surviving in the page, the index is gone, and a
       subsequent unlock works.
+- [ ] Review docs (use `/docs-review-guide`) to ensure auto-lock behavior and
+      security model are documented accurately.
 
 ## Task 15 — Export and import
 
@@ -211,6 +241,8 @@ implementation, then tick the box. Paths are repo-relative.
       one-way exit.
 - [ ] Verify: export → import into a fresh vault reproduces the same entries
       and attachments; the confirmation cannot be bypassed at the command layer.
+- [ ] Review docs (use `/docs-review-guide`) to ensure export/import behavior
+      and security considerations are documented.
 
 ## Task 16 — Format oracle and leak audit
 
@@ -227,6 +259,8 @@ implementation, then tick the box. Paths are repo-relative.
       canary.
 - [ ] Verify: all four run in CI, and the leak sweep runs *after* Task 12's
       protocol handler has actually served images.
+- [ ] Review docs (use `/docs-review-guide`) to ensure testing, validation, and
+      security audit procedures are accurately documented.
 
 ## Task 17 — Ship-readiness
 
@@ -241,6 +275,8 @@ implementation, then tick the box. Paths are repo-relative.
       against instead.
 - [ ] Verify: a clean checkout builds and runs from the README alone, on a
       machine that has never built this project.
+- [ ] Review docs (use `/docs-review-guide`) to ensure all documentation is
+      complete, accurate, and ready for shipping (README, SECURITY, build docs).
 
 ## Not in this milestone
 
