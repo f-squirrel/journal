@@ -1,1 +1,118 @@
 # journal
+
+A free, open source, end-to-end encrypted journaling application. Entries
+are Markdown with embedded images. Data is encrypted on your device with a
+key derived from a passphrase (Argon2id); cloud sync (Dropbox first) is used
+only as a dumb blob store that never sees plaintext.
+
+Platforms, in order: desktop (Linux/macOS/Windows) → iOS → Android.
+
+**Status:** early scaffolding. The workspace, CI, and crate skeletons exist;
+the crypto, storage, and UI layers described below are not implemented yet.
+See [Roadmap](#roadmap).
+
+## Security model
+
+- End-to-end encryption: the app encrypts on-device with Argon2id-derived
+  keys; a sync provider only ever holds ciphertext.
+- Losing your passphrase means losing your data — a one-time recovery code
+  is offered as the sole escape hatch (a second wrapping of the same key,
+  not an escrow).
+- What this does *not* defend against — a compromised/malware-infected OS
+  while unlocked, traffic-shape analysis, swap/hibernation capturing keys,
+  and whole-vault rollback — is documented, not hidden.
+
+Full threat model and cryptographic design:
+[`docs/superpowers/specs/2026-08-14-journaling-app-design.md`](docs/superpowers/specs/2026-08-14-journaling-app-design.md).
+
+## Architecture
+
+```
+ui/                    React + TypeScript frontend (Tauri webview)
+apps/desktop/           Tauri 2 shell — desktop entry point, IPC commands
+crates/journal-model/   Shared domain types: entries, attachments, manifest
+crates/journal-crypto/  Argon2id KDF, AEAD envelope, key hierarchy, zeroize
+crates/journal-store/   Encrypted on-disk vault + in-memory search index
+```
+
+The same Rust core and UI code are meant to be shared across desktop and
+(later) mobile, with all security-relevant logic living in Rust — the UI
+never sees passphrase-derived keys, only decrypted content it needs to
+render.
+
+## Prerequisites
+
+- Rust, pinned via [`rust-toolchain.toml`](rust-toolchain.toml) (currently
+  1.97.1) with the `rustfmt` and `clippy` components — `rustup` installs the
+  right version automatically.
+- Node.js 22+ and npm, for the `ui/` frontend.
+- [Tauri system dependencies](https://tauri.app/start/prerequisites/) for
+  your OS (on Linux: `libwebkit2gtk-4.1-dev`, `libgtk-3-dev`,
+  `libayatana-appindicator3-dev`, `librsvg2-dev`,
+  `libjavascriptcoregtk-4.1-dev`, `libsoup-3.0-dev`).
+- `cargo install tauri-cli` (or use `cargo tauri` via `cargo-binstall`) for
+  `cargo tauri dev` / `cargo tauri build`.
+- `cargo install cargo-deny` if you want to run the license/advisory check
+  locally.
+
+## Building and running
+
+```bash
+# install UI dependencies
+npm --prefix ui ci
+
+# run the desktop app in dev mode (starts the Vite dev server too)
+cargo tauri dev
+
+# build a release bundle
+cargo tauri build
+```
+
+To work on the Rust workspace alone (no Tauri shell):
+
+```bash
+cargo build --workspace
+cargo test --workspace
+```
+
+To work on the UI alone:
+
+```bash
+cd ui
+npm run dev      # Vite dev server on http://localhost:1420
+npm run build    # tsc -b && vite build
+npm run lint      # oxlint
+```
+
+## Checks CI runs
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets    # RUSTFLAGS=-D warnings
+cargo test --workspace
+cargo deny check
+npm --prefix ui run build
+cargo build --workspace --release
+```
+
+## Project docs and workflow
+
+This repo plans and executes work using the `superpowers` Claude Code
+plugin. See [`docs/superpowers/README.md`](docs/superpowers/README.md) for
+the brainstorm → plan → execute → review lifecycle, and
+[`docs/superpowers/plans/INDEX.md`](docs/superpowers/plans/INDEX.md) for
+current project status.
+
+## Roadmap
+
+| Milestone | Scope |
+|---|---|
+| **M1** | Rust core + encrypted local vault + Markdown editing + images + plaintext export, desktop only. No sync, no mobile. |
+| **M2** | Sync engine + Dropbox provider, conflict handling, desktop only. |
+| **M3** | iOS build: Keychain-wrapped key, biometric unlock, mobile editor UX. |
+| **M4** | Android build (Keystore), plus a second sync provider to prove the trait. |
+| **M5** | Hardening pass: external crypto review, reproducible builds, signed releases. |
+
+## License
+
+MIT — see [`LICENSE`](LICENSE).
