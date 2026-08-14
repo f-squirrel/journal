@@ -6,4 +6,4 @@ opening every plan file. Newest first.
 
 | Date | Plan | Status | Branch / PR | Notes |
 |------|------|--------|-------------|-------|
-| 2026-08-14 | [M1 — Encrypted local vault](2026-08-14-m1-encrypted-local-vault.md) | Draft | — | Desktop only. Design: [journaling app](../specs/2026-08-14-journaling-app-design.md). Plan and design both revised 2026-08-14 after review. |
+| 2026-08-14 | [M1 — Encrypted local vault](2026-08-14-m1-encrypted-local-vault.md) | In Progress | `claude/task-1-tzot8a` | Desktop only. Design: [journaling app](../specs/2026-08-14-journaling-app-design.md). Plan and design both revised 2026-08-14 after review. Task 1 (workspace skeleton) done. |
