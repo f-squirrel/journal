@@ -44,16 +44,20 @@ implementation, then tick the box. Paths are repo-relative.
 
 ## Task 2 — Crypto spec ratified
 
-- [ ] Write `docs/superpowers/specs/<date>-crypto-design.md`, dated the day it
+- [x] Write `docs/superpowers/specs/<date>-crypto-design.md`, dated the day it
       is written. Contents: key hierarchy and the slot list, Argon2id floor and
       weakest-device ceiling with the calibration procedure, AEAD envelope
       framing byte for byte, associated-data construction, header layout
       including the reserved rollback-counter field, the object-naming HMAC,
       and the recovery-code alphabet and entropy.
-- [ ] Review it before writing crypto code. This task is a document, on
+      Written as [`../specs/2026-08-14-crypto-design.md`](../specs/2026-08-14-crypto-design.md).
+- [x] Review it before writing crypto code. This task is a document, on
       purpose — the scheme is the expensive thing to get wrong, and Task 16's
       independent decryptor is written from this document alone.
-- [ ] Review docs (use `/docs-review-guide`) to ensure this spec is reflected
+      Review outcome recorded in the spec's §11, including the one decision
+      that diverges from this plan's literal wording: the recovery-code
+      alphabet is Crockford Base32 (§7.2), confirmed with the user.
+- [x] Review docs (use `/docs-review-guide`) to ensure this spec is reflected
       in CLAUDE.md security-critical conventions and linked from INDEX.md.
 
 ## Task 3 — `journal-model`
@@ -104,8 +108,10 @@ implementation, then tick the box. Paths are repo-relative.
 
 - [ ] `crates/journal-crypto/src/slots.rs`: the slot list
       `{type, kdf_params, salt, wrapped_DEK}`; unwrap tries slots by type.
-- [ ] Recovery code: generate ≥128 bits, encode in a transcription-friendly
-      alphabet (no `0`/`O`, no `1`/`l`), parse case- and separator-insensitively.
+- [ ] Recovery code: 160 bits in Crockford Base32, parsed case-, separator-,
+      and confusable-insensitively — crypto spec §7, which supersedes this
+      line's original "no `0`/`O`, no `1`/`l`" wording (the ambiguous *letters*
+      are absent from the alphabet and decode to their digits instead).
 - [ ] Passphrase change rewraps the passphrase slot only — no object is
       re-encrypted.
 - [ ] Verify (tests first): unlock through the passphrase slot and through the
