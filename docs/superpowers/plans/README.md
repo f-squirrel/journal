@@ -7,6 +7,12 @@ are the source of truth for task-level progress within a plan.
 
 Naming: `YYYY-MM-DD-<feature-name>.md`.
 
+## Task conventions
+
+Every task checklist includes a final step to review docs (use `/docs-review-guide`)
+after implementation is done. This ensures CLAUDE.md, design specs, and other
+documentation stay in sync with code changes as work progresses.
+
 ## Index
 
 [`INDEX.md`](INDEX.md) is the single glance-able view of every plan's
