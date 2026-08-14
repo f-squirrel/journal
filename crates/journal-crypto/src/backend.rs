@@ -31,6 +31,25 @@ pub enum ObjectKind {
     Attachment = 3,
 }
 
+impl TryFrom<u8> for ObjectKind {
+    type Error = CryptoError;
+
+    /// Converts an on-disk discriminant. Values 4–255 are reserved (spec
+    /// §4.3) and MUST be rejected rather than defaulted — this is the one
+    /// place that rule is enforced, so no call site has to re-implement it.
+    ///
+    /// # Errors
+    /// Returns [`CryptoError::Malformed`] for a reserved or unknown value.
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            1 => Ok(Self::Manifest),
+            2 => Ok(Self::Entry),
+            3 => Ok(Self::Attachment),
+            _ => Err(CryptoError::Malformed("unknown object kind")),
+        }
+    }
+}
+
 /// The length in bytes of an object ID — a truncated object-name tag
 /// (spec §4.4).
 pub const OBJECT_ID_LEN: usize = 20;
@@ -120,6 +139,10 @@ pub enum CryptoError {
     #[error("unsupported vault format or backend")]
     Unsupported,
 
+    /// The `Display` text is deliberately path-free, but the wrapped source
+    /// may name a vault file. Callers MUST NOT forward the source across the
+    /// Tauri IPC boundary or into `tracing` — spec §8 forbids vault paths in
+    /// both.
     #[error("vault I/O failed")]
     Io(#[from] std::io::Error),
 }
@@ -154,6 +177,12 @@ pub trait KeyStore: Sized {
     /// Returns the recovery code, which the caller MUST show exactly once and
     /// MUST NOT persist.
     ///
+    /// Implementations MUST write the slot files and the manifest before
+    /// `header.jvh`, and MUST write each of them crash-atomically (temp file
+    /// in the same directory, fsync, rename, fsync the directory), so an
+    /// interrupted creation leaves no vault rather than half of one
+    /// (spec §5.2).
+    ///
     /// # Errors
     /// Returns [`CryptoError`] if the key material cannot be generated or the
     /// slots cannot be written.
@@ -166,15 +195,20 @@ pub trait KeyStore: Sized {
     /// detail about which slot was tried or why it failed.
     fn unlock(root: &Path, secret: &UnlockSecret) -> Result<Self, CryptoError>;
 
-    /// Rewraps the passphrase slot.
+    /// Rewraps the passphrase slot of the vault this store was opened on.
     ///
     /// MUST NOT touch any object and MUST NOT invalidate the recovery slot:
     /// after this call every object file is byte-identical and the recovery
-    /// code still works.
+    /// code still works. The write MUST be crash-atomic (spec §5.2) — a torn
+    /// slot file costs the user their passphrase.
+    ///
+    /// Deliberately takes no root: the implementation retains the one it was
+    /// created or unlocked with, so rewrapping into a *different* vault's
+    /// slot directory is not expressible.
     ///
     /// # Errors
     /// Returns [`CryptoError`] if the new slot cannot be derived or written.
-    fn change_passphrase(&self, root: &Path, new: &SecretString) -> Result<(), CryptoError>;
+    fn change_passphrase(&self, new: &SecretString) -> Result<(), CryptoError>;
 
     /// The sealer bound to this unlocked vault secret.
     fn sealer(&self) -> &Self::Sealer;

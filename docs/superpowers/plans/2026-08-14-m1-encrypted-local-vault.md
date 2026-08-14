@@ -54,9 +54,10 @@ implementation, then tick the box. Paths are repo-relative.
 - [x] Review it before writing crypto code. This task is a document, on
       purpose — the scheme is the expensive thing to get wrong, and Task 16's
       independent decryptor is written from this document alone.
-      Review outcome recorded in the spec's §11, including the one decision
-      that diverges from this plan's literal wording: the recovery-code
-      alphabet is Crockford Base32 (§7.2), confirmed with the user.
+      Review outcome recorded in the spec's §10 revision notes, including the
+      one decision that diverges from this plan's literal wording: the
+      recovery-code alphabet is Crockford Base32 (§4.5), confirmed with the
+      user.
 - [x] Review docs (use `/docs-review-guide`) to ensure this spec is reflected
       in CLAUDE.md security-critical conventions and linked from INDEX.md.
 
@@ -84,11 +85,18 @@ it.
       `Binding` is a required argument of both `seal` and `open` so a caller
       cannot open an object without stating which object they believe it is.
 - [ ] `crates/journal-crypto/src/naming.rs`: `K_name` derivation and
-      `HMAC(K_name, kind || SHA-256(plaintext))` truncated to 160 bits, encoded
-      with the `base32` crate's Crockford alphabet (spec §4.4).
-- [ ] Verify (tests first): the golden naming vector of spec §9.2; a blob's
-      on-disk name equals no hash of its plaintext; the same plaintext under
-      two different vault secrets yields two different names.
+      `HMAC(K_name, kind || SHA-256(content))` truncated to 160 bits, encoded
+      with the `base32` crate's Crockford alphabet (spec §4.4). The hash covers
+      the object's **content**, never the §5.4 preamble — the preamble carries
+      the name tag, so hashing it would be circular. `K_name` is derived
+      **per backend** (spec §4.4's table): full HKDF over the age identity
+      string, Expand-only over the native DEK. They are not interchangeable.
+- [ ] Verify (tests first): the golden naming vectors of spec §9 item 2 —
+      **both** the age and native `K_name` rows, since the native one is
+      computable today and is the likeliest thing to be implemented as if the
+      two constructions were one; a blob's on-disk name equals no hash of its
+      plaintext; the same content under two different vault secrets yields two
+      different names.
 - [ ] Review docs (use `/docs-review-guide`) to ensure the seam and naming
       match the spec.
 
@@ -97,7 +105,7 @@ it.
 - [ ] `crates/journal-crypto/src/age_backend/slots.rs`: `slots/passphrase.age`
       and `slots/recovery.age`, each an age file whose plaintext is the vault
       identity string (spec §5.2, §5.3). Work factors are **pinned** —
-      `set_work_factor(17)` on write, `set_max_work_factor(19)` on read —
+      `set_work_factor(17)` on write, `set_max_work_factor(18)` on read —
       because age otherwise calibrates to the encrypting device and *rejects*
       files whose factor exceeds the decrypting device's target by more than 4.
 - [ ] `crates/journal-crypto/src/age_backend/sealer.rs`: seal/open as an age
@@ -105,13 +113,21 @@ it.
       spec §5.4 verified with a constant-time comparison **before** any
       plaintext is returned.
 - [ ] `crates/journal-crypto/src/key.rs`: key types wrapped in
-      `zeroize`/`secrecy`, no key material in `Debug`.
+      `zeroize`/`secrecy`, no key material in `Debug`. The X25519 **recipient**
+      is key material too (spec §8): age authenticates no sender, so holding
+      the recipient is enough to forge any object under any `Binding`. It never
+      reaches disk, logs, IPC, or an export path.
 - [ ] Passphrase change rewrites `slots/passphrase.age` only — no object is
       re-sealed and the recovery code still works.
+- [ ] All slot writes are crash-atomic — temp file in the same directory,
+      fsync, rename, fsync the directory — and vault creation writes
+      `header.jvh` **last** (spec §5.2). A torn `passphrase.age` costs the user
+      their passphrase.
 - [ ] Verify (tests first): round trip; tampered ciphertext rejected;
       truncated file rejected; **cross-object substitution rejected** (seal
       under binding A, open under binding B → `BindingMismatch`); a vault
       written at work factor 17 opens on a client whose own target is lower;
+      a slot file at `log_n = 19` is refused rather than allocating 512 MiB;
       a `trybuild` compile-fail test asserting key types implement neither
       `Serialize` nor `Debug`; zeroization-on-drop test.
 - [ ] Review docs (use `/docs-review-guide`) to ensure CLAUDE.md security
@@ -132,7 +148,7 @@ it.
       recovery slot; wrong passphrase rejected; after a passphrase change every
       object is byte-identical and the recovery code still works; malformed
       recovery codes are rejected without panicking; the sloppy-transcription
-      vectors of spec §9.1 all decode to the same bytes.
+      vectors of spec §9 item 1 all decode to the same bytes.
 - [ ] Review docs (use `/docs-review-guide`) to ensure recovery code spec and
       slot structure documentation in the crypto spec align with implementation.
 
