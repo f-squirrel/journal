@@ -5,6 +5,11 @@ with embedded images, Argon2id-derived keys, Dropbox as a dumb ciphertext
 blob store). Desktop first (Tauri 2 + React), then iOS, then Android. Full
 product/threat model/crypto design:
 [`docs/superpowers/specs/2026-08-14-journaling-app-design.md`](docs/superpowers/specs/2026-08-14-journaling-app-design.md).
+The byte-level cryptographic scheme (key hierarchy, slots, Argon2id bounds,
+AEAD envelope, header layout, object naming, recovery code) is ratified
+separately in
+[`docs/superpowers/specs/2026-08-14-crypto-design.md`](docs/superpowers/specs/2026-08-14-crypto-design.md)
+— it is normative, so implement against it rather than re-deriving a format.
 
 Current status: early scaffolding (workspace, CI, and crate skeletons only —
 see [`docs/superpowers/plans/INDEX.md`](docs/superpowers/plans/INDEX.md) for
@@ -39,6 +44,10 @@ preferences:
   `#[serde(flatten)]`, no silent acceptance of unknown fields. A client that
   meets an unknown major format version refuses to open the vault and never
   writes to it.
+- On-disk and in-memory crypto formats follow the crypto spec byte for byte
+  — envelope framing, associated-data construction, header layout, Argon2id
+  floor/ceiling, and object naming are specified there, not chosen at the
+  call site. Changing any of them is a format-version change, not a refactor.
 - See the design doc's §3 for what this app explicitly does *not* defend
   against — don't silently expand or narrow that list without updating it.
 

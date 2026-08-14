@@ -22,8 +22,13 @@ See [Roadmap](#roadmap).
   while unlocked, traffic-shape analysis, swap/hibernation capturing keys,
   and whole-vault rollback — is documented, not hidden.
 
-Full threat model and cryptographic design:
+Full threat model and architecture:
 [`docs/superpowers/specs/2026-08-14-journaling-app-design.md`](docs/superpowers/specs/2026-08-14-journaling-app-design.md).
+The cryptographic scheme is specified to the byte — key hierarchy, key
+slots, Argon2id parameters, envelope format, object naming, recovery code —
+in [`docs/superpowers/specs/2026-08-14-crypto-design.md`](docs/superpowers/specs/2026-08-14-crypto-design.md),
+so the format can be re-implemented (and audited) without reading this
+codebase.
 
 ## Architecture
 
