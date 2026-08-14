@@ -15,11 +15,13 @@ Naming: `YYYY-MM-DD-<topic>-design.md`.
   format, and sync design. The reference doc for how and why the app is
   built the way it is.
 - [`2026-08-14-crypto-design.md`](2026-08-14-crypto-design.md) — the
-  cryptographic scheme the design doc's §5 sketches, specified to the byte:
-  key hierarchy, key slots, Argon2id floor/ceiling and calibration, the AEAD
-  envelope and its associated data, the vault header, keyed object naming,
-  and the recovery code. Normative for M1; M1 Task 16's independent
-  decryptor is written from this document alone.
+  cryptographic scheme the design doc's §5 sketches, specified to the byte
+  and split into a backend-independent core (vault layout, header, keyed
+  object naming, recovery code, the `Binding` contract) over a pluggable
+  sealing backend. M1 ships the `age` backend; the native Argon2id +
+  XChaCha20 backend is the M2 target and is specified alongside it.
+  Normative — and supersedes the design doc's §5 wherever they differ. M1
+  Task 16's independent decryptor is written from this document alone.
 
 A spec is optional for small tasks — see the parent
 [`docs/superpowers/README.md`](../README.md) for when to write one, and

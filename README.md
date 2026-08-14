@@ -2,8 +2,8 @@
 
 A free, open source, end-to-end encrypted journaling application. Entries
 are Markdown with embedded images. Data is encrypted on your device with a
-key derived from a passphrase (Argon2id); cloud sync (Dropbox first) is used
-only as a dumb blob store that never sees plaintext.
+key derived from a passphrase; cloud sync (Dropbox first) is used only as a
+dumb blob store that never sees plaintext.
 
 Platforms, in order: desktop (Linux/macOS/Windows) → iOS → Android.
 
@@ -13,8 +13,11 @@ See [Roadmap](#roadmap).
 
 ## Security model
 
-- End-to-end encryption: the app encrypts on-device with Argon2id-derived
-  keys; a sync provider only ever holds ciphertext.
+- End-to-end encryption: the app encrypts on-device; a sync provider only ever
+  holds ciphertext. The first milestone seals the vault with
+  [age](https://github.com/C2SP/C2SP/blob/main/age.md) (scrypt-derived keys);
+  Argon2id-derived keys arrive with the native backend in M2, behind a
+  swappable seam designed for exactly that change.
 - Losing your passphrase means losing your data — a one-time recovery code
   is offered as the sole escape hatch (a second wrapping of the same key,
   not an escrow).
@@ -36,7 +39,7 @@ codebase.
 ui/                    React + TypeScript frontend (Tauri webview)
 apps/desktop/           Tauri 2 shell — desktop entry point, IPC commands
 crates/journal-model/   Shared domain types: entries, attachments, manifest
-crates/journal-crypto/  Argon2id KDF, AEAD envelope, key hierarchy, zeroize
+crates/journal-crypto/  Swappable sealing backend (age at M1), keys, naming
 crates/journal-store/   Encrypted on-disk vault + in-memory search index
 ```
 
@@ -112,8 +115,8 @@ current project status.
 
 | Milestone | Scope |
 |---|---|
-| **M1** | Rust core + encrypted local vault + Markdown editing + images + plaintext export, desktop only. No sync, no mobile. |
-| **M2** | Sync engine + Dropbox provider, conflict handling, desktop only. |
+| **M1** | Rust core + encrypted local vault (age backend) + Markdown editing + images + plaintext export, desktop only. No sync, no mobile. |
+| **M2** | Sync engine + Dropbox provider, conflict handling, desktop only. Plus the native Argon2id backend, which migrates M1 vaults. |
 | **M3** | iOS build: Keychain-wrapped key, biometric unlock, mobile editor UX. |
 | **M4** | Android build (Keystore), plus a second sync provider to prove the trait. |
 | **M5** | Hardening pass: external crypto review, reproducible builds, signed releases. |

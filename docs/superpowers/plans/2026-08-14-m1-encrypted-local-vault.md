@@ -71,53 +71,68 @@ implementation, then tick the box. Paths are repo-relative.
 - [ ] Review docs (use `/docs-review-guide`) to ensure workspace layout and
       crate structure in CLAUDE.md match the implementation.
 
-## Task 4 — `journal-crypto`: KDF and calibration
+## Task 4 — `journal-crypto`: the backend seam and naming
 
-- [ ] `crates/journal-crypto/src/kdf.rs`: Argon2id over parameters read from
-      the vault header.
-- [ ] Calibration routine choosing parameters for the current device, clamped
-      to both the documented floor and the weakest-supported-device ceiling
-      (design §5).
-- [ ] Verify (tests first): known-answer tests against RFC 9106 vectors;
-      calibration on the CI runner lands inside the documented bounds; opening
-      a vault whose header parameters sit below the floor is rejected.
-- [ ] Review docs (use `/docs-review-guide`) to ensure crypto design and
-      calibration parameters are correctly documented in the specs.
+M1 seals objects with `age` rather than a hand-written envelope (crypto spec
+§5), so Argon2id and its calibration move to M2 with the native backend. What
+stays in M1 is the seam that makes that swap possible, plus everything above
+it.
 
-## Task 5 — `journal-crypto`: envelope and key hierarchy
+- [x] `crates/journal-crypto/src/backend.rs`: the `KeyStore` / `ObjectSealer`
+      traits, `Binding`, `ObjectKind`, `NameKey`, `RecoveryCode`,
+      `UnlockSecret`, `CryptoError` — crypto spec §3, normative signatures.
+      `Binding` is a required argument of both `seal` and `open` so a caller
+      cannot open an object without stating which object they believe it is.
+- [ ] `crates/journal-crypto/src/naming.rs`: `K_name` derivation and
+      `HMAC(K_name, kind || SHA-256(plaintext))` truncated to 160 bits, encoded
+      with the `base32` crate's Crockford alphabet (spec §4.4).
+- [ ] Verify (tests first): the golden naming vector of spec §9.2; a blob's
+      on-disk name equals no hash of its plaintext; the same plaintext under
+      two different vault secrets yields two different names.
+- [ ] Review docs (use `/docs-review-guide`) to ensure the seam and naming
+      match the spec.
 
-- [ ] `crates/journal-crypto/src/aead.rs`: XChaCha20-Poly1305 seal/open over
-      the versioned envelope, with object ID and format version bound as
-      associated data.
-- [ ] `crates/journal-crypto/src/derive.rs`: HKDF for per-object keys and for
-      `K_name` (object naming, design §6).
+## Task 5 — `journal-crypto`: the age backend
+
+- [ ] `crates/journal-crypto/src/age_backend/slots.rs`: `slots/passphrase.age`
+      and `slots/recovery.age`, each an age file whose plaintext is the vault
+      identity string (spec §5.2, §5.3). Work factors are **pinned** —
+      `set_work_factor(17)` on write, `set_max_work_factor(19)` on read —
+      because age otherwise calibrates to the encrypting device and *rejects*
+      files whose factor exceeds the decrypting device's target by more than 4.
+- [ ] `crates/journal-crypto/src/age_backend/sealer.rs`: seal/open as an age
+      file over `preamble || content`, with the 52-byte binding preamble of
+      spec §5.4 verified with a constant-time comparison **before** any
+      plaintext is returned.
 - [ ] `crates/journal-crypto/src/key.rs`: key types wrapped in
       `zeroize`/`secrecy`, no key material in `Debug`.
-- [ ] `fuzz/fuzz_targets/envelope_parse.rs`: a `cargo-fuzz` target over the
-      envelope decoder. It will be parsing attacker-influenced bytes the moment
-      sync exists; the target costs an hour now.
+- [ ] Passphrase change rewrites `slots/passphrase.age` only — no object is
+      re-sealed and the recovery code still works.
 - [ ] Verify (tests first): round trip; tampered ciphertext rejected;
-      truncated envelope rejected; cross-object substitution rejected; version
-      downgrade rejected; a `trybuild` compile-fail test asserting key types
-      implement neither `Serialize` nor `Debug`; zeroization-on-drop test.
+      truncated file rejected; **cross-object substitution rejected** (seal
+      under binding A, open under binding B → `BindingMismatch`); a vault
+      written at work factor 17 opens on a client whose own target is lower;
+      a `trybuild` compile-fail test asserting key types implement neither
+      `Serialize` nor `Debug`; zeroization-on-drop test.
 - [ ] Review docs (use `/docs-review-guide`) to ensure CLAUDE.md security
       conventions about key material, serialization, and Debug implementations
       are still accurate.
 
-## Task 6 — `journal-crypto`: key slots and recovery code
+## Task 6 — `journal-crypto`: recovery code and unlock
 
-- [ ] `crates/journal-crypto/src/slots.rs`: the slot list
-      `{type, kdf_params, salt, wrapped_DEK}`; unwrap tries slots by type.
 - [ ] Recovery code: 160 bits in Crockford Base32, parsed case-, separator-,
-      and confusable-insensitively — crypto spec §7, which supersedes this
+      and confusable-insensitively — crypto spec §4.5, which supersedes this
       line's original "no `0`/`O`, no `1`/`l`" wording (the ambiguous *letters*
       are absent from the alphabet and decode to their digits instead).
-- [ ] Passphrase change rewraps the passphrase slot only — no object is
-      re-encrypted.
+- [ ] `KeyStore::unlock` tries only the slot matching the attempt type — a
+      passphrase is never run against the recovery slot — and returns a single
+      generic failure that reveals nothing about which slot was tried.
+- [ ] Nothing is written to disk on a failed unlock: no counter, no timestamp.
 - [ ] Verify (tests first): unlock through the passphrase slot and through the
       recovery slot; wrong passphrase rejected; after a passphrase change every
       object is byte-identical and the recovery code still works; malformed
-      recovery codes are rejected without panicking.
+      recovery codes are rejected without panicking; the sloppy-transcription
+      vectors of spec §9.1 all decode to the same bytes.
 - [ ] Review docs (use `/docs-review-guide`) to ensure recovery code spec and
       slot structure documentation in the crypto spec align with implementation.
 
@@ -255,7 +270,9 @@ implementation, then tick the box. Paths are repo-relative.
 - [ ] `tools/decrypt.py`: an independent decryptor written from the crypto spec
       alone, not from the Rust source. If it cannot open a vault this app
       wrote, the spec is wrong or incomplete — which is the point. It doubles
-      as a user's escape hatch.
+      as a user's escape hatch. Under the age backend it may use `pyrage` for
+      the container, but must build the §5.4 binding preamble, verify it, and
+      strip it from its own reading of the spec.
 - [ ] Leak sweep over the **whole app data directory** — vault, index, temp
       files, WebView cache, crash dumps. Write an entry containing a
       high-entropy canary, exercise the app, then fail if the canary or a known
