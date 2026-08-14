@@ -30,7 +30,8 @@ and is normative for everything in this crate.
 ## Non-negotiable conventions
 
 - No hand-rolled crypto. Only `argon2`, `chacha20poly1305`, `hkdf`, `hmac`,
-  `sha2`, `zeroize`, `secrecy`, `getrandom`, `subtle`.
+  `sha2`, `zeroize`, `secrecy`, `getrandom`, `subtle`, and `base32`
+  (`Alphabet::Crockford`, for recovery codes and object names).
 - Key types must implement neither `Serialize` nor `Debug` (enforced by a
   `trybuild` compile-fail test) and must zeroize on drop.
 - A vault whose header parameters fall below the documented Argon2id floor
