@@ -1,44 +1,66 @@
 # journal-crypto
 
-Encryption primitives for the vault: Argon2id key derivation and
-calibration, the AEAD envelope format, the key hierarchy (key slots,
-recovery code), and key-material hygiene. No hand-rolled primitives —
-everything here wraps audited crates.
+Encryption for the vault: the backend seam, key slots, object sealing, object
+naming, and recovery codes. No hand-rolled primitives — everything here wraps
+audited crates, and at M1 the container itself is `age`.
 
-**Status:** stub. Only a module doc comment and a compile-check test exist;
-see Tasks 4–6 of
+**Status:** the backend seam (`backend.rs`) exists; the age backend, naming,
+and recovery code do not yet. See Tasks 4–6 of
 [`../../docs/superpowers/plans/2026-08-14-m1-encrypted-local-vault.md`](../../docs/superpowers/plans/2026-08-14-m1-encrypted-local-vault.md)
 for the implementation checklist. The byte-level design is ratified in
 [`../../docs/superpowers/specs/2026-08-14-crypto-design.md`](../../docs/superpowers/specs/2026-08-14-crypto-design.md)
 and is normative for everything in this crate.
 
-## Planned contents
+## Structure
 
-- `kdf.rs` — Argon2id over vault-header parameters, plus device calibration
-  clamped between a documented floor and the weakest-supported-device
-  ceiling.
-- `aead.rs` — XChaCha20-Poly1305 seal/open over a versioned envelope, with
-  object ID and format version bound as associated data.
-- `derive.rs` — HKDF for per-object keys and the object-naming key
-  (`K_name`).
-- `key.rs` — key types wrapped in `zeroize`/`secrecy`; never `Serialize` or
-  `Debug`.
-- `slots.rs` — the LUKS-style key-slot list (`{type, kdf_params, slot_id,
-  salt, wrap_nonce, wrapped_DEK}`, crypto spec §4) for passphrase, recovery
-  code, and (M3+) device key.
+The crate is split the way the spec is — a backend-independent core over a
+pluggable sealing backend:
+
+```
+backend.rs      the seam: KeyStore, ObjectSealer, Binding, CryptoError
+naming.rs       K_name derivation and HMAC object names   (planned)
+key.rs          key types: zeroize/secrecy, no Debug       (planned)
+age_backend/    M1: age files, scrypt slots                (planned)
+native/         M2: Argon2id + XChaCha20 envelope          (planned)
+```
+
+`age_backend` and `native` are interchangeable behind `backend.rs`. Everything
+above the seam — the vault layout, the header, object naming, the manifest,
+the recovery code — is identical under both, which is what keeps the M2
+migration a slot migration rather than a rewrite.
+
+## M1 uses age, and that has a cost
+
+M1 seals objects with [`age`](https://github.com/C2SP/C2SP/blob/main/age.md)
+to save implementation time. Two consequences are deliberate and documented,
+not bugs:
+
+- **No Argon2id at M1.** age's passphrase recipient is scrypt-only, so
+  requirement F4 is deferred to M2. Don't "fix" this by deriving an age
+  identity from an Argon2id output — that path was considered and rejected
+  (spec §10.1).
+- **Binding lives in the plaintext.** age fixes `aad = ""`, so the age backend
+  prepends a 52-byte binding preamble and verifies it on open (spec §5.4).
 
 ## Non-negotiable conventions
 
-- No hand-rolled crypto. Only `argon2`, `chacha20poly1305`, `hkdf`, `hmac`,
-  `sha2`, `zeroize`, `secrecy`, `getrandom`, `subtle`, and `base32`
-  (`Alphabet::Crockford`, for recovery codes and object names).
+- No hand-rolled crypto, and no hand-rolled container or encoding. Only `age`,
+  `base32`, `hkdf`, `hmac`, `sha2`, `zeroize`, `secrecy`, `getrandom`,
+  `subtle`, plus `argon2` and `chacha20poly1305` when the native backend
+  lands.
 - Key types must implement neither `Serialize` nor `Debug` (enforced by a
   `trybuild` compile-fail test) and must zeroize on drop.
-- A vault whose header parameters fall below the documented Argon2id floor
-  is rejected, not silently accepted.
-- Formats are not chosen at the call site. Envelope framing, associated
-  data, header layout, KDF bounds, and object naming come from the crypto
-  spec; changing one is a format-version change.
+- `seal` and `open` always take a `Binding`. There is no binding-free path,
+  and `open` never returns plaintext before the binding verifies.
+- scrypt work factors are **pinned**, never left to age's per-device
+  calibration — age rejects files whose work factor exceeds the decrypting
+  device's target by more than 4, which would make a desktop-created vault
+  unopenable on a phone.
+- Unlock failures are indistinguishable from one another and write nothing to
+  disk.
+- Formats are not chosen at the call site. Framing, binding, header layout,
+  KDF parameters, and object naming come from the spec; changing one is a
+  format-version change.
 - Full threat model and key hierarchy: §5 of
   [`../../docs/superpowers/specs/2026-08-14-journaling-app-design.md`](../../docs/superpowers/specs/2026-08-14-journaling-app-design.md),
   specified byte for byte in
@@ -46,4 +68,4 @@ and is normative for everything in this crate.
 
 ## Used by
 
-`journal-store`, for encrypting/decrypting vault objects.
+`journal-store`, for sealing/opening vault objects and naming them.

@@ -21,7 +21,11 @@ Functional:
 - F1 — Desktop support (Linux, macOS, Windows)
 - F2 — Mobile support, iOS first, Android second
 - F3 — Markdown authoring and rendering
-- F4 — End-to-end encryption with Argon2 key derivation
+- F4 — End-to-end encryption with Argon2 key derivation. **Deferred to M2.**
+  M1 seals the vault with `age`, whose passphrase recipient is scrypt-only, to
+  save implementation time; Argon2id arrives with the native backend. See the
+  [crypto design](2026-08-14-crypto-design.md) §1.1 for what that trade costs
+  and §6 for the backend that restores it.
 - F5 — Sync to Dropbox, extensible to other cloud providers
 - F6 — Images embedded in entries
 - F7 — Plaintext export and import, so the data is retrievable without this app
@@ -120,7 +124,15 @@ no `eval`, devtools disabled in release), and per-platform WebView quirks.
 
 ## 5. Cryptography
 
-Scheme (to be ratified in its own spec before any crypto code lands):
+**Ratified in its own spec:** [`2026-08-14-crypto-design.md`](2026-08-14-crypto-design.md),
+which is normative and supersedes this section wherever the two differ. In
+particular, that spec splits the scheme into a backend-independent core and a
+pluggable sealing backend: **M1 ships an `age` backend** (scrypt, age files),
+and the Argon2id scheme sketched below is the **M2 native backend**. The key
+hierarchy, slot model, and rationale below still describe the design's intent
+and the M2 target.
+
+Scheme:
 
 ```
 passphrase ─────Argon2id(salt_p, m/t/p)──► KEK_pass ──┐
@@ -239,8 +251,8 @@ refinement, not a milestone-1 commitment.
 
 | Milestone | Scope |
 |---|---|
-| **M1** | Rust core + encrypted local vault + Markdown editing + images + plaintext export, desktop only. No sync, no mobile. |
-| **M2** | Sync engine + Dropbox provider, conflict handling, desktop only. |
+| **M1** | Rust core + encrypted local vault (`age` backend) + Markdown editing + images + plaintext export, desktop only. No sync, no mobile. |
+| **M2** | Sync engine + Dropbox provider, conflict handling, desktop only. Plus the native Argon2id backend, which satisfies F4 and migrates M1 vaults. |
 | **M3** | iOS build: Keychain-wrapped key, biometric unlock, mobile editor UX. |
 | **M4** | Android build (Keystore), plus a second sync provider to prove the trait. |
 | **M5** | Hardening pass: external crypto review, reproducible builds, signed releases. |
@@ -274,7 +286,15 @@ Resolved since the first draft:
 
 ## 10. Revision notes
 
-**2026-08-14** — revised after a critical review of the M1 plan. Every
+**2026-08-14 (second revision)** — M1 adopts `age` as its sealing backend to
+save implementation time, behind a swappable seam. The consequence for this
+document: **F4 is deferred to M2** (§2), §5's Argon2id scheme becomes the M2
+native backend rather than M1's, and the roadmap records the migration (§8).
+The threat model in §3 is unchanged — the crypto spec's §5.4 preserves the
+per-object binding that §3 relies on, using an in-plaintext preamble because
+age carries no associated data.
+
+**2026-08-14 (first revision)** — revised after a critical review of the M1 plan. Every
 substantive change below touches the on-disk format or the milestone's
 security claim, which is why they were worth making here rather than after
 implementation:

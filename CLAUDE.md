@@ -1,15 +1,19 @@
 # journal
 
 A free, open source, end-to-end encrypted journaling app (Markdown entries
-with embedded images, Argon2id-derived keys, Dropbox as a dumb ciphertext
+with embedded images, passphrase-derived keys, Dropbox as a dumb ciphertext
 blob store). Desktop first (Tauri 2 + React), then iOS, then Android. Full
 product/threat model/crypto design:
 [`docs/superpowers/specs/2026-08-14-journaling-app-design.md`](docs/superpowers/specs/2026-08-14-journaling-app-design.md).
-The byte-level cryptographic scheme (key hierarchy, slots, Argon2id bounds,
-AEAD envelope, header layout, object naming, recovery code) is ratified
-separately in
+The byte-level cryptographic scheme is ratified separately in
 [`docs/superpowers/specs/2026-08-14-crypto-design.md`](docs/superpowers/specs/2026-08-14-crypto-design.md)
 — it is normative, so implement against it rather than re-deriving a format.
+It splits into a backend-independent core (layout, header, object naming,
+recovery code, the `Binding` contract) and a pluggable sealing backend:
+**M1 ships the `age` backend** (scrypt, age files), and the native Argon2id +
+XChaCha20 backend is the M2 target. Because age's passphrase recipient is
+scrypt-only, **M1 does not satisfy requirement F4 (Argon2)** — that is a
+deliberate, documented deferral, not an oversight to "fix".
 
 Current status: early scaffolding (workspace, CI, and crate skeletons only —
 see [`docs/superpowers/plans/INDEX.md`](docs/superpowers/plans/INDEX.md) for
@@ -22,7 +26,7 @@ functionality exists until the relevant plan task is checked off.
 ui/                    React + TypeScript frontend (Tauri webview)
 apps/desktop/           Tauri 2 shell — desktop entry point, IPC commands
 crates/journal-model/   Shared domain types: entries, attachments, manifest
-crates/journal-crypto/  Argon2id KDF, AEAD envelope, key hierarchy, zeroize
+crates/journal-crypto/  Swappable sealing backend (age at M1), keys, naming
 crates/journal-store/   Encrypted on-disk vault + in-memory search index
 ```
 
@@ -45,9 +49,14 @@ preferences:
   meets an unknown major format version refuses to open the vault and never
   writes to it.
 - On-disk and in-memory crypto formats follow the crypto spec byte for byte
-  — envelope framing, associated-data construction, header layout, Argon2id
-  floor/ceiling, and object naming are specified there, not chosen at the
-  call site. Changing any of them is a format-version change, not a refactor.
+  — object framing, binding construction, header layout, KDF parameters, and
+  object naming are specified there, not chosen at the call site. Changing any
+  of them is a format-version change, not a refactor.
+- Every sealed object is bound to its identity. `ObjectSealer::seal` and
+  `open` both take a `Binding` and there is no overload without one, because
+  age carries no associated data and the age backend checks the binding from
+  a preamble inside the plaintext. Never add an "open without binding" path,
+  and never return plaintext before the binding verifies.
 - See the design doc's §3 for what this app explicitly does *not* defend
   against — don't silently expand or narrow that list without updating it.
 
