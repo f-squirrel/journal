@@ -241,6 +241,17 @@ accepts.
 `vault_id` in `SlotAD` additionally prevents transplanting a slot record from
 one vault's header into another's.
 
+**Partitioning-oracle mitigation.** Before attempting any unwrap, the reader
+MUST confirm that `wrapped_dek` is exactly 48 bytes — which the fixed 116-byte
+slot record of §4.3 already guarantees structurally, so this is a check that
+an implementation must not *lose*, rather than one it must add. A
+password-based AEAD whose ciphertext length is attacker-controlled admits a
+partitioning oracle: a crafted multi-key ciphertext that decrypts successfully
+under many candidate passphrases turns each online attempt into a test of a
+whole set rather than a single guess. The age specification learned this the
+hard way and imposes the same rule on its scrypt stanza; the fixed-width slot
+record is why this format gets it for free.
+
 ### 4.5 Unlock procedure
 
 Given a candidate secret and its type (`1` for a passphrase attempt, `2` for a
