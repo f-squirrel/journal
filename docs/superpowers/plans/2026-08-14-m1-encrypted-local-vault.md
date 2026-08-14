@@ -307,6 +307,43 @@ Sync, Dropbox, mobile, sharing, multi-vault, padding of object sizes, and
 whole-vault rollback protection (Task 2 reserves the header field; the
 mechanism is M2), signed releases. Each has a later milestone or its own spec.
 
+## Deferred to M2 by the age decision
+
+Choosing `age` for M1's sealing backend (crypto spec §5) bought implementation
+speed by postponing work that is **specified and ready to build**, not work
+that was dropped. Every item below has a byte-level home in the crypto spec
+already; none of it needs re-designing, and none of it should be re-litigated.
+
+These become the crypto half of M2's plan, alongside sync:
+
+- [ ] **Argon2id and requirement F4.** The native backend's KDF, floor
+      (64 MiB / t=3 / p=4, RFC 9106 §4), weakest-device ceiling (256 MiB /
+      t=10), and the memory-first calibration procedure — crypto spec §6.4.
+      F4 is unmet until this ships; the design doc's §2 says so.
+- [ ] **The key-slot record and `SlotAD`.** The 116-byte slot record, the
+      72-byte associated data that authenticates the header without a header
+      MAC, slot types, and the additive-unknown-slot rule — spec §6.2.
+- [ ] **The AEAD envelope and `ObjectAD`.** The 48-byte-overhead envelope and
+      the 60-byte associated data that binds each ciphertext to its object —
+      spec §6.5. This is the fail-closed version of what M1 enforces in code
+      via the §5.4 binding preamble.
+- [ ] **Per-object key derivation.** `K_obj` and `K_name` from the DEK via the
+      30-byte HKDF `info` — spec §6.3.
+- [ ] **`fuzz/fuzz_targets/envelope_parse.rs`.** A `cargo-fuzz` target over
+      the envelope decoder, dropped from M1 because M1 has no envelope of its
+      own to fuzz. It will be parsing attacker-influenced bytes the moment
+      sync exists.
+- [ ] **The age → native migration.** Re-seal and rename every object,
+      rewrite the manifest, flip `backend_id` last and atomically — spec §7.
+      Resumable by construction; a vault interrupted mid-migration still opens
+      under the age backend.
+- [ ] **Whole-vault rollback.** The reserved header counter (spec §4.2) and
+      the `purpose = 3` MAC key gain their mechanism here.
+
+Two further hardening items belong to **M5**, not M2: external review of the
+native scheme against this spec, and Task 16's `tools/decrypt.py` gaining a
+native-backend path so the independent decryptor covers both formats.
+
 ## Revision notes
 
 **2026-08-14** — revised alongside the design doc after a critical review,

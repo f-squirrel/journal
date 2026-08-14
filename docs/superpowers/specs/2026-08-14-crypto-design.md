@@ -504,10 +504,16 @@ and then streamed to the WebView by Task 12's protocol handler.
 
 ## 6. M2 backend — native (`backend_id = 2`, planned)
 
-Specified now because it is the M2 target, because §3's seam was designed
-against it, and because Task 16's decryptor will eventually need both. **Not
-implemented at M1.** This section restores Argon2id and therefore requirement
-F4.
+**Not implemented at M1 — scheduled as M2 work**, itemised in the
+"Deferred to M2" section of
+[the M1 plan](../plans/2026-08-14-m1-encrypted-local-vault.md).
+
+This section is specified to the byte rather than sketched, deliberately.
+Adopting age for M1 postponed this work; it did not discard it, and the
+difference is the whole point — M2 builds from a ratified format instead of
+re-deriving one under sync deadlines. §3's seam was designed against this
+backend, and Task 16's decryptor will eventually need both. This section is
+where Argon2id, and therefore requirement F4, comes back.
 
 ### 6.1 Primitives
 
@@ -539,15 +545,59 @@ offset  size  field           notes
 
 Slots bind to `slot_id`, **not** to their position, so slots may be reordered
 or removed without invalidating the others — binding to an index would mean
-deleting slot 0 silently broke slot 1.
+deleting slot 0 silently broke slot 1. `slot_id` MUST NOT change once
+assigned; `salt` and `wrap_nonce` MUST be regenerated on every wrap, including
+a passphrase change.
 
-The wrap's associated data is a fixed 72-byte structure covering
-`b"JRNLSLT1"`, the format version, `vault_id`, and every field of the slot
-record above except the wrapped key itself. This is what gives the header its
-integrity, and it is why there is no header MAC: a header MAC would need a key
-the reader does not have until *after* it unwraps a slot. Lowering `mem_kib`
-to weaken the KDF, swapping a salt, or editing the format version changes the
-associated data, so the tag fails and the vault does not open.
+**Slot types.**
+
+| Value | Type | Milestone |
+|---|---|---|
+| 1 | passphrase | with this backend |
+| 2 | recovery code | with this backend |
+| 3 | device key (Keychain / Keystore) | M3 |
+| 4–255 | reserved | — |
+
+A header MUST contain at least one slot of type 1. A reader that meets an
+unknown slot type MUST ignore that slot — it cannot unwrap it — and MUST NOT
+treat the header as invalid; that is what makes M3's slot additive. A reader
+MUST NOT write to a header containing slot types it does not understand.
+
+**Wrap and unwrap.**
+
+```
+KEK         = Argon2id(pwd, salt = slot.salt, m, t, p, out_len = 32)
+wrapped_dek = XChaCha20Poly1305_Seal(key = KEK, nonce = slot.wrap_nonce,
+                                     plaintext = DEK, aad = SlotAD)
+```
+
+`SlotAD` is **exactly 72 bytes**, all fields fixed width:
+
+```
+offset  size  field
+0       8     b"JRNLSLT1"
+8       2     format_major       u16, from the header
+10      2     format_minor       u16, from the header
+12      16    vault_id           from the header
+28      1     slot_type
+29      1     kdf_id
+30      1     lanes
+31      1     reserved (0)
+32      4     mem_kib
+36      4     iterations
+40      16    slot_id
+56      16    salt
+```
+
+This is what gives the header its integrity, and it is why there is no header
+MAC: a header MAC would need a key the reader does not have until *after* it
+unwraps a slot. Instead every field an attacker could usefully tamper with is
+in the AAD of the wrap it governs. Lowering `mem_kib` to weaken the KDF,
+swapping a salt, or editing the format version changes `SlotAD`, so the
+Poly1305 tag fails and the vault does not open. The attacker converts a
+downgrade into a denial of service, which is the trade this format accepts.
+`vault_id` in `SlotAD` additionally prevents transplanting a slot record from
+one vault's header into another's.
 
 **Partitioning-oracle mitigation.** Before attempting any unwrap the reader
 MUST confirm `wrapped_dek` is exactly 48 bytes — which the fixed-width record
@@ -557,12 +607,35 @@ length is attacker-controlled admits a crafted multi-key ciphertext that
 decrypts under many candidate passphrases, turning each online attempt into a
 test of a whole set. age applies the same rule to its scrypt stanza.
 
-**Unlock** tries only the slots whose type matches the attempt, runs the full
-KDF for each (there is no cheap pre-check — the KDF run *is* the check),
-returns a single generic failure, and writes nothing on failure. Not a failure
-counter, not a timestamp: M1 has no rate limiting at rest, the KDF cost is the
-rate limit, and a write-on-failure would leak attempt metadata to anyone
-holding the directory.
+**Unlock procedure.** Given a candidate secret and its type (`1` for a
+passphrase attempt, `2` for a recovery-code attempt):
+
+1. Parse and validate the header. Reject before any KDF work if malformed.
+2. Select the slots whose `slot_type` matches the attempt type, in header
+   order. Slots of other types MUST NOT be tried — a passphrase must never be
+   run against the recovery slot.
+3. For each selected slot: derive the KEK, attempt the unwrap. On success the
+   plaintext is the DEK; zeroize the KEK and stop.
+4. If every selected slot fails, zeroize all intermediates and return a single
+   generic failure.
+
+Rules that are part of the format, not implementation taste:
+
+- The error MUST NOT reveal which slot failed, how many slots exist, or how
+  far the attempt got. One message: the vault did not unlock.
+- The implementation MUST NOT short-circuit on a cheap pre-check of the
+  secret. There is no such check — the Argon2id run *is* the check.
+- On failure, nothing is written to disk. Not a failure counter, not a
+  timestamp. There is no rate limiting at rest; the KDF cost is the rate
+  limit, and a write-on-failure would leak attempt metadata to anyone holding
+  the directory.
+
+**Passphrase change.** Unwrap the DEK through the existing passphrase slot,
+then rewrap **that same DEK** into the same `slot_id` with a fresh salt, fresh
+nonce, and freshly calibrated parameters, writing the header atomically. No
+object is read, re-encrypted, or rewritten; the recovery slot is untouched and
+the recovery code still works. After a passphrase change every object file
+MUST be byte-identical.
 
 ### 6.3 Key hierarchy
 
@@ -578,11 +651,27 @@ device key ──── OS keystore (M3+) ────────► KEK_dev  �
      HKDF-Expand(DEK, purpose=3)                  ──► reserved (M2 rollback)
 ```
 
-`info` is always exactly 30 bytes — `b"JRNLKDF1"`, `purpose` u8,
-`object_kind` u8, `object_id` 20 bytes — fixed width in every field, so no two
-distinct derivations can collide. For `purpose != 1`, kind is 0 and the ID is
-20 zero bytes. HKDF is Expand-only here because the DEK is already a uniformly
-random 256-bit key (RFC 5869 §3.3), unlike §4.4's input under the age backend.
+All keys below the DEK come from HKDF-Expand-SHA-256 with `L = 32` and an
+`info` that is **always exactly 30 bytes** — fixed width in every field, so no
+two distinct derivations can produce the same `info`:
+
+```
+offset  size  field
+0       8     b"JRNLKDF1"
+8       1     purpose        u8
+9       1     object_kind    u8   (0 when purpose != 1)
+10      20    object_id           (20 zero bytes when purpose != 1)
+```
+
+| `purpose` | Key | `object_kind` / `object_id` |
+|---|---|---|
+| 1 | `K_obj` — the AEAD key for one object | the object's kind and ID |
+| 2 | `K_name` — the HMAC key for object naming (§4.4) | 0 / zeros |
+| 3 | reserved for the M2 rollback-counter MAC key | 0 / zeros |
+| 4–255 | reserved; MUST NOT be used | — |
+
+HKDF is Expand-only here because the DEK is already a uniformly random
+256-bit key (RFC 5869 §3.3), unlike §4.4's input under the age backend.
 
 `vault_secret_bytes` for §4.4 is the raw 32-byte DEK.
 
@@ -660,14 +749,55 @@ the reader's context and enters the associated data, so an object moved to
 another name or copied into another vault fails to open rather than opening as
 something it is not.
 
-Associated data is a fixed 60-byte structure: `b"JRNLOBJ1"`, format major and
-minor, `vault_id`, `object_kind`, 3 reserved zero bytes, `object_id`, and the
-envelope's own first 8 bytes. It carries exactly the fields of `Binding`, plus
-`alg_id` and `env_version` so an attacker cannot claim a weaker algorithm for
-an existing ciphertext. `K_obj` is thereby bound to the object ID twice over —
-once in the derivation, once in the associated data — which costs nothing and
-means an implementation that gets one right and the other wrong still fails
-closed.
+`ObjectAD` is **exactly 60 bytes**:
+
+```
+offset  size  field
+0       8     b"JRNLOBJ1"
+8       2     format_major       u16, from the header
+10      2     format_minor       u16, from the header
+12      16    vault_id           from the header
+28      1     object_kind        §4.3
+29      3     reserved (0)
+32      20    object_id          §4.3
+52      8     envelope[0..8]     magic, env_version, alg_id, reserved
+```
+
+Sealing and opening:
+
+```
+K_obj      = HKDF-Expand(DEK, info = §6.3 with purpose=1, kind, object_id, L=32)
+ciphertext = XChaCha20Poly1305_Seal(K_obj, nonce, plaintext, aad = ObjectAD)
+plaintext  = XChaCha20Poly1305_Open(K_obj, nonce, ciphertext||tag, aad = ObjectAD)
+```
+
+What each field buys, since an independent implementation has to reproduce all
+of them and a reviewer should be able to check the reasoning:
+
+- `object_kind` + `object_id` — an object cannot be substituted for another,
+  nor rolled back to an older version of itself, because an older version of
+  an entry has different content and therefore a different name tag and ID.
+  Its limit is equally explicit: it does not stop rollback of the *whole
+  vault*.
+- `format_major` / `format_minor` — a downgrade to an older format's parsing
+  rules invalidates every tag.
+- `vault_id` — objects cannot be transplanted between vaults.
+- `envelope[0..8]` — `alg_id` and `env_version` are authenticated, so an
+  attacker cannot claim a weaker algorithm for an existing ciphertext.
+
+`K_obj` is thereby bound to the object ID twice over — once in the derivation,
+once in the associated data. That redundancy is intentional: it costs nothing
+and means an implementation that gets the derivation right but the AAD wrong
+(or vice versa) still fails closed.
+
+`ObjectAD` carries exactly the fields of the `Binding` of §3, which is what
+makes the two backends interchangeable behind one contract: the native backend
+satisfies `Binding` as associated data, the age backend as an in-plaintext
+preamble (§5.4).
+
+**Version rules for this backend** extend §5.6: an unknown `env_version` or
+`alg_id` means the object is rejected outright — never decrypted with a
+default — and an unknown `slot_type` is ignored rather than fatal (§6.2).
 
 ## 7. Migrating age → native
 
@@ -775,7 +905,13 @@ implementation time. What changed and why:
 - The header lost its slot records and shrank to 44 bytes, gaining
   `backend_id`.
 - The previous native format is preserved in §6 as the M2 target, unchanged in
-  substance.
+  substance and still byte-exact: the slot record and `SlotAD`, the envelope
+  and `ObjectAD`, the HKDF `info`, the slot-type table, the unlock procedure,
+  and the Argon2id floor, ceiling, and calibration are all still specified
+  here, and are itemised as M2 work in the M1 plan's "Deferred to M2" section.
+  Nothing about Argon2id was dropped — an earlier draft of this revision
+  condensed the two associated-data layouts to prose, which §9 explicitly
+  forbids, and they were restored.
 - **Requirement F4 (Argon2 key derivation) is not met at M1** and is deferred
   to M2 (§1.1). Recorded in the parent design's §2.
 
