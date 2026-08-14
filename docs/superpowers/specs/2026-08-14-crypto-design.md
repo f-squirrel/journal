@@ -2,8 +2,11 @@
 
 Date: 2026-08-14
 Status: Ratified — normative for M1 implementation.
-Last revised: 2026-08-14 — restructured around a swappable sealing backend;
-M1 now ships the `age` backend. See §10.
+Last revised: 2026-08-14 (third revision) — review corrections: `K_name` is
+now specified per backend, object naming hashes content rather than the
+sealed plaintext, age's lack of sender authentication is stated and the
+recipient is declared key material, and the scrypt read ceiling drops to
+`log_n = 18`. See §10.
 Parent design: [`2026-08-14-journaling-app-design.md`](2026-08-14-journaling-app-design.md)
 (§3 threat model, §5 cryptography, §6 storage).
 
@@ -58,9 +61,17 @@ Adopting age for M1 is a deliberate trade, not a free win:
 - **Binding is enforced by our code, not by the format.** age fixes
   `aad = ""`, so the object-identity binding that the native backend gets from
   AEAD associated data is instead a preamble inside the plaintext (§5.4). It
-  is cryptographically equivalent, but it fails *open* if a caller forgets to
-  verify, where AAD fails closed. §3.2 exists to make forgetting structurally
-  impossible.
+  fails *open* if a caller forgets to verify, where AAD fails closed. §3.2
+  exists to make forgetting structurally impossible.
+- **No sender authentication, so the recipient key is secret material.** age
+  encrypts to a public key and authenticates nobody: anyone holding the
+  vault's X25519 *recipient* can mint a well-formed object with a valid
+  preamble under any `Binding`. The native backend has no such property — its
+  DEK is symmetric, so forging requires the same secret that reads. At M1 the
+  recipient is never written to disk or exported, which is what keeps the
+  parent design's §3 malicious-provider defence intact; that is an
+  **invariant this spec imposes** (§8), not a property of age. Treat the
+  recipient as key material, not as a public key.
 - **Interop is partial.** An age file from this vault is decryptable by the
   stock `age` CLI, but the plaintext begins with the 52-byte binding preamble
   (§5.4), so a user gets their Markdown with a binary prefix rather than a
@@ -153,8 +164,10 @@ pub trait KeyStore: Sized {
     fn unlock(root: &Path, secret: &UnlockSecret) -> Result<Self, CryptoError>;
 
     /// Rewrap the passphrase slot. MUST NOT touch any object, and MUST NOT
-    /// invalidate the recovery slot.
-    fn change_passphrase(&self, root: &Path, new: &SecretString) -> Result<(), CryptoError>;
+    /// invalidate the recovery slot. Takes no root: the vault it rewraps is
+    /// the one it was opened on, so rewrapping into a *different* vault's
+    /// slot directory is not expressible.
+    fn change_passphrase(&self, new: &SecretString) -> Result<(), CryptoError>;
 
     fn sealer(&self) -> &Self::Sealer;
 
@@ -170,18 +183,26 @@ pub enum UnlockSecret {
 
 ### 3.1 What the seam does and does not move
 
-**Above the seam** — identical under every backend, and therefore untouched
-by the M2 migration: the directory layout (§4.1), the header (§4.2), object
-kinds and IDs (§4.3), object naming (§4.4), the recovery code's entropy and
-encoding (§4.5), the manifest, and tombstones.
+**Above the seam** — the same *construction* under every backend: the
+directory layout (§4.1), the header (§4.2), object kinds and IDs (§4.3), the
+object-naming algorithm (§4.4), the recovery code's entropy and encoding
+(§4.5), the manifest, and tombstones.
 
 **Below the seam** — backend-specific: how the vault secret is wrapped by a
 user secret, how a sealed object is framed, and which KDF and AEAD are used.
 
-The seam is drawn here on purpose. Object *names* are the one thing that must
-not change across a migration, because they are the filenames — if naming
-moved below the seam, swapping backends would rename every object in the
-vault and turn a slot migration into a full rewrite.
+**"Same construction" is not "same bytes", and object names are where that
+bites.** §4.4's algorithm is backend-independent, but its key `K_name` is
+derived from the vault secret, which lives below the seam — so the two
+backends produce *different names for the same content*. The M2 migration
+therefore re-seals and renames every object (§7). Nothing above the seam has
+to be redesigned, which is the real benefit; but the migration is a rewrite
+of the object directory, not a slot swap, and §7 says so plainly rather than
+promising otherwise here.
+
+What the seam does buy is stated in §3.2: the security contract a backend
+must meet is written down once, as a type, instead of living implicitly in
+whichever backend happens to be installed.
 
 ### 3.2 Why `Binding` is a parameter and not a convenience
 
@@ -262,6 +283,18 @@ client cannot maintain, and writing would silently break the invariant that
 client depends on. The mechanism is M2's spec; whole-vault rollback remains a
 stated non-defense at M1 (parent §3).
 
+That read-only latch is **attacker-triggerable, and accepted as such**.
+`rollback_counter` is in no `Binding`, and `header_checksum` is unkeyed, so
+anyone holding the vault directory can set the counter, recompute four bytes,
+and freeze every M1 client into read-only. This is a denial of service, not a
+disclosure or a forgery — the same class as tampering with `backend_id`, and
+the same trade this format accepts throughout: an attacker who controls the
+bytes can always stop the app working, and no unkeyed header field can
+prevent that. What it MUST NOT do is fail silently: a client that latches
+read-only for this reason MUST tell the user the vault appears to have been
+written by a newer client, rather than presenting a vault whose saves quietly
+do nothing.
+
 ### 4.3 Object kinds and IDs
 
 | `object_kind` | Object | `object_id` |
@@ -277,21 +310,38 @@ because the kind is bound alongside the ID everywhere it matters.
 
 ### 4.4 Object naming
 
-Objects are named by a **keyed** tag, never by the hash of their plaintext:
+Objects are named by a **keyed** tag, never by a bare unkeyed hash of their
+content:
 
 ```
-K_name   = HKDF-SHA-256(ikm = vault_secret_bytes, salt = b"", 
-                        info = b"JRNLKDF1" || 0x02, L = 32)
-h        = SHA-256(plaintext)                                  # 32 bytes
+h        = SHA-256(content)                                    # 32 bytes
 tag      = HMAC-SHA-256(K_name, b"JRNLNAM1" || kind_u8 || h)   # 41-byte input
 name_tag = tag[0..20]                                          # 160 bits
 name     = crockford_base32(name_tag), lowercased              # 32 chars
 ```
 
-`vault_secret_bytes` is backend-defined: §5.3 for age, §6.3 for native. Full
-HKDF (Extract **and** Expand) is used here rather than Expand-only, because
-under the age backend the input is a Bech32 *encoding* of a key rather than a
-uniformly random key, and Extract is what makes that safe.
+`content` is the object's own bytes — the entry, the blob, the serialized
+manifest. It is emphatically **not** the age backend's `plaintext` of §5.5,
+which is `preamble || content`: the preamble carries `object_id`, which *is*
+`name_tag`, so hashing it would be circular. The hash covers the content
+only, under either backend.
+
+**`K_name` is derived per backend**, because the two backends' vault secrets
+are different kinds of thing. This is the one place a backend reaches above
+the seam, and the two constructions are not interchangeable — deriving the
+wrong one yields a vault whose every object name is wrong:
+
+| Backend | `K_name` |
+|---|---|
+| age (§5.3) | `HKDF-SHA-256(ikm = identity_string_bytes, salt = b"", info = b"JRNLKDF1" \|\| 0x02, L = 32)` — Extract **and** Expand |
+| native (§6.3) | `HKDF-Expand-SHA-256(prk = DEK, info = <30-byte info, purpose = 2>, L = 32)` — Expand only |
+
+The age backend uses full HKDF because its input is a Bech32 *encoding* of a
+key rather than a uniformly random key, and Extract is what makes that safe.
+The native backend uses Expand-only because the DEK is already a uniformly
+random 256-bit key (RFC 5869 §3.3), and it shares the single 30-byte `info`
+construction of §6.3 with every other key below the DEK rather than
+introducing a second, shorter one. §9's vector 2 pins **both**.
 
 `name_tag` is the object's `object_id` in `Binding`, so the name and the
 binding agree by construction.
@@ -396,16 +446,35 @@ phone. Implementations MUST therefore:
 
 ```
 on write:  Recipient::set_work_factor(17)     # N = 2^17, r = 8 → 128 MiB
-on read:   Identity::set_max_work_factor(19)  # accept up to 512 MiB
+on read:   Identity::set_max_work_factor(18)  # accept up to 256 MiB
 ```
 
 `log_n = 17` is the M1 pinned value: roughly 128 MiB of scrypt memory, which
 stays inside the weakest supported device class (§6.4) while costing about a
-second on desktop. `max_work_factor = 19` gives headroom for a future client
-that raises the pinned value, without inviting a multi-gigabyte allocation.
+second on desktop.
+
+`max_work_factor = 18` caps a read at **256 MiB**, matching the ceiling §6.4
+sets for the same device class. The bound matters because `log_n` is read
+*from the file* and is therefore attacker-chosen: a corrupt or hostile slot
+file gets to name the allocation, and `age`'s own documentation warns that a
+loose cap here is a denial-of-service vector. One doubling of headroom is
+enough for a future client that raises the pinned value to 18; a client that
+wants to go beyond that is making a format change and can raise this bound in
+the same revision.
+
 This pair is the age backend's expression of the floor/ceiling contract that
 §6.4 states for the native backend: **parameters are device-independent and
-written down, and decryption accepts a documented range.**
+written down, and decryption accepts a documented range** — the same 256 MiB
+range, so a device that can open a native vault can open an age one.
+
+**Slot writes MUST be crash-atomic.** A half-written `passphrase.age` is a
+vault the passphrase no longer opens, with the recovery code as the only way
+back in — so every slot write goes to a temporary file in the same directory,
+is fsynced, is renamed over its target, and the directory is fsynced after
+the rename. Vault creation writes the slot files and the manifest first and
+`header.jvh` **last**, so a vault interrupted during creation is a vault that
+does not yet exist rather than one that half-exists. This is the same
+commit-last ordering the migration uses in §7, for the same reason.
 
 A passphrase change rewrites `passphrase.age` only. `recovery.age` is
 untouched and the recovery code still works; no object is read or rewritten.
@@ -421,9 +490,14 @@ vault identity  ── to_public() ──►  recipient for every object (§5.5)
                                      sealed inside each slot file (§5.2)
 ```
 
-`vault_secret_bytes` for §4.4's `K_name` derivation is the **ASCII bytes of
-the uppercase Bech32 string** returned by `Identity::to_string()`. That string
-is an encoding rather than a uniform key, which is why §4.4 uses full HKDF.
+`identity_string_bytes` — the ikm of §4.4's age-backend `K_name` row — is the
+**ASCII bytes of the uppercase Bech32 string** returned by
+`Identity::to_string()`. Note that this returns a `SecretString`, and that it
+uppercases: deriving `K_name` from a lowercased Bech32 string yields a
+different key and therefore a different name for every object in the vault.
+That string is an encoding rather than a uniform key, which is why the age row
+of §4.4 uses full HKDF (Extract and Expand) where the native row uses
+Expand-only.
 
 Making the vault secret an age identity — rather than deriving one from a
 separate symmetric key — is what keeps this backend free of bespoke
@@ -467,11 +541,21 @@ plaintext**:
    decrypted buffer. **MUST NOT** return the content.
 4. On match, return `plaintext[52..]`.
 
-This recovers, inside the plaintext, exactly what §6.5's associated data
-provides: an object cannot be substituted for another, rolled back to an older
-version of itself, or transplanted between vaults, and a downgrade of the
-format version invalidates every object. The difference is where the check
-lives — which is why §3.2 makes it unskippable.
+This recovers, inside the plaintext, what §6.5's associated data provides
+against a party who cannot encrypt: an object cannot be substituted for
+another, rolled back to an older version of itself, or transplanted between
+vaults, and a downgrade of the format version invalidates every object. The
+difference is where the check lives — which is why §3.2 makes it unskippable.
+
+**Where it stops short of §6.5.** Associated data is bound under a key only
+the DEK holder has, so under the native backend a preamble cannot be
+*produced* without the ability to read. Under age it can: the preamble is
+plaintext sealed to a public key, so anyone holding the recipient can
+construct a valid one for any `Binding` (§1.1). The preamble is therefore a
+defence against a storage provider that can *rearrange* ciphertext, not
+against one that has somehow learned the recipient. §8's rule that the
+recipient never leaves the process is what closes that gap at M1; §6.5 closes
+it by construction at M2.
 
 Note what this costs the interop story: a stock `age -d` yields the content
 with 52 bytes of binary in front of it. `tools/decrypt.py` strips the preamble
@@ -671,9 +755,13 @@ offset  size  field
 | 4–255 | reserved; MUST NOT be used | — |
 
 HKDF is Expand-only here because the DEK is already a uniformly random
-256-bit key (RFC 5869 §3.3), unlike §4.4's input under the age backend.
+256-bit key (RFC 5869 §3.3), unlike the age backend's input in §4.4.
 
-`vault_secret_bytes` for §4.4 is the raw 32-byte DEK.
+The `purpose = 2` row is this backend's `K_name`, and it is the **whole**
+definition of `K_name` under the native backend — §4.4 specifies the tag
+construction that consumes it, and its per-backend table points back here.
+The native backend does **not** use the age backend's shorter
+`b"JRNLKDF1" || 0x02` info.
 
 Consequences worth stating: compromise of one `K_obj` reveals one object and
 is not invertible back to the DEK; **changing the passphrase rewraps one slot
@@ -801,10 +889,16 @@ default — and an unknown `slot_type` is ignored rather than fatal (§6.2).
 
 ## 7. Migrating age → native
 
-The migration is a **slot migration, not a re-encryption**, but it is not
-free, and the reason is worth stating before someone plans it as a one-liner:
-the two backends have different vault secrets (an X25519 identity vs. a
-256-bit DEK), so `K_name` changes, so **every object name changes**.
+The migration **re-seals and renames every object**. It is not the slot-only
+migration an earlier draft of §3.1 implied, and the reason is worth stating
+before someone plans it as a one-liner: the two backends have different vault
+secrets (an X25519 identity vs. a 256-bit DEK), so `K_name` changes, so every
+object name changes — and the object bodies must be re-sealed under the new
+backend anyway.
+
+What the seam saves is *design*, not I/O: nothing above it (§4) is
+redesigned, the manifest schema is unchanged, and object plaintext is
+untouched. What it costs is a full pass over the object directory.
 
 The migration therefore:
 
@@ -844,6 +938,17 @@ canary.
 **No secrets across IPC.** No Tauri command returns key material, slot bytes,
 or vault file paths. The passphrase enters Rust and never comes back.
 
+**The age recipient is key material.** Under the age backend the X25519
+recipient (`identity.to_public()`) MUST be treated exactly like the identity:
+never written to disk, never logged, never returned across IPC, never
+exported, and never published by a future sync or sharing feature. age
+provides no sender authentication, so possession of the recipient is
+sufficient to forge any object under any `Binding` (§1.1, §5.4). It is a
+public key by type only; in this vault it is a secret, and it is the reason
+M1's binding preamble holds against the parent design's §3 adversary. This
+rule falls away with the native backend, whose DEK is symmetric — which is
+one more reason M2 is worth doing.
+
 **Passphrase encoding.** Normalize to Unicode **NFC**, encode as UTF-8. No
 trimming, no case folding, no whitespace collapsing — trimming would silently
 discard user-chosen entropy and make two different passphrases unlock the same
@@ -864,12 +969,23 @@ checked into the repository, covering at minimum:
 1. **Recovery code** — a fixed 20-byte value, its canonical display form, and
    three sloppy transcriptions (lowercase, no hyphens, `O`/`l` substituted)
    that MUST all decode to the same bytes.
-2. **Object naming** — a fixed vault secret and plaintext, with `K_name`, the
-   HMAC input, the 20-byte `name_tag`, and the 32-character name, as hex.
+2. **Object naming, under both backends** — a fixed content blob and a fixed
+   vault secret of each kind (an age identity string and a 32-byte DEK), with
+   `K_name`, the HMAC input, the 20-byte `name_tag`, and the 32-character
+   name, as hex. Both rows are required even though the native backend is M2
+   work: §4.4's per-backend table is the single likeliest thing in this
+   document to be implemented as if it were one construction, and the two
+   differ in *both* the HKDF mode and the `info`. The vector is what catches
+   that; the native row can be computed today from §6.3 without the backend
+   existing.
 3. **Binding preamble** — a fixed `Binding` and its 52 bytes, as hex.
 4. **A complete age-backend vault** — `header.jvh`, both slot files, the
    manifest, and one entry object, openable end to end from a known
-   passphrase and a known recovery code.
+   passphrase and a known recovery code. Its slot files MUST be written at
+   the pinned `log_n = 17`, not at a cheaper factor: a vector encrypted at a
+   work factor the app never uses would not exercise the pinning rule this
+   section exists to protect. That costs the test roughly a second of CPU and
+   128 MiB per open, twice, which is the price of the vector being real.
 5. When the native backend lands: RFC 9106 Argon2id vectors, a slot wrap with
    its 72-byte associated data, and an envelope with its 60-byte associated
    data, all as hex.
@@ -886,6 +1002,41 @@ the real app. That is the acceptance test for this specification, not just for
 the code.
 
 ## 10. Revision notes
+
+**2026-08-14 (third revision)** — corrections from a critical review of the
+second revision. Nothing here changes the design's intent; all of it changes
+what the document actually *says*, and four of the items were defects an
+independent implementer could not have resolved:
+
+- **`K_name` was specified twice, incompatibly.** §4.4 gave a full-HKDF
+  derivation over a 9-byte `info` and called it backend-independent, while
+  §6.3's `purpose = 2` row gave an Expand-only derivation over the 30-byte
+  `info`. Both claimed the native backend. §4.4 now carries a per-backend
+  table, §6.3 defers to it, and §9's vector 2 pins both.
+- **§4.4 hashed "plaintext"**, a term §5.5 defines as `preamble || content` —
+  which is circular, since the preamble contains the name tag. It now hashes
+  `content`, and says why.
+- **§3.1 claimed object names survive a backend swap**; §7 said every name
+  changes. §7 was right. §3.1 now distinguishes a shared *construction* from
+  shared *bytes*, and the seam is justified by §3.2's contract instead of by
+  a migration property it never had. §7 no longer calls itself "not a
+  re-encryption" while describing one.
+- **age's lack of sender authentication was unstated.** The recipient public
+  key is sufficient to forge any object under any `Binding`, which the native
+  backend's symmetric DEK does not permit. §1.1, §5.4, and §8 now say so, and
+  §8 makes "the recipient never leaves the process" an explicit MUST — it was
+  previously an accident of implementation that the malicious-provider
+  defence depended on. §5.4 no longer claims equivalence with §6.5.
+- **`max_work_factor` lowered 19 → 18.** 19 admitted a 512 MiB attacker-named
+  allocation on the device class §6.4 budgets at 256 MiB.
+- **Slot writes gained a crash-atomicity rule** (§5.2). The native backend
+  already required an atomic header write; the backend that actually ships
+  required nothing, and a torn `passphrase.age` costs the user their
+  passphrase.
+- **§4.2 now names the `rollback_counter` read-only latch as an
+  attacker-triggerable denial of service** and requires the client to say so
+  rather than silently dropping writes.
+- `KeyStore::change_passphrase` no longer re-takes `root` (§3).
 
 **2026-08-14 (second revision)** — restructured around a swappable sealing
 backend; M1 now ships `age` rather than the native format, to save
