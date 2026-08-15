@@ -84,6 +84,23 @@ warnings via `RUSTFLAGS`; `clippy.toml` only configures lint *thresholds*,
 it cannot deny warnings itself. `Cargo.lock` is committed — this workspace
 ships binaries.
 
+## Architecture decision records
+
+[`docs/adrs/`](docs/adrs/README.md) holds one record per architectural
+decision, in [adr.github.io](https://adr.github.io/) (Nygard) format: Status,
+Context, Decision, Consequences. Read the relevant record **before** proposing
+a change to the crypto, the vault layout, the IPC boundary, or the milestone
+order — several things that look like defects are priced, deliberate
+trade-offs, and the ADR says what the alternative cost.
+
+- ADRs are **not normative**. Where an ADR and a spec disagree on a byte
+  layout, KDF parameter, or object name, the spec wins and the ADR needs
+  superseding.
+- Making a new architectural decision means adding `docs/adrs/NNNN-title.md`
+  and a row in [`docs/adrs/README.md`](docs/adrs/README.md).
+- Reversing one means writing a **new** ADR and marking the old one
+  `Superseded by ADR-NNNN` — never editing an accepted record's reasoning.
+
 ## Development workflow
 
 This repo plans and executes work using the `superpowers` Claude Code plugin
