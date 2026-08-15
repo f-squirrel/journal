@@ -153,6 +153,14 @@ the costs — a Consequences section with no costs in it is not finished.
   over-specified — link to the spec section instead.
 - Link sibling records the way the existing ones do.
 
+## The reminder hook
+
+`.claude/settings.json` carries a `PostToolUse` hook on `Edit|Write|MultiEdit`
+that fires when the edited path is under `crates/`, `apps/`, or `ui/`, and
+injects a one-line reminder to run this skill against the diff. It is a
+prompt, not a gate — it cannot see what changed and blocks nothing. The
+checklist above is still what does the work.
+
 ## Related skills
 
 - `docs-review-guide` — the broader docs sync check at branch-finish / PR time.
