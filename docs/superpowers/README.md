@@ -27,6 +27,20 @@ live so planning, execution, and history stay easy to follow across sessions.
 7. **Close out** — update the plan's row in `plans/INDEX.md` to `Done` (or
    `Abandoned` with a one-line reason).
 
+## Recording decisions
+
+This lifecycle tracks *work*, not *decisions*. Architectural decisions — the
+ones that outlive the plan that produced them — are recorded separately, as
+ADRs in [`docs/adrs/`](../adrs/README.md), which is the source of truth for
+what was decided and why.
+
+That cuts across the lifecycle rather than sitting at one step: a brainstorm
+usually settles several decisions at once, and execution occasionally forces a
+new one. Whenever it happens, add the record — a decision that exists only in a
+spec section, a plan's prose, or a commit message is not recorded. Specs and
+plans stay authoritative for what they are good at: implementable detail and
+task-level progress respectively.
+
 ## Directory layout
 
 ```
@@ -38,6 +52,10 @@ docs/superpowers/
     ├── INDEX.md       status of every plan, newest first
     └── YYYY-MM-DD-<feature-name>.md
 ```
+
+Architecture decision records live outside this tree, in
+[`docs/adrs/`](../adrs/README.md), because they are not tied to the lifecycle
+of any one plan.
 
 A spec is optional — small tasks can go straight to a plan. A plan is not
 optional; even a small task gets a short checklist so execution and review

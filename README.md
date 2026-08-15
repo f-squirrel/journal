@@ -114,8 +114,9 @@ search index is never written to disk, or what the project deliberately does
 *not* defend against. New architectural decisions get a new numbered record;
 reversals supersede rather than rewrite.
 
-The specs remain the normative source for byte-level detail — where an ADR and
-a spec disagree, the spec wins.
+The ADRs are the source of truth for *decisions*; the specs below are the
+source of truth for *implementable detail* — byte layouts, KDF parameters,
+field offsets — derived from those decisions.
 
 ## Project docs and workflow
 

@@ -66,9 +66,11 @@ falsifies:
    architectural decision (or reverses one) needs a record in `docs/adrs/`
    plus a row in [`docs/adrs/README.md`](../../docs/adrs/README.md). An
    accepted ADR is history: reverse it with a **new** record marking the old
-   one `Superseded by ADR-NNNN`, never by editing its reasoning. ADRs are not
-   normative — if an ADR and a spec disagree on a byte layout, KDF parameter,
-   or object name, the spec wins and the ADR is what needs superseding.
+   one `Superseded by ADR-NNNN`, never by editing its reasoning. `docs/adrs/`
+   is the source of truth for decisions and the specs for implementable
+   detail: a diff that changes a spec's *decision* (not just its bytes)
+   without a matching ADR is an undocumented reversal — treat it as a
+   contradiction and ask, per the section below.
 7. **SKILL.md descriptions** — if a workflow file this session relied on
    (another skill, a CI step, a script path) moved or changed behavior,
    check whether any `SKILL.md` still points at the old path/behavior.

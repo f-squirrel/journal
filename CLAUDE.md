@@ -93,11 +93,15 @@ a change to the crypto, the vault layout, the IPC boundary, or the milestone
 order — several things that look like defects are priced, deliberate
 trade-offs, and the ADR says what the alternative cost.
 
-- ADRs are **not normative**. Where an ADR and a spec disagree on a byte
-  layout, KDF parameter, or object name, the spec wins and the ADR needs
-  superseding.
+- **`docs/adrs/` is the source of truth for decisions**; the specs are the
+  source of truth for implementable detail (byte offsets, field layouts, KDF
+  parameters) derived from them. An ADR that restates a byte layout is
+  over-specified — trim it. A spec that contradicts an accepted ADR *on the
+  decision itself* is an undocumented reversal — stop and resolve it, don't
+  silently follow either document.
 - Making a new architectural decision means adding `docs/adrs/NNNN-title.md`
-  and a row in [`docs/adrs/README.md`](docs/adrs/README.md).
+  and a row in [`docs/adrs/README.md`](docs/adrs/README.md). A decision that
+  exists only in a spec section, a plan, or a commit message is not recorded.
 - Reversing one means writing a **new** ADR and marking the old one
   `Superseded by ADR-NNNN` — never editing an accepted record's reasoning.
 
