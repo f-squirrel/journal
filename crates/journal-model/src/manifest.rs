@@ -62,20 +62,32 @@ impl Manifest {
     ///
     /// Unknown fields and unsupported format versions are rejected rather
     /// than silently accepted or migrated (workspace security conventions;
-    /// ADR-0016).
+    /// ADR-0016). The `format_version` is checked *before* the strict,
+    /// `deny_unknown_fields` parse: a document from a newer format version
+    /// legitimately carries fields this build doesn't know about, and that
+    /// must surface as `UnsupportedVersion`, not as a generic "malformed
+    /// document" error from the strict parse tripping over them first.
     ///
     /// # Errors
     /// Returns [`ModelError`] if the bytes are malformed or carry an
     /// unsupported `format_version`.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, ModelError> {
-        let manifest: Self = serde_json::from_slice(bytes)
+        #[derive(Deserialize)]
+        struct VersionProbe {
+            format_version: u16,
+        }
+
+        let probe: VersionProbe = serde_json::from_slice(bytes)
             .map_err(|source| ModelError::Deserialize { kind: "manifest", source })?;
-        if manifest.format_version != MANIFEST_FORMAT_VERSION {
+        if probe.format_version != MANIFEST_FORMAT_VERSION {
             return Err(ModelError::UnsupportedVersion {
                 kind: "manifest",
-                version: manifest.format_version,
+                version: probe.format_version,
             });
         }
+
+        let manifest: Self = serde_json::from_slice(bytes)
+            .map_err(|source| ModelError::Deserialize { kind: "manifest", source })?;
         Ok(manifest)
     }
 }
@@ -141,5 +153,18 @@ mod tests {
             Err(ModelError::UnsupportedVersion { kind: "manifest", version: 99 })
         ));
         Ok(())
+    }
+
+    #[test]
+    fn newer_version_with_unknown_field_is_unsupported_version_not_deserialize_error() {
+        // A document from a genuinely newer format version legitimately
+        // carries a field this build doesn't know about — that must be
+        // `UnsupportedVersion`, not a generic "malformed document" error.
+        let json = br#"{"format_version":2,"entries":{},"tombstones":{},"synced_at":123}"#;
+        let result = Manifest::from_bytes(json);
+        assert!(matches!(
+            result,
+            Err(ModelError::UnsupportedVersion { kind: "manifest", version: 2 })
+        ));
     }
 }
