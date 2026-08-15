@@ -7,9 +7,10 @@ dumb blob store that never sees plaintext.
 
 Platforms, in order: desktop (Linux/macOS/Windows) → iOS → Android.
 
-**Status:** early scaffolding. The workspace, CI, and crate skeletons exist;
-the crypto, storage, and UI layers described below are not implemented yet.
-See [Roadmap](#roadmap).
+**Status:** early scaffolding. The workspace, CI, the shared domain types, and
+`journal-crypto`'s backend seam and object naming exist; sealing, key slots,
+storage, and the UI described below are not implemented yet. See
+[Roadmap](#roadmap).
 
 ## Security model
 

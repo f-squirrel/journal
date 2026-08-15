@@ -1,0 +1,49 @@
+{
+  "_comment": [
+    "Golden vectors for crypto spec §9 item 2 — object naming under both",
+    "backends. Computed from the spec text alone, with an independent",
+    "implementation; the Rust code is checked against these, never the",
+    "other way round. Changing any value here is a format change."
+  ],
+  "spec": "docs/superpowers/specs/2026-08-14-crypto-design.md §4.4, §6.3, §9",
+  "content_hex": "23204669727374206c696768740a0a576f6b65206561726c792c2077616c6b656420746865206c6f6e67207761792e0a",
+  "content_sha256_hex": "ce473346d3e9f0e93852d9dbc4688ee6e10cc4bae0ec69ef78946135d9c3e697",
+  "age_identity_string": "AGE-SECRET-KEY-1QYPQXPQ9QCRSSZG2PVXQ6RS0ZQG3YYC5Z5TPWXQERGD3C8G7RUSQGPQYEE",
+  "native_dek_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+  "age_k_name_hkdf_info_hex": "4a524e4c4b44463102",
+  "native_k_name_hkdf_info_hex": "4a524e4c4b44463102000000000000000000000000000000000000000000",
+  "cases": [
+    {
+      "backend": "age",
+      "object_kind": 2,
+      "k_name_hex": "bd5036844277462b16e38aaaa2e61841eafc20245ca1de5d2e7abec36ea9ef8d",
+      "hmac_input_hex": "4a524e4c4e414d3102ce473346d3e9f0e93852d9dbc4688ee6e10cc4bae0ec69ef78946135d9c3e697",
+      "name_tag_hex": "01bc4b283e01cb453c17f44a3679f2d3f1b0cdbe",
+      "name": "06y4pa1y075maf0qyh53cyfjtfrv1kdy"
+    },
+    {
+      "backend": "age",
+      "object_kind": 3,
+      "k_name_hex": "bd5036844277462b16e38aaaa2e61841eafc20245ca1de5d2e7abec36ea9ef8d",
+      "hmac_input_hex": "4a524e4c4e414d3103ce473346d3e9f0e93852d9dbc4688ee6e10cc4bae0ec69ef78946135d9c3e697",
+      "name_tag_hex": "1abe2010ef2302c63167e2081352fa28ffbde0a6",
+      "name": "3az2047f4c1cccb7w8416mqt53zvvr56"
+    },
+    {
+      "backend": "native",
+      "object_kind": 2,
+      "k_name_hex": "de8d4145176423550d66572748ffb98b0aadb05be8cce472c1aabc8d18f2e880",
+      "hmac_input_hex": "4a524e4c4e414d3102ce473346d3e9f0e93852d9dbc4688ee6e10cc4bae0ec69ef78946135d9c3e697",
+      "name_tag_hex": "0511f74cad32df49ac53b32384fe9518313afebc",
+      "name": "0m8zek5d6bfmkb2kpchr9zmn30rknznw"
+    },
+    {
+      "backend": "native",
+      "object_kind": 3,
+      "k_name_hex": "de8d4145176423550d66572748ffb98b0aadb05be8cce472c1aabc8d18f2e880",
+      "hmac_input_hex": "4a524e4c4e414d3103ce473346d3e9f0e93852d9dbc4688ee6e10cc4bae0ec69ef78946135d9c3e697",
+      "name_tag_hex": "35bf7cd3413e7bd95ed9bbb7169ed1a3130a9e3c",
+      "name": "6pzqsmt17sxxjqpsqevhd7phmc9gn7hw"
+    }
+  ]
+}

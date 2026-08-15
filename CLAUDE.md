@@ -15,8 +15,10 @@ XChaCha20 backend is the M2 target. Because age's passphrase recipient is
 scrypt-only, **M1 does not satisfy requirement F4 (Argon2)** — that is a
 deliberate, documented deferral, not an oversight to "fix".
 
-Current status: early scaffolding (workspace, CI, and crate skeletons only —
-see [`docs/superpowers/plans/INDEX.md`](docs/superpowers/plans/INDEX.md) for
+Current status: early scaffolding — workspace, CI, `journal-model`'s domain
+types, and `journal-crypto`'s backend seam and object naming; sealing, key
+slots, storage, and UI are not written yet (see
+[`docs/superpowers/plans/INDEX.md`](docs/superpowers/plans/INDEX.md) for
 what's actually implemented vs. planned). Don't assume crypto/storage/UI
 functionality exists until the relevant plan task is checked off.
 

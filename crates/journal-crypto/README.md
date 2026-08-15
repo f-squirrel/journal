@@ -4,8 +4,8 @@ Encryption for the vault: the backend seam, key slots, object sealing, object
 naming, and recovery codes. No hand-rolled primitives — everything here wraps
 audited crates, and at M1 the container itself is `age`.
 
-**Status:** the backend seam (`backend.rs`) exists; the age backend, naming,
-and recovery code do not yet. See Tasks 4–6 of
+**Status:** the backend seam (`backend.rs`) and object naming (`naming.rs`)
+exist; the age backend and the recovery code do not yet. See Tasks 5–6 of
 [`../../docs/superpowers/plans/2026-08-14-m1-encrypted-local-vault.md`](../../docs/superpowers/plans/2026-08-14-m1-encrypted-local-vault.md)
 for the implementation checklist. The byte-level design is ratified in
 [`../../docs/superpowers/specs/2026-08-14-crypto-design.md`](../../docs/superpowers/specs/2026-08-14-crypto-design.md)
@@ -18,10 +18,11 @@ pluggable sealing backend:
 
 ```
 backend.rs      the seam: KeyStore, ObjectSealer, Binding, CryptoError
-naming.rs       K_name derivation and HMAC object names   (planned)
+naming.rs       K_name derivation and HMAC object names
 key.rs          key types: zeroize/secrecy, no Debug       (planned)
 age_backend/    M1: age files, scrypt slots                (planned)
 native/         M2: Argon2id + XChaCha20 envelope          (planned)
+tests/vectors/  golden vectors from the spec's §9 list
 ```
 
 `age_backend` and `native` are interchangeable behind `backend.rs`. Everything
@@ -66,6 +67,11 @@ not bugs:
 - Formats are not chosen at the call site. Framing, binding, header layout,
   KDF parameters, and object naming come from the spec; changing one is a
   format-version change.
+- `K_name` is derived **per backend** (spec §4.4): full HKDF over the age
+  identity string, HKDF-Expand-only over the native DEK. They are not one
+  construction, and `tests/vectors/naming.json` pins both rows.
+- Object names are keyed tags, never a bare hash of the content — a raw
+  content hash is a confirmation oracle (ADR-0013).
 - Full threat model and key hierarchy: §5 of
   [`../../docs/superpowers/specs/2026-08-14-journaling-app-design.md`](../../docs/superpowers/specs/2026-08-14-journaling-app-design.md),
   specified byte for byte in

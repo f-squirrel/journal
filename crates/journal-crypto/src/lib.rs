@@ -11,6 +11,7 @@
 //! fills this crate in.
 
 pub mod backend;
+pub mod naming;
 
 #[cfg(test)]
 mod tests {

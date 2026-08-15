@@ -84,20 +84,26 @@ it.
       `UnlockSecret`, `CryptoError` — crypto spec §3, normative signatures.
       `Binding` is a required argument of both `seal` and `open` so a caller
       cannot open an object without stating which object they believe it is.
-- [ ] `crates/journal-crypto/src/naming.rs`: `K_name` derivation and
+- [x] `crates/journal-crypto/src/naming.rs`: `K_name` derivation and
       `HMAC(K_name, kind || SHA-256(content))` truncated to 160 bits, encoded
       with the `base32` crate's Crockford alphabet (spec §4.4). The hash covers
       the object's **content**, never the §5.4 preamble — the preamble carries
       the name tag, so hashing it would be circular. `K_name` is derived
       **per backend** (spec §4.4's table): full HKDF over the age identity
       string, Expand-only over the native DEK. They are not interchangeable.
-- [ ] Verify (tests first): the golden naming vectors of spec §9 item 2 —
+      Names are computed for a `ContentKind` (entry or attachment) rather than
+      an `ObjectKind`, so the manifest — which is not content-addressed — has
+      no name to invent.
+- [x] Verify (tests first): the golden naming vectors of spec §9 item 2 —
       **both** the age and native `K_name` rows, since the native one is
       computable today and is the likeliest thing to be implemented as if the
       two constructions were one; a blob's on-disk name equals no hash of its
       plaintext; the same content under two different vault secrets yields two
       different names.
-- [ ] Review docs (use `/docs-review-guide`) to ensure the seam and naming
+      Vectors live in `crates/journal-crypto/tests/vectors/naming.json`,
+      computed from the spec text by an independent implementation rather than
+      from this crate's output.
+- [x] Review docs (use `/docs-review-guide`) to ensure the seam and naming
       match the spec.
 
 ## Task 5 — `journal-crypto`: the age backend
