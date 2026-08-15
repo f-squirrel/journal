@@ -1,6 +1,6 @@
 ---
 name: docs-review-guide
-description: Checks that this repo's docs — both AI-facing (CLAUDE.md, docs/superpowers/specs, docs/superpowers/plans, INDEX.md, SKILL.md files) and human-facing (root README.md, ui/README.md, apps/desktop/README.md, crates/*/README.md) — still match the latest code changes, and flags anything a change makes stale or false. Use this before finishing a development branch or opening/updating a PR, after completing a plan task or checklist item, whenever the user asks to "update docs", "check the docs", "sync docs", "review documentation", or "does this need a doc update", and any time a change touches something a doc asserts (workspace layout, crate list, build/lint commands, security-critical conventions, roadmap/status, §3 non-goals). If a change appears to contradict what a doc currently claims, stop and ask the user via AskUserQuestion rather than silently resolving it either direction.
+description: Checks that this repo's docs — both AI-facing (CLAUDE.md, docs/adrs, docs/superpowers/specs, docs/superpowers/plans, INDEX.md, SKILL.md files) and human-facing (root README.md, ui/README.md, apps/desktop/README.md, crates/*/README.md) — still match the latest code changes, and flags anything a change makes stale or false. Use this before finishing a development branch or opening/updating a PR, after completing a plan task or checklist item, whenever the user asks to "update docs", "check the docs", "sync docs", "review documentation", or "does this need a doc update", and any time a change touches something a doc asserts (workspace layout, crate list, build/lint commands, security-critical conventions, roadmap/status, §3 non-goals). If a change appears to contradict what a doc currently claims, stop and ask the user via AskUserQuestion rather than silently resolving it either direction.
 ---
 
 # Docs Review Guide
@@ -11,8 +11,9 @@ independently if only one gets updated:
 - **AI-facing docs** — read by Claude Code sessions to orient themselves:
   root [`CLAUDE.md`](../../CLAUDE.md), [`docs/superpowers/README.md`](../../docs/superpowers/README.md),
   every file in `docs/superpowers/specs/`, every file in `docs/superpowers/plans/`
-  (including [`plans/INDEX.md`](../../docs/superpowers/plans/INDEX.md)), and
-  the `SKILL.md` files under `.claude/skills/`.
+  (including [`plans/INDEX.md`](../../docs/superpowers/plans/INDEX.md)), the
+  architecture decision records in [`docs/adrs/`](../../docs/adrs/README.md),
+  and the `SKILL.md` files under `.claude/skills/`.
 - **Human-facing docs** — read by a person skimming the repo: root
   [`README.md`](../../README.md), `ui/README.md`, `apps/desktop/README.md`,
   and each `crates/*/README.md`.
@@ -61,7 +62,14 @@ falsifies:
 5. **Plan checklists** — a plan file's own checkboxes should reflect what's
    actually done; don't leave a task unchecked once its verification step
    passes, and don't check one off that isn't actually satisfied.
-6. **SKILL.md descriptions** — if a workflow file this session relied on
+6. **Architecture decision records** — a change that makes a new
+   architectural decision (or reverses one) needs a record in `docs/adrs/`
+   plus a row in [`docs/adrs/README.md`](../../docs/adrs/README.md). An
+   accepted ADR is history: reverse it with a **new** record marking the old
+   one `Superseded by ADR-NNNN`, never by editing its reasoning. ADRs are not
+   normative — if an ADR and a spec disagree on a byte layout, KDF parameter,
+   or object name, the spec wins and the ADR is what needs superseding.
+7. **SKILL.md descriptions** — if a workflow file this session relied on
    (another skill, a CI step, a script path) moved or changed behavior,
    check whether any `SKILL.md` still points at the old path/behavior.
 

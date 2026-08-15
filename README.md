@@ -103,6 +103,20 @@ npm --prefix ui run build
 cargo build --workspace --release
 ```
 
+## Architecture decisions
+
+[`docs/adrs/`](docs/adrs/README.md) records why this project is built the way
+it is — one Architecture Decision Record per decision, in the
+[adr.github.io](https://adr.github.io/) format (Status, Context, Decision,
+Consequences). Start there if you're wondering why M1 uses `age` instead of
+Argon2id, why object names are keyed rather than plain content hashes, why the
+search index is never written to disk, or what the project deliberately does
+*not* defend against. New architectural decisions get a new numbered record;
+reversals supersede rather than rewrite.
+
+The specs remain the normative source for byte-level detail — where an ADR and
+a spec disagree, the spec wins.
+
 ## Project docs and workflow
 
 This repo plans and executes work using the `superpowers` Claude Code
