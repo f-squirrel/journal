@@ -1,6 +1,8 @@
 //! The journal entry: the plaintext content sealed as an `ObjectKind::Entry`
 //! object (crypto spec §4.3).
 
+use std::fmt;
+
 use serde::{Deserialize, Serialize};
 
 use crate::attachment::Attachment;
@@ -23,7 +25,7 @@ pub const ENTRY_FORMAT_VERSION: u16 = 1;
 /// under a new object name, so the manifest ([`crate::manifest::Manifest`])
 /// tracks `id -> current object name` rather than relying on the object
 /// name to identify "this entry" across edits.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Entry {
     pub format_version: u16,
@@ -40,6 +42,25 @@ pub struct Entry {
     pub attachments: Vec<Attachment>,
 }
 
+/// Redacts `title` and `body` so `tracing::debug!(?entry)` and friends can
+/// never leak plaintext journal content (workspace security conventions:
+/// "No key material, entry bodies, titles, or passphrases in `tracing`
+/// output, at any level").
+impl fmt::Debug for Entry {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Entry")
+            .field("format_version", &self.format_version)
+            .field("id", &self.id)
+            .field("title", &format_args!("<redacted, {} chars>", self.title.chars().count()))
+            .field("body", &format_args!("<redacted, {} chars>", self.body.chars().count()))
+            .field("tags", &self.tags)
+            .field("created_at", &self.created_at)
+            .field("updated_at", &self.updated_at)
+            .field("attachments", &self.attachments)
+            .finish()
+    }
+}
+
 impl Entry {
     /// Serializes to the canonical on-disk representation: the bytes that
     /// become the sealed object's content (crypto spec §4.4).
@@ -54,20 +75,32 @@ impl Entry {
     ///
     /// Unknown fields and unsupported format versions are rejected rather
     /// than silently accepted or migrated (workspace security conventions;
-    /// ADR-0016).
+    /// ADR-0016). The `format_version` is checked *before* the strict,
+    /// `deny_unknown_fields` parse: a document from a newer format version
+    /// legitimately carries fields this build doesn't know about, and that
+    /// must surface as `UnsupportedVersion`, not as a generic "malformed
+    /// document" error from the strict parse tripping over them first.
     ///
     /// # Errors
     /// Returns [`ModelError`] if the bytes are malformed or carry an
     /// unsupported `format_version`.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, ModelError> {
-        let entry: Self = serde_json::from_slice(bytes)
+        #[derive(Deserialize)]
+        struct VersionProbe {
+            format_version: u16,
+        }
+
+        let probe: VersionProbe = serde_json::from_slice(bytes)
             .map_err(|source| ModelError::Deserialize { kind: "entry", source })?;
-        if entry.format_version != ENTRY_FORMAT_VERSION {
+        if probe.format_version != ENTRY_FORMAT_VERSION {
             return Err(ModelError::UnsupportedVersion {
                 kind: "entry",
-                version: entry.format_version,
+                version: probe.format_version,
             });
         }
+
+        let entry: Self = serde_json::from_slice(bytes)
+            .map_err(|source| ModelError::Deserialize { kind: "entry", source })?;
         Ok(entry)
     }
 }
@@ -122,5 +155,27 @@ mod tests {
             Err(ModelError::UnsupportedVersion { kind: "entry", version: 2 })
         ));
         Ok(())
+    }
+
+    #[test]
+    fn newer_version_with_unknown_field_is_unsupported_version_not_deserialize_error() {
+        // A document from a genuinely newer format version legitimately
+        // carries a field this build doesn't know about — that must be
+        // `UnsupportedVersion`, not a generic "malformed document" error.
+        let json = br#"{"format_version":2,"id":"3d6f0c1a-9b2e-4a3f-8c1d-1a2b3c4d5e6f","title":"t","body":"b","tags":[],"created_at":0,"updated_at":0,"attachments":[],"mood":"happy"}"#;
+        let result = Entry::from_bytes(json);
+        assert!(matches!(
+            result,
+            Err(ModelError::UnsupportedVersion { kind: "entry", version: 2 })
+        ));
+    }
+
+    #[test]
+    fn debug_redacts_title_and_body() {
+        let entry = sample();
+        let debug = format!("{entry:?}");
+        assert!(!debug.contains(&entry.title));
+        assert!(!debug.contains("heron"));
+        assert!(debug.contains("<redacted"));
     }
 }

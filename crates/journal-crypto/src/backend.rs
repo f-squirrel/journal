@@ -52,6 +52,12 @@ impl TryFrom<u8> for ObjectKind {
 
 /// The length in bytes of an object ID — a truncated object-name tag
 /// (spec §4.4).
+///
+/// Duplicates `journal_model::ids::OBJECT_NAME_LEN` by design —
+/// `journal-model` has no dependency on this crate, so the two crates each
+/// hard-code this constant independently. If the crypto spec's tag length
+/// ever changes, update both; the eventual `journal-store` bridge is the
+/// earliest point a mismatch would surface as a compile error.
 pub const OBJECT_ID_LEN: usize = 20;
 
 /// Everything that identifies one object.

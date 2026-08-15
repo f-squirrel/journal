@@ -43,6 +43,12 @@ impl fmt::Display for EntryId {
 }
 
 /// The length in bytes of an object name tag (crypto spec §4.4): 160 bits.
+///
+/// Duplicates `journal_crypto::backend::OBJECT_ID_LEN` by design —
+/// `journal-model` has no dependency on `journal-crypto`, so the two crates
+/// each hard-code this constant independently. If the crypto spec's tag
+/// length ever changes, update both; the eventual `journal-store` bridge is
+/// the earliest point a mismatch would surface as a compile error.
 pub const OBJECT_NAME_LEN: usize = 20;
 
 /// The content-addressed name of a sealed object.
