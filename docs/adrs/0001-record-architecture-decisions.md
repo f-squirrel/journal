@@ -34,9 +34,16 @@ template): **Title, Status, Context, Decision, Consequences**.
 - An accepted ADR is immutable history. Changing our mind means writing a new
   ADR that supersedes the old one, and updating the old one's Status to
   `Superseded by ADR-NNNN` — never editing the original's reasoning.
-- ADRs record *what was decided and why*. They are not normative: where an ADR
-  and a spec disagree about a byte layout, a KDF parameter, or an object name,
-  **the spec wins**, and the ADR should be superseded to match.
+- **This folder is the source of truth for decisions.** A decision written only
+  into a spec section, a plan, or a commit message is not recorded until it has
+  an ADR. The specs remain the source of truth for *implementable detail* —
+  byte offsets, field layouts, KDF parameters — which is derived from these
+  decisions rather than a competing account of them.
+- The two layers must not overlap. An ADR that restates a byte layout is
+  over-specified and should be trimmed back to the decision; a spec that
+  contradicts an accepted ADR **on the decision itself** is an undocumented
+  reversal, to be resolved by superseding the ADR or fixing the spec — never by
+  silently following one document over the other.
 - Records 0002–0022 were written retrospectively on 2026-08-15 from decisions
   already made and documented elsewhere. Their dates are the date of record,
   and each cites the source that ratified it.
@@ -49,8 +56,11 @@ template): **Title, Status, Context, Decision, Consequences**.
   cleaner than it was. Where a decision was reversed during review, the ADR
   says so rather than presenting the final position as the only one considered.
 - A double-write burden: substantive decisions now land in both a spec and an
-  ADR. The ADRs stay short and link out to keep that cost small, and the specs
-  remain the single source of implementable truth.
+  ADR. The ADRs stay short and link out to keep that cost small — an ADR that
+  starts reproducing a spec's field tables has crossed the line described above.
+- Deciding something is now a two-part act: make the change, and record it
+  here. A spec edit that quietly reverses an ADR is a process failure that the
+  docs-review step is meant to catch.
 - New work should check this folder before proposing a change to crypto,
   storage layout, or the IPC boundary — an existing ADR is likely to have
   already priced the alternative.

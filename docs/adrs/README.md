@@ -7,10 +7,29 @@ Format: [adr.github.io](https://adr.github.io/) (Michael Nygard's template) —
 each record has **Title, Status, Context, Decision, Consequences**. See
 [ADR-0001](0001-record-architecture-decisions.md) for the conventions.
 
-**ADRs are not normative.** They record decisions and reasoning; the
-implementable truth lives in the specs. Where an ADR and a spec disagree about
-a byte layout, a KDF parameter, or an object name, the **spec wins** and the
-ADR should be superseded to match:
+## Authority
+
+**This folder is the source of truth for decisions.** What was chosen, why,
+what it costs, and whether it still stands — that lives here, and a new
+architectural decision is not recorded until it has an ADR, however thoroughly
+some spec section explains it.
+
+**The specs are the source of truth for implementable detail** — byte offsets,
+field layouts, KDF parameters, algorithms — which is *derived from* these
+decisions, not a competing account of them. The two are different layers and
+must not overlap:
+
+- An ADR **should not restate a byte layout**. If one does and it drifts from
+  the spec, the ADR is over-specified: trim it back to the decision. Never
+  "correct" a spec's bytes from an ADR.
+- If a spec contradicts an accepted ADR **on the decision itself** — say it
+  starts specifying Argon2id as M1's KDF — that is an undocumented reversal,
+  not a detail. Stop and resolve it: either supersede the ADR or fix the spec.
+  Don't silently follow whichever document you happened to read.
+- A decision made in a session and written only into a spec section or a plan
+  is **not yet recorded**. Add the ADR.
+
+Companion documents:
 
 - [`docs/superpowers/specs/2026-08-14-journaling-app-design.md`](../superpowers/specs/2026-08-14-journaling-app-design.md)
   — product, threat model, architecture
