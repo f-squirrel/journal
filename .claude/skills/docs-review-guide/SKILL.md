@@ -9,13 +9,13 @@ This repo documents itself in two audiences at once, and they drift
 independently if only one gets updated:
 
 - **AI-facing docs** — read by Claude Code sessions to orient themselves:
-  root [`CLAUDE.md`](../../CLAUDE.md), [`docs/superpowers/README.md`](../../docs/superpowers/README.md),
+  root [`CLAUDE.md`](../../../CLAUDE.md), [`docs/superpowers/README.md`](../../../docs/superpowers/README.md),
   every file in `docs/superpowers/specs/`, every file in `docs/superpowers/plans/`
-  (including [`plans/INDEX.md`](../../docs/superpowers/plans/INDEX.md)), the
-  architecture decision records in [`docs/adrs/`](../../docs/adrs/README.md),
+  (including [`plans/INDEX.md`](../../../docs/superpowers/plans/INDEX.md)), the
+  architecture decision records in [`docs/adrs/`](../../../docs/adrs/README.md),
   and the `SKILL.md` files under `.claude/skills/`.
 - **Human-facing docs** — read by a person skimming the repo: root
-  [`README.md`](../../README.md), `ui/README.md`, `apps/desktop/README.md`,
+  [`README.md`](../../../README.md), `ui/README.md`, `apps/desktop/README.md`,
   and each `crates/*/README.md`.
 
 Several facts are asserted in more than one place on purpose (e.g. the
@@ -62,15 +62,14 @@ falsifies:
 5. **Plan checklists** — a plan file's own checkboxes should reflect what's
    actually done; don't leave a task unchecked once its verification step
    passes, and don't check one off that isn't actually satisfied.
-6. **Architecture decision records** — a change that makes a new
-   architectural decision (or reverses one) needs a record in `docs/adrs/`
-   plus a row in [`docs/adrs/README.md`](../../docs/adrs/README.md). An
-   accepted ADR is history: reverse it with a **new** record marking the old
-   one `Superseded by ADR-NNNN`, never by editing its reasoning. `docs/adrs/`
-   is the source of truth for decisions and the specs for implementable
-   detail: a diff that changes a spec's *decision* (not just its bytes)
-   without a matching ADR is an undocumented reversal — treat it as a
-   contradiction and ask, per the section below.
+6. **Architecture decision records** — did this branch make an architectural
+   decision, violate one, or reverse one? Use the `adr-guide` skill for that
+   check; it owns the routing table, the violation checklist, and the
+   record-writing rules. At this stage confirm only that the branch's
+   decisions are recorded in [`docs/adrs/`](../../../docs/adrs/README.md) with
+   a row in its index, and that no spec change reversed an accepted ADR
+   without a superseding record — that last one is a contradiction, so ask
+   rather than resolving it (see below).
 7. **SKILL.md descriptions** — if a workflow file this session relied on
    (another skill, a CI step, a script path) moved or changed behavior,
    check whether any `SKILL.md` still points at the old path/behavior.
