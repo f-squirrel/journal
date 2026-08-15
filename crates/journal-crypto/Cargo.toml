@@ -9,8 +9,8 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
-secrecy = "0.10.3"
-thiserror = "2.0.20"
-zeroize = "1.9.0"
+secrecy = { workspace = true }
+thiserror = { workspace = true }
+zeroize = { workspace = true }
 
 [dev-dependencies]
