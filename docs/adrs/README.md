@@ -78,3 +78,15 @@ already ratified in the specs and the M1 plan; each cites its source.
 4. To reverse a decision, write a **new** ADR and set the old one's status to
    `Superseded by ADR-NNNN`. Don't edit the original's reasoning — an ADR is a
    record of what was decided at a point in time.
+
+Statuses in use: `Proposed` (drafted, awaiting sign-off — the decision is the
+maintainer's to make), `Accepted — YYYY-MM-DD`, and
+`Superseded by ADR-NNNN`.
+
+## For Claude Code sessions
+
+The `adr-guide` skill (`.claude/skills/adr-guide/SKILL.md`) drives this folder
+in both directions: which records govern which parts of the codebase, a
+checklist of the invariants most easily violated, and how to tell a new
+architectural decision from an implementation detail. It runs per change;
+`docs-review-guide` does the wider docs sweep at branch-finish time.

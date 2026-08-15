@@ -105,6 +105,13 @@ trade-offs, and the ADR says what the alternative cost.
 - Reversing one means writing a **new** ADR and marking the old one
   `Superseded by ADR-NNNN` — never editing an accepted record's reasoning.
 
+Use the **`adr-guide`** skill for this: it maps each part of the codebase to
+the records that govern it, lists the invariants most easily violated, and
+covers how to tell a new decision from an implementation detail. Run it before
+writing code in an area an ADR covers, and again on the diff before
+committing — both "did this violate a record?" and "did this make a decision
+that needs one?".
+
 ## Development workflow
 
 This repo plans and executes work using the `superpowers` Claude Code plugin
