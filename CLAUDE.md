@@ -123,3 +123,8 @@ artifact lives (`docs/superpowers/specs/`, `docs/superpowers/plans/`,
 
 Commit messages follow Conventional Commits — see
 `.claude/skills/conventional-commit-guide/SKILL.md`.
+
+When fixing review findings on an already-open PR, land the commits directly
+on that PR's existing head branch by default, rather than opening a new
+branch/PR for the fix — ask first if a task's stated branch name differs from
+the PR's actual head branch.

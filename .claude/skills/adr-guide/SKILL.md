@@ -53,7 +53,9 @@ already exists — if you wrote one, stop.
   before the binding verifies, or compares the preamble non-constant-time → 0009
 - Key material, key-slot bytes, or a vault file path crossing Tauri IPC; an
   image as base64 in an IPC payload; entry text, titles, passphrases, or keys
-  reaching `tracing` at any level → 0005
+  reaching `tracing` at any level — including via a derived (unredacted)
+  `Debug`/`Display` on a type that holds them, which leaks the moment
+  anything logs the value, not just at an existing `tracing::` call site → 0005
 - `Serialize` or `Debug` on a key type; key material not wrapped in
   `zeroize`/`secrecy` → 0008, 0009
 - The age X25519 **recipient** written to disk, logged, exported, or returned
@@ -62,8 +64,11 @@ already exists — if you wrote one, stop.
 - The search index, or any decrypted content, written to disk → 0014
 - An object deleted without a manifest tombstone → 0015
 - A parser that repairs, guesses, or best-effort-opens instead of rejecting;
-  opening an unknown `format_major`; writing to a vault that failed validation
-  → 0016
+  opening an unknown `format_major`; writing to a vault that failed validation;
+  a version check that runs *after* a strict (`deny_unknown_fields`) parse
+  instead of before it, so a document from a genuinely newer format version
+  fails as a generic parse error instead of the intended
+  "unsupported version" → 0016
 - scrypt work factor calibrated rather than pinned, or a KDF parameter above
   the 256 MiB ceiling → 0012
 - **Adding Argon2id to M1 "to fix F4"** — that is a documented deferral, not an
