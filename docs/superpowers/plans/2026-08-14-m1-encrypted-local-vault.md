@@ -63,13 +63,13 @@ implementation, then tick the box. Paths are repo-relative.
 
 ## Task 3 — `journal-model`
 
-- [ ] `crates/journal-model/src/{entry.rs,attachment.rs,manifest.rs,ids.rs}`:
+- [x] `crates/journal-model/src/{entry.rs,attachment.rs,manifest.rs,ids.rs}`:
       entry, attachment, manifest, tombstone, and object-ID types.
-- [ ] Serialization is explicit and versioned — no `#[serde(flatten)]`, no
+- [x] Serialization is explicit and versioned — no `#[serde(flatten)]`, no
       silent acceptance of unknown fields.
-- [ ] Verify (test first): round-trip tests, plus a golden-file test so an
+- [x] Verify (test first): round-trip tests, plus a golden-file test so an
       accidental format change fails loudly instead of migrating silently.
-- [ ] Review docs (use `/docs-review-guide`) to ensure workspace layout and
+- [x] Review docs (use `/docs-review-guide`) to ensure workspace layout and
       crate structure in CLAUDE.md match the implementation.
 
 ## Task 4 — `journal-crypto`: the backend seam and naming
