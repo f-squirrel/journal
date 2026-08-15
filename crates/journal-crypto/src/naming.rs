@@ -35,7 +35,7 @@ use secrecy::{ExposeSecret, SecretString};
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
-use crate::backend::{NameKey, ObjectKind, OBJECT_ID_LEN};
+use crate::backend::{Dek, NameKey, ObjectKind, OBJECT_ID_LEN};
 
 /// Domain separator for the naming HMAC (spec §4.4).
 const NAME_DOMAIN: &[u8; 8] = b"JRNLNAM1";
@@ -192,7 +192,7 @@ pub fn name_key_from_age_identity(identity: &SecretString) -> NameKey {
 /// the DEK is exactly that, and 32 bytes of output is far below the 255 ×
 /// `HashLen` limit.
 #[must_use]
-pub fn name_key_from_dek(dek: &Zeroizing<[u8; 32]>) -> NameKey {
+pub fn name_key_from_dek(dek: &Dek) -> NameKey {
     // Spec §6.3: b"JRNLKDF1" || purpose || object_kind || object_id, with the
     // last two zeroed for every purpose but 1.
     let mut info = [0u8; 30];
@@ -200,7 +200,7 @@ pub fn name_key_from_dek(dek: &Zeroizing<[u8; 32]>) -> NameKey {
     info[8] = PURPOSE_NAME;
 
     #[expect(clippy::expect_used, reason = "a 32-byte PRK is SHA-256's own output length")]
-    let hkdf = Hkdf::<Sha256>::from_prk(dek.as_slice())
+    let hkdf = Hkdf::<Sha256>::from_prk(dek.expose().as_slice())
         .expect("HKDF-SHA-256 accepts a 32-byte pseudorandom key");
     NameKey::new(expand_key(&hkdf, &info))
 }
@@ -225,7 +225,7 @@ mod tests {
         name_key_from_age_identity, name_key_from_dek, object_name, ContentKind, ObjectName,
         OBJECT_NAME_CHARS,
     };
-    use crate::backend::OBJECT_ID_LEN;
+    use crate::backend::{Dek, OBJECT_ID_LEN};
 
     /// The identity string of `tests/vectors/naming.json`, and a second one,
     /// both real Bech32 age keys.
@@ -327,7 +327,7 @@ mod tests {
     fn the_age_and_native_rows_are_not_one_construction() {
         // Both start from 32 bytes of vault secret, and a single shared
         // derivation would look right everywhere except on disk.
-        let dek = Zeroizing::new([7u8; 32]);
+        let dek = Dek::new(Zeroizing::new([7u8; 32]));
         let native = name_key_from_dek(&dek);
         let aged = name_key_from_age_identity(&identity(IDENTITY));
         assert_ne!(native.expose(), aged.expose());

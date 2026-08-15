@@ -95,6 +95,26 @@ impl NameKey {
     }
 }
 
+/// The native backend's data-encryption key (spec §6.3).
+///
+/// Deliberately opaque: it is key material, so it implements neither
+/// `Debug` nor `Serialize`, and it is zeroized on drop.
+pub struct Dek(Zeroizing<[u8; 32]>);
+
+impl Dek {
+    #[must_use]
+    pub fn new(bytes: Zeroizing<[u8; 32]>) -> Self {
+        Self(bytes)
+    }
+
+    /// Exposes the raw key for use as an HKDF pseudorandom key. Callers MUST
+    /// NOT copy it into a buffer that is not itself zeroized.
+    #[must_use]
+    pub fn expose(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
 /// A parsed recovery code: the decoded 20 bytes, never the display string
 /// (spec §4.5).
 pub struct RecoveryCode(Zeroizing<[u8; 20]>);

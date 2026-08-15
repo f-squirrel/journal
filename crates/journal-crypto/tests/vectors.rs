@@ -12,6 +12,7 @@
 //! in the spec to be implemented as though the two constructions were one,
 //! and they differ in both the HKDF mode and the `info`.
 
+use journal_crypto::backend::Dek;
 use journal_crypto::naming::{
     name_key_from_age_identity, name_key_from_dek, object_name, ContentKind,
 };
@@ -47,7 +48,7 @@ fn case_name_key(
             Ok(name_key_from_age_identity(&identity))
         }
         "native" => {
-            let dek = Zeroizing::new(bytes32(field(vectors, "native_dek_hex")?)?);
+            let dek = Dek::new(Zeroizing::new(bytes32(field(vectors, "native_dek_hex")?)?));
             Ok(name_key_from_dek(&dek))
         }
         other => Err(format!("unknown backend `{other}` in the naming vectors").into()),
@@ -78,9 +79,12 @@ fn object_naming_matches_the_golden_vectors_under_both_backends() -> TestResult 
         let label = format!("{backend} backend, object kind {kind_u8}");
 
         let name_key = case_name_key(&vectors, backend)?;
-        assert_eq!(
-            hex::encode(name_key.expose()),
-            field(case, "k_name_hex")?,
+        // `assert!`, not `assert_eq!`: the latter's panic message prints both
+        // sides via `Debug`, which would put K_name in the test log on a
+        // failure. `NameKey` itself has no `Debug` for exactly this reason —
+        // don't undo that by hex-encoding it into a `String` first.
+        assert!(
+            hex::encode(name_key.expose()) == field(case, "k_name_hex")?,
             "{label}: K_name derivation drifted from spec §4.4 — the two backend rows use \
              different HKDF modes and different info, and are not interchangeable",
         );

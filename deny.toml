@@ -54,6 +54,11 @@ allow = [
 confidence-threshold = 0.8
 
 [bans]
+# `multiple-versions = "warn"` rather than "deny": Tauri pins sha2/digest 0.10
+# (plus their block-buffer/crypto-common/cpufeatures deps), and
+# journal-crypto's object naming (spec §4.4) pulls the 0.11 line. Both line
+# ranges are MIT OR Apache-2.0 and neither is ours to move — the 0.10 line is
+# Tauri's upstream choice. Known, accepted drift, not something to "fix".
 multiple-versions = "warn"
 wildcards = "deny"
 deny = []
