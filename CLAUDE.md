@@ -39,10 +39,15 @@ is the only current form of static checking.
     Editor); `components/AppShell.tsx` is the shared page chrome.
   - Entries are markdown (`types.ts` `JournalEntry.markdown`), rendered with
     `react-markdown` + `remark-gfm`.
-- **Backend** (`src-tauri/`): Rust, Tauri v2. Currently just the generated
-  scaffold (`src/lib.rs` exposes a single `greet` command via
-  `invoke_handler`). No real native functionality (storage, sync, crypto) is
-  wired up yet — this is where that will live as it's built.
+- **Backend** (`src-tauri/`): Rust, Tauri v2, part of a Cargo workspace
+  rooted at the repo root (top-level `Cargo.toml`/`Cargo.lock`,
+  `[workspace.dependencies]` for shared versions). New backend crates go
+  under `crates/<name>/` as workspace members; `src-tauri` stays thin
+  Tauri glue and currently is just the generated scaffold (`src/lib.rs`
+  exposes a single `greet` command via `invoke_handler`). No real native
+  functionality (storage, sync, crypto) is wired up yet — this is where
+  that will live as it's built, either directly here or as a `crates/`
+  crate `src-tauri` depends on.
   - `tauri.conf.json` — app identifier, window config, build hooks
     (`beforeDevCommand`/`beforeBuildCommand` run the npm scripts above).
   - `capabilities/default.json` — Tauri's permission/capability grants for
