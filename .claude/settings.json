@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "jq -r '.tool_input.file_path // empty' | grep -qE '(^|/)(crates|apps|ui)/' && printf '%s' '{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Edited code under crates/, apps/, or ui/. Before committing, run the adr-guide skill against the diff: (1) does this violate an accepted ADR in docs/adrs/? (2) does it make a new architectural decision that needs a record?\"}}' || true",
+            "command": "f=$(jq -r '.tool_input.file_path // empty'); case \"$f\" in *node_modules/*|*/src-tauri/target/*|*/src-tauri/gen/*) exit 0 ;; esac; printf '%s' \"$f\" | grep -qE '(^|/)(src|src-tauri/src)/' && printf '%s' '{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Edited code under src/ or src-tauri/src/. Run the adr skill: check whether this change made or changed an architectural decision, and if so ask the user before creating a record in docs/adrs/.\"}}' || true",
             "timeout": 10
           }
         ]
