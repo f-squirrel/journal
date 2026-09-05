@@ -1,22 +1,25 @@
-import { invoke } from "@tauri-apps/api/core";
+import { route, notFound, startRouter, navigate } from "./router";
+import { state } from "./state";
+import { renderLogin } from "./views/login-view";
+import { renderEntryList } from "./views/entry-list-view";
+import { renderPreview } from "./views/preview-view";
+import { renderEditor } from "./views/editor-view";
 
-let greetInputEl: HTMLInputElement | null;
-let greetMsgEl: HTMLElement | null;
+const app = document.querySelector<HTMLDivElement>("#app")!;
 
-async function greet() {
-  if (greetMsgEl && greetInputEl) {
-    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-    greetMsgEl.textContent = await invoke("greet", {
-      name: greetInputEl.value,
-    });
+function requireAuth(render: () => void): void {
+  if (!state.authenticated) {
+    navigate("/login");
+    return;
   }
+  render();
 }
 
-window.addEventListener("DOMContentLoaded", () => {
-  greetInputEl = document.querySelector("#greet-input");
-  greetMsgEl = document.querySelector("#greet-msg");
-  document.querySelector("#greet-form")?.addEventListener("submit", (e) => {
-    e.preventDefault();
-    greet();
-  });
-});
+route("/login", () => renderLogin(app));
+route("/entries", () => requireAuth(() => renderEntryList(app)));
+route("/entries/:id", (params) => requireAuth(() => renderPreview(app, { id: params.id })));
+route("/entries/:id/edit", (params) => requireAuth(() => renderEditor(app, { id: params.id })));
+
+notFound(() => navigate(state.authenticated ? "/entries" : "/login"));
+
+startRouter();
