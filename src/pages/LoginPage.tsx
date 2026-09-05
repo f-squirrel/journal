@@ -9,15 +9,25 @@ export default function LoginPage() {
   const navigate = useNavigate();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [error, setError] = useState(false);
+  const [error, setError] = useState("");
 
   function handleSubmit(event: FormEvent) {
     event.preventDefault();
-    if (!email.trim() || !password) {
-      setError(true);
+
+    if (!email.trim()) {
+      setError("Enter your email to continue.");
+      return;
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+      setError("Enter a valid email address.");
+      return;
+    }
+    if (!password) {
+      setError("Enter your passphrase to continue.");
       return;
     }
 
+    setError("");
     // TODO: replace with real authentication against the vault backend.
     login();
     navigate("/entries");
@@ -53,7 +63,7 @@ export default function LoginPage() {
         <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
           Sign in to continue
         </Typography>
-        <Box component="form" onSubmit={handleSubmit}>
+        <Box component="form" onSubmit={handleSubmit} noValidate>
           <Stack spacing={2} textAlign="left">
             <TextField
               label="Email"
@@ -63,7 +73,6 @@ export default function LoginPage() {
               placeholder="you@example.com"
               autoComplete="email"
               fullWidth
-              required
             />
             <TextField
               label="Passphrase"
@@ -72,9 +81,8 @@ export default function LoginPage() {
               onChange={(event) => setPassword(event.target.value)}
               autoComplete="current-password"
               fullWidth
-              required
             />
-            {error && <Alert severity="error">Enter an email and passphrase to continue.</Alert>}
+            {error && <Alert severity="error">{error}</Alert>}
             <Button type="submit" variant="contained" size="large" disableElevation fullWidth>
               Sign in
             </Button>
