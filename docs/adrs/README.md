@@ -2,4 +2,5 @@
 
 | Number | Title | Status |
 | --- | --- | --- |
-| [0001](0001-react-and-mui-for-the-ui.md) | Use React and MUI (v6) for the UI | Accepted |
+| [0001](0001-tauri-2-with-rust-backend-and-native-ui.md) | Use Tauri 2, with Rust for the backend and native frameworks for the UI | Accepted |
+| [0002](0002-react-and-mui-for-the-ui.md) | Use React and MUI (v6) for the UI | Accepted |
