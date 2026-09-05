@@ -14,6 +14,7 @@ pub fn run() {
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
                 window.maximize()?;
+                window.show()?;
             }
             Ok(())
         })
