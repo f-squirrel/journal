@@ -1,7 +1,25 @@
 import { useNavigate } from "react-router-dom";
-import { Box, List, ListItemButton, ListItemText, Typography } from "@mui/material";
+import {
+  Box,
+  Button,
+  Card,
+  CardActionArea,
+  CardContent,
+  Fab,
+  Stack,
+  Typography,
+} from "@mui/material";
+import AddIcon from "@mui/icons-material/Add";
+import NotesIcon from "@mui/icons-material/Notes";
 import AppShell from "../components/AppShell";
 import { useAppState } from "../context/AppStateContext";
+
+function excerpt(markdown: string): string {
+  const bodyLine = markdown
+    .split("\n")
+    .find((line) => line.trim().length > 0 && !/^#+\s/.test(line.trim()));
+  return bodyLine?.replace(/[*_>`-]/g, "").trim() ?? "";
+}
 
 export default function EntryListPage() {
   const { entries } = useAppState();
@@ -9,28 +27,88 @@ export default function EntryListPage() {
 
   return (
     <AppShell>
-      <Box sx={{ maxWidth: 560, mx: "auto" }}>
-        {entries.length === 0 ? (
-          <Typography color="text.secondary" textAlign="center" sx={{ mt: 6 }}>
-            No entries yet. Create your first one.
+      <Box sx={{ maxWidth: 720, mx: "auto" }}>
+        <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 3 }}>
+          <Typography variant="h5" sx={{ fontWeight: 700 }}>
+            Entries
           </Typography>
+          <Typography variant="body2" color="text.secondary">
+            {entries.length} {entries.length === 1 ? "entry" : "entries"}
+          </Typography>
+        </Stack>
+
+        {entries.length === 0 ? (
+          <Stack
+            alignItems="center"
+            spacing={2}
+            sx={{
+              mt: 8,
+              py: 8,
+              px: 4,
+              borderRadius: 4,
+              border: "1px dashed",
+              borderColor: "divider",
+              textAlign: "center",
+            }}
+          >
+            <NotesIcon sx={{ fontSize: 40, color: "text.disabled" }} />
+            <Typography color="text.secondary">No entries yet. Start your journal.</Typography>
+            <Button
+              variant="contained"
+              disableElevation
+              startIcon={<AddIcon />}
+              onClick={() => navigate("/entries/new/edit")}
+            >
+              Write your first entry
+            </Button>
+          </Stack>
         ) : (
-          <List sx={{ display: "flex", flexDirection: "column", gap: 1.5 }}>
+          <Stack spacing={1.5}>
             {entries.map((entry) => (
-              <ListItemButton
+              <Card
                 key={entry.id}
-                onClick={() => navigate(`/entries/${entry.id}`)}
-                sx={{ bgcolor: "background.paper", borderRadius: 2, boxShadow: 1, py: 1.5, px: 2.5 }}
+                elevation={0}
+                sx={{ transition: "background-color 0.15s ease", "&:hover": { bgcolor: "tonal.surfaceContainer" } }}
               >
-                <ListItemText primary={entry.title} slotProps={{ primary: { fontWeight: 600 } }} />
-                <Typography variant="caption" color="text.secondary">
-                  {entry.updatedAt}
-                </Typography>
-              </ListItemButton>
+                <CardActionArea onClick={() => navigate(`/entries/${entry.id}`)}>
+                  <CardContent sx={{ py: 2, px: 2.5 }}>
+                    <Stack direction="row" justifyContent="space-between" alignItems="flex-start" spacing={2}>
+                      <Box sx={{ minWidth: 0 }}>
+                        <Typography sx={{ fontWeight: 600 }} noWrap>
+                          {entry.title}
+                        </Typography>
+                        <Typography
+                          variant="body2"
+                          color="text.secondary"
+                          sx={{
+                            mt: 0.5,
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          {excerpt(entry.markdown)}
+                        </Typography>
+                      </Box>
+                      <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: "nowrap", pt: 0.5 }}>
+                        {entry.updatedAt}
+                      </Typography>
+                    </Stack>
+                  </CardContent>
+                </CardActionArea>
+              </Card>
             ))}
-          </List>
+          </Stack>
         )}
       </Box>
+
+      <Fab
+        onClick={() => navigate("/entries/new/edit")}
+        sx={{ position: "fixed", right: { xs: 20, sm: 32 }, bottom: { xs: 20, sm: 32 } }}
+        aria-label="New entry"
+      >
+        <AddIcon />
+      </Fab>
     </AppShell>
   );
 }

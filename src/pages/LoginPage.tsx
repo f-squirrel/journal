@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
-import { Alert, Box, Button, Paper, Stack, TextField, Typography } from "@mui/material";
+import { Alert, Avatar, Box, Button, Paper, Stack, TextField, Typography } from "@mui/material";
+import AutoStoriesIcon from "@mui/icons-material/AutoStories";
 import { useAppState } from "../context/AppStateContext";
 
 export default function LoginPage() {
@@ -24,7 +25,28 @@ export default function LoginPage() {
 
   return (
     <Box sx={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", p: 4 }}>
-      <Paper elevation={3} sx={{ p: 4, width: "100%", maxWidth: 360, textAlign: "center" }}>
+      <Paper
+        elevation={0}
+        sx={{
+          p: 4,
+          width: "100%",
+          maxWidth: 380,
+          textAlign: "center",
+          bgcolor: "tonal.surfaceContainerLow",
+        }}
+      >
+        <Avatar
+          sx={{
+            bgcolor: "tonal.primaryContainer",
+            color: "tonal.onPrimaryContainer",
+            width: 56,
+            height: 56,
+            mx: "auto",
+            mb: 2,
+          }}
+        >
+          <AutoStoriesIcon />
+        </Avatar>
         <Typography variant="h4" fontWeight={700} gutterBottom>
           Journal
         </Typography>
@@ -53,7 +75,7 @@ export default function LoginPage() {
               required
             />
             {error && <Alert severity="error">Enter an email and passphrase to continue.</Alert>}
-            <Button type="submit" variant="contained" size="large">
+            <Button type="submit" variant="contained" size="large" disableElevation fullWidth>
               Sign in
             </Button>
           </Stack>

@@ -49,7 +49,7 @@ export default function EditorPage() {
             sx={{ flex: 1, "& input": { fontSize: "1.2rem", fontWeight: 600 } }}
           />
           <Button onClick={() => navigate(existing ? `/entries/${existing.id}` : "/entries")}>Cancel</Button>
-          <Button variant="contained" onClick={handleSave}>
+          <Button variant="contained" disableElevation onClick={handleSave}>
             Save
           </Button>
         </Stack>
@@ -71,11 +71,21 @@ export default function EditorPage() {
             minRows={18}
             sx={{
               height: "100%",
-              "& .MuiInputBase-root": { height: "100%", alignItems: "flex-start", fontFamily: "monospace" },
+              "& .MuiInputBase-root": {
+                height: "100%",
+                alignItems: "flex-start",
+                fontFamily: "monospace",
+                bgcolor: "tonal.surfaceContainerLow",
+              },
               "& textarea": { height: "100% !important" },
+              "& fieldset": { border: "none" },
             }}
           />
-          <Paper variant="outlined" sx={{ p: 2, overflowY: "auto" }} className="markdown-body">
+          <Paper
+            elevation={0}
+            sx={{ p: 2.5, overflowY: "auto", bgcolor: "tonal.surfaceContainerLow" }}
+            className="markdown-body"
+          >
             <ReactMarkdown remarkPlugins={[remarkGfm]}>{markdown}</ReactMarkdown>
           </Paper>
         </Box>

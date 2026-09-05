@@ -1,8 +1,9 @@
-import { useMemo, type ReactNode } from "react";
-import { CssBaseline, ThemeProvider, useMediaQuery } from "@mui/material";
+import type { ReactNode } from "react";
+import { CssBaseline, ThemeProvider } from "@mui/material";
 import { HashRouter, Navigate, Route, Routes } from "react-router-dom";
 import { getTheme } from "./theme";
 import { AppStateProvider, useAppState } from "./context/AppStateContext";
+import { ColorModeProvider, useColorMode } from "./context/ColorModeContext";
 import LoginPage from "./pages/LoginPage";
 import EntryListPage from "./pages/EntryListPage";
 import PreviewPage from "./pages/PreviewPage";
@@ -51,12 +52,11 @@ function AppRoutes() {
   );
 }
 
-export default function App() {
-  const prefersDark = useMediaQuery("(prefers-color-scheme: dark)");
-  const theme = useMemo(() => getTheme(prefersDark ? "dark" : "light"), [prefersDark]);
+function ThemedApp() {
+  const { mode } = useColorMode();
 
   return (
-    <ThemeProvider theme={theme}>
+    <ThemeProvider theme={getTheme(mode)}>
       <CssBaseline />
       <AppStateProvider>
         <HashRouter>
@@ -64,5 +64,13 @@ export default function App() {
         </HashRouter>
       </AppStateProvider>
     </ThemeProvider>
+  );
+}
+
+export default function App() {
+  return (
+    <ColorModeProvider>
+      <ThemedApp />
+    </ColorModeProvider>
   );
 }

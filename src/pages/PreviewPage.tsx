@@ -32,6 +32,7 @@ export default function PreviewPage() {
           </Button>
           <Button
             variant="contained"
+            disableElevation
             startIcon={<EditIcon />}
             onClick={() => navigate(`/entries/${entry.id}/edit`)}
           >
@@ -44,7 +45,11 @@ export default function PreviewPage() {
         <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
           Updated {entry.updatedAt}
         </Typography>
-        <Paper elevation={1} sx={{ p: 3 }} className="markdown-body">
+        <Paper
+          elevation={0}
+          sx={{ p: { xs: 2.5, sm: 4 }, bgcolor: "tonal.surfaceContainerLow" }}
+          className="markdown-body"
+        >
           <ReactMarkdown remarkPlugins={[remarkGfm]}>{entry.markdown}</ReactMarkdown>
         </Paper>
       </Box>
