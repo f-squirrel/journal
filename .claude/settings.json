@@ -1,0 +1,27 @@
+{
+  "extraKnownMarketplaces": {
+    "superpowers-marketplace": {
+      "source": {
+        "source": "github",
+        "repo": "obra/superpowers-marketplace"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "superpowers@superpowers-marketplace": true
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.file_path // empty' | grep -qE '(^|/)(crates|apps|ui)/' && printf '%s' '{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Edited code under crates/, apps/, or ui/. Before committing, run the adr-guide skill against the diff: (1) does this violate an accepted ADR in docs/adrs/? (2) does it make a new architectural decision that needs a record?\"}}' || true",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
