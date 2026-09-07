@@ -4,4 +4,4 @@ run:
 	npm run tauri dev
 
 test-e2e:
-	npm run test:e2e
+	npm run test:e2e -- $(ARGS)
