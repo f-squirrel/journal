@@ -1,5 +1,6 @@
-import { createContext, useContext, useMemo, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import type { JournalEntry } from "../types";
+import { listEntries, saveEntry as saveEntryBackend } from "../api/entries";
 
 const seedEntries: JournalEntry[] = [
   {
@@ -33,6 +34,14 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const [authenticated, setAuthenticated] = useState(false);
   const [entries, setEntries] = useState<JournalEntry[]>(seedEntries);
 
+  useEffect(() => {
+    listEntries()
+      .then((loaded) => setEntries(loaded))
+      .catch(() => {
+        // Not running inside Tauri (e.g. `npm run dev` in a browser) — keep seed data.
+      });
+  }, []);
+
   const value = useMemo<AppStateContextValue>(
     () => ({
       authenticated,
@@ -40,14 +49,18 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       login: () => setAuthenticated(true),
       logout: () => setAuthenticated(false),
       findEntry: (id) => entries.find((entry) => entry.id === id),
-      upsertEntry: (entry) =>
+      upsertEntry: (entry) => {
         setEntries((prev) => {
           const index = prev.findIndex((e) => e.id === entry.id);
           if (index === -1) return [entry, ...prev];
           const next = [...prev];
           next[index] = entry;
           return next;
-        }),
+        });
+        saveEntryBackend(entry).catch(() => {
+          // Not running inside Tauri — entry only persists in memory for this session.
+        });
+      },
     }),
     [authenticated, entries],
   );

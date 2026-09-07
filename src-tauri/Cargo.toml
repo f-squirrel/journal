@@ -22,3 +22,4 @@ tauri = { workspace = true }
 tauri-plugin-opener = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+journal-storage = { path = "../crates/storage" }

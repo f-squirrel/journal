@@ -1,0 +1,18 @@
+import { invoke } from "@tauri-apps/api/core";
+import type { JournalEntry } from "../types";
+
+export function listEntries(): Promise<JournalEntry[]> {
+  return invoke("list_entries");
+}
+
+export function getEntry(id: string): Promise<JournalEntry | null> {
+  return invoke("get_entry", { id });
+}
+
+export function saveEntry(entry: JournalEntry): Promise<void> {
+  return invoke("save_entry", { entry });
+}
+
+export function deleteEntry(id: string): Promise<void> {
+  return invoke("delete_entry", { id });
+}
