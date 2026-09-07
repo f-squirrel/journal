@@ -1,27 +1,25 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-use journal_storage::JournalEntry;
+use journal_storage::{JournalEntry, Storage};
 use tauri::{Manager, State};
 
-struct EntriesDir(std::path::PathBuf);
-
 #[tauri::command]
-fn list_entries(dir: State<EntriesDir>) -> Result<Vec<JournalEntry>, String> {
-    journal_storage::list_entries(&dir.0)
+fn list_entries(storage: State<Storage>) -> Result<Vec<JournalEntry>, String> {
+    storage.list_entries().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-fn get_entry(dir: State<EntriesDir>, id: String) -> Result<Option<JournalEntry>, String> {
-    journal_storage::get_entry(&dir.0, &id)
+fn get_entry(storage: State<Storage>, id: String) -> Result<Option<JournalEntry>, String> {
+    storage.get_entry(&id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-fn save_entry(dir: State<EntriesDir>, entry: JournalEntry) -> Result<(), String> {
-    journal_storage::save_entry(&dir.0, &entry)
+fn save_entry(storage: State<Storage>, entry: JournalEntry) -> Result<(), String> {
+    storage.save_entry(&entry).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-fn delete_entry(dir: State<EntriesDir>, id: String) -> Result<(), String> {
-    journal_storage::delete_entry(&dir.0, &id)
+fn delete_entry(storage: State<Storage>, id: String) -> Result<(), String> {
+    storage.delete_entry(&id).map_err(|e| e.to_string())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -36,7 +34,7 @@ pub fn run() {
         ])
         .setup(|app| {
             let entries_dir = app.path().app_data_dir()?.join("entries");
-            app.manage(EntriesDir(entries_dir));
+            app.manage(Storage::new(entries_dir));
 
             if let Some(window) = app.get_webview_window("main") {
                 window.maximize()?;
