@@ -30,9 +30,11 @@ is the only current form of static checking.
   - `App.tsx` defines routes and gates authenticated-only routes via a
     `RequireAuth` wrapper that reads from `AppStateContext`.
   - `context/AppStateContext.tsx` is the single source of app state right
-    now: auth flag and the in-memory list of journal entries (seeded with
-    fake data, no persistence yet). All pages read/write through
-    `useAppState()` rather than local state or prop drilling.
+    now: auth flag and the list of journal entries. Entries load from and
+    save to the backend via `src/api/entries.ts` (falls back to seeded
+    in-memory data when `invoke` isn't available, e.g. `npm run dev` in a
+    browser). All pages read/write through `useAppState()` rather than
+    local state or prop drilling.
   - `theme.ts` provides `getTheme(mode)`, switched between light/dark based
     on `prefers-color-scheme` in `App.tsx`.
   - `pages/` holds one component per route (Login, EntryList, Preview,
@@ -43,17 +45,17 @@ is the only current form of static checking.
   rooted at the repo root (top-level `Cargo.toml`/`Cargo.lock`,
   `[workspace.dependencies]` for shared versions). New backend crates go
   under `crates/<name>/` as workspace members; `src-tauri` stays thin
-  Tauri glue and currently is just the generated scaffold (`src/lib.rs`
-  exposes a single `greet` command via `invoke_handler`). No real native
-  functionality (storage, sync, crypto) is wired up yet — this is where
-  that will live as it's built, either directly here or as a `crates/`
-  crate `src-tauri` depends on.
+  Tauri glue that wires up commands and manages app state (`src/lib.rs`).
+  `crates/storage` (`journal-storage`) persists entries as one JSON file
+  per entry under the Tauri app data dir (see ADR 0003) and is exposed via
+  the `list_entries`/`get_entry`/`save_entry`/`delete_entry` commands. Sync
+  and encryption are not wired up yet.
   - `tauri.conf.json` — app identifier, window config, build hooks
     (`beforeDevCommand`/`beforeBuildCommand` run the npm scripts above).
   - `capabilities/default.json` — Tauri's permission/capability grants for
     the webview; extend this when adding new Tauri plugins or commands.
 - Frontend and backend communicate via Tauri's `invoke()` bridge
-  (`@tauri-apps/api`); no commands are called from the frontend yet.
+  (`@tauri-apps/api`), wrapped in `src/api/entries.ts` for entry CRUD.
 
 ## Architecture Decision Records
 
