@@ -9,6 +9,15 @@ Tauri v2 application: a React/TypeScript frontend rendered inside a native
 Tauri shell, with a minimal Rust backend. Planned features (not yet built):
 markdown support, sync to Dropbox/Google Drive/iCloud, end-to-end encryption.
 
+**This is alpha software — nothing is final.** There are no released versions,
+no external users, and no stability guarantees. Storage formats, crate
+boundaries, command signatures, types, and UI are all open to change when a
+better design shows up; prefer changing the design over layering compatibility
+shims on top of it. Backward compatibility and data migrations are not required
+by default (see the deliberate no-migration decision under `crates/vault`
+below) — if a change would drop existing local data, say so and confirm with
+the user rather than assuming a migration must be written.
+
 ## Commands
 
 - `npm run dev` — run the Vite dev server only (frontend, browser).
