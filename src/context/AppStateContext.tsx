@@ -1,6 +1,6 @@
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import type { JournalEntry } from "../types";
-import { listEntries, saveEntry as saveEntryBackend } from "../api/entries";
+import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import type { EntryHeader, JournalEntry } from "../types";
+import { getEntry, listEntries, saveEntry as saveEntryBackend } from "../api/entries";
 
 const seedEntries: JournalEntry[] = [
   {
@@ -19,12 +19,16 @@ const seedEntries: JournalEntry[] = [
   },
 ];
 
+function toHeader(entry: JournalEntry): EntryHeader {
+  return { id: entry.id, title: entry.title, updatedAt: entry.updatedAt };
+}
+
 interface AppStateContextValue {
   authenticated: boolean;
-  entries: JournalEntry[];
+  entries: EntryHeader[];
   login: () => void;
   logout: () => void;
-  findEntry: (id: string) => JournalEntry | undefined;
+  loadEntry: (id: string) => Promise<JournalEntry | undefined>;
   upsertEntry: (entry: JournalEntry) => void;
 }
 
@@ -32,7 +36,10 @@ const AppStateContext = createContext<AppStateContextValue | null>(null);
 
 export function AppStateProvider({ children }: { children: ReactNode }) {
   const [authenticated, setAuthenticated] = useState(false);
-  const [entries, setEntries] = useState<JournalEntry[]>(seedEntries);
+  const [entries, setEntries] = useState<EntryHeader[]>(seedEntries.map(toHeader));
+
+  // Fallback store for when `invoke` isn't available (e.g. `npm run dev` in a browser).
+  const offlineEntries = useRef(new Map(seedEntries.map((entry) => [entry.id, entry])));
 
   useEffect(() => {
     listEntries()
@@ -48,13 +55,18 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       entries,
       login: () => setAuthenticated(true),
       logout: () => setAuthenticated(false),
-      findEntry: (id) => entries.find((entry) => entry.id === id),
+      loadEntry: (id) =>
+        getEntry(id)
+          .then((entry) => entry ?? offlineEntries.current.get(id))
+          .catch(() => offlineEntries.current.get(id)),
       upsertEntry: (entry) => {
+        offlineEntries.current.set(entry.id, entry);
         setEntries((prev) => {
+          const header = toHeader(entry);
           const index = prev.findIndex((e) => e.id === entry.id);
-          if (index === -1) return [entry, ...prev];
+          if (index === -1) return [header, ...prev];
           const next = [...prev];
-          next[index] = entry;
+          next[index] = header;
           return next;
         });
         saveEntryBackend(entry).catch(() => {

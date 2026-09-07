@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { JournalEntry } from "../types";
+import type { EntryHeader, JournalEntry } from "../types";
 
-export function listEntries(): Promise<JournalEntry[]> {
+export function listEntries(): Promise<EntryHeader[]> {
   return invoke("list_entries");
 }
 

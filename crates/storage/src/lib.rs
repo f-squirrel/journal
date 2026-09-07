@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use journal_entry::Entry;
+use journal_entry::{Entry, Header};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -26,21 +26,21 @@ impl Storage {
         self.dir.join(format!("{id}.json"))
     }
 
-    /// Lists all entries, most recently updated first.
-    pub fn list_entries(&self) -> Result<Vec<Entry>, StorageError> {
+    /// Lists all entry headers, most recently updated first.
+    pub fn list_entries(&self) -> Result<Vec<Header>, StorageError> {
         fs::create_dir_all(&self.dir)?;
 
-        let mut entries = Vec::new();
+        let mut headers = Vec::new();
         for file in fs::read_dir(&self.dir)? {
             let file = file?;
             if file.path().extension().and_then(|e| e.to_str()) != Some("json") {
                 continue;
             }
             let contents = fs::read_to_string(file.path())?;
-            entries.push(serde_json::from_str::<Entry>(&contents)?);
+            headers.push(serde_json::from_str::<Header>(&contents)?);
         }
-        entries.sort_by(|a, b| b.header.updated_at.cmp(&a.header.updated_at));
-        Ok(entries)
+        headers.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        Ok(headers)
     }
 
     pub fn get_entry(&self, id: &str) -> Result<Option<Entry>, StorageError> {
@@ -71,7 +71,6 @@ impl Storage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use journal_entry::Header;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn temp_dir() -> std::path::PathBuf {
@@ -107,7 +106,9 @@ mod tests {
         let fetched = storage.get_entry("a").unwrap().unwrap();
         assert_eq!(fetched.markdown, "# hello");
 
-        assert_eq!(storage.list_entries().unwrap().len(), 2);
+        let headers = storage.list_entries().unwrap();
+        assert_eq!(headers.len(), 2);
+        assert!(headers.iter().all(|header| header.title == "Test entry"));
 
         storage.delete_entry("a").unwrap();
         assert!(storage.get_entry("a").unwrap().is_none());

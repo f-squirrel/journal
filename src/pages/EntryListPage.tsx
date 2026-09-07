@@ -14,13 +14,6 @@ import NotesIcon from "@mui/icons-material/Notes";
 import AppShell from "../components/AppShell";
 import { useAppState } from "../context/AppStateContext";
 
-function excerpt(markdown: string): string {
-  const bodyLine = markdown
-    .split("\n")
-    .find((line) => line.trim().length > 0 && !/^#+\s/.test(line.trim()));
-  return bodyLine?.replace(/[*_>`-]/g, "").trim() ?? "";
-}
-
 export default function EntryListPage() {
   const { entries } = useAppState();
   const navigate = useNavigate();
@@ -76,18 +69,6 @@ export default function EntryListPage() {
                       <Box sx={{ minWidth: 0 }}>
                         <Typography sx={{ fontWeight: 600 }} noWrap>
                           {entry.title}
-                        </Typography>
-                        <Typography
-                          variant="body2"
-                          color="text.secondary"
-                          sx={{
-                            mt: 0.5,
-                            overflow: "hidden",
-                            textOverflow: "ellipsis",
-                            whiteSpace: "nowrap",
-                          }}
-                        >
-                          {excerpt(entry.markdown)}
                         </Typography>
                       </Box>
                       <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: "nowrap", pt: 0.5 }}>

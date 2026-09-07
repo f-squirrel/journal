@@ -1,20 +1,48 @@
-import { useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { Box, Button, Paper, Stack, TextField, Typography } from "@mui/material";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import AppShell from "../components/AppShell";
 import { useAppState } from "../context/AppStateContext";
+import type { JournalEntry } from "../types";
 
 export default function EditorPage() {
   const { id } = useParams<{ id: string }>();
   const isNew = id === "new";
-  const { findEntry, upsertEntry } = useAppState();
+  const { loadEntry, upsertEntry } = useAppState();
   const navigate = useNavigate();
-  const existing = useMemo(() => (isNew ? undefined : findEntry(id ?? "")), [isNew, id, findEntry]);
 
-  const [title, setTitle] = useState(existing?.title ?? "");
-  const [markdown, setMarkdown] = useState(existing?.markdown ?? "");
+  const [existing, setExisting] = useState<JournalEntry | undefined>(undefined);
+  const [loading, setLoading] = useState(!isNew);
+  const [title, setTitle] = useState("");
+  const [markdown, setMarkdown] = useState("");
+
+  useEffect(() => {
+    if (isNew) {
+      setExisting(undefined);
+      setTitle("");
+      setMarkdown("");
+      setLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setLoading(true);
+    loadEntry(id ?? "").then((loaded) => {
+      if (cancelled) return;
+      setExisting(loaded);
+      setTitle(loaded?.title ?? "");
+      setMarkdown(loaded?.markdown ?? "");
+      setLoading(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [id, isNew, loadEntry]);
+
+  if (loading) {
+    return null;
+  }
 
   if (!isNew && !existing) {
     return (
