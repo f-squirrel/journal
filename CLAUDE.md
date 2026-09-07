@@ -18,9 +18,15 @@ markdown support, sync to Dropbox/Google Drive/iCloud, end-to-end encryption.
 - `npm run build` — type-check (`tsc`) then build the frontend for production.
 - `npm run preview` — preview the production frontend build.
 - `npm run tauri <args>` — passthrough to the Tauri CLI (e.g. `npm run tauri build` for native installers).
+- `npm run test:e2e` — run the Playwright UI tests (`e2e/`, see ADR 0004)
+  against the Vite dev server, which `playwright.config.ts` starts
+  automatically. These run against the browser fallback (seeded in-memory
+  data), not the Rust backend — see `context/AppStateContext.tsx` below.
 
-There is no test suite and no linter configured yet. `tsc` (via `npm run build`)
-is the only current form of static checking.
+There is no linter configured yet, and no unit tests for the frontend (Rust
+crates have `cargo test` unit tests, e.g. `crates/storage`). `tsc` (via
+`npm run build`) is the current form of static checking, alongside the
+Playwright UI tests above.
 
 ## Architecture
 
