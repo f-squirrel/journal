@@ -30,11 +30,13 @@ is the only current form of static checking.
   - `App.tsx` defines routes and gates authenticated-only routes via a
     `RequireAuth` wrapper that reads from `AppStateContext`.
   - `context/AppStateContext.tsx` is the single source of app state right
-    now: auth flag and the list of journal entries. Entries load from and
-    save to the backend via `src/api/entries.ts` (falls back to seeded
-    in-memory data when `invoke` isn't available, e.g. `npm run dev` in a
-    browser). All pages read/write through `useAppState()` rather than
-    local state or prop drilling.
+    now: auth flag and the list of entry headers (`list_entries` returns
+    `Header`, not the full entry). `loadEntry(id)` fetches a full entry via
+    `get_entry` on demand (used when opening or editing an entry); saves go
+    through `src/api/entries.ts` (falls back to seeded in-memory data when
+    `invoke` isn't available, e.g. `npm run dev` in a browser). All pages
+    read/write through `useAppState()` rather than local state or prop
+    drilling.
   - `theme.ts` provides `getTheme(mode)`, switched between light/dark based
     on `prefers-color-scheme` in `App.tsx`.
   - `pages/` holds one component per route (Login, EntryList, Preview,
@@ -51,8 +53,8 @@ is the only current form of static checking.
   `markdown` — used by `journal-storage` and the Tauri commands.
   `crates/storage` (`journal-storage`) persists entries as one JSON file
   per entry under the Tauri app data dir (see ADR 0003) and is exposed via
-  the `list_entries`/`get_entry`/`save_entry`/`delete_entry` commands. Sync
-  and encryption are not wired up yet.
+  the `list_entries` (returns headers only)/`get_entry`/`save_entry`/
+  `delete_entry` commands. Sync and encryption are not wired up yet.
   - `tauri.conf.json` — app identifier, window config, build hooks
     (`beforeDevCommand`/`beforeBuildCommand` run the npm scripts above).
   - `capabilities/default.json` — Tauri's permission/capability grants for
