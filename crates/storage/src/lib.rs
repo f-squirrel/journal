@@ -2,6 +2,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use journal_entry::{Entry, Header, Id};
+use secrecy::SecretString;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -10,16 +11,23 @@ pub enum StorageError {
     Io(#[from] std::io::Error),
     #[error("failed to (de)serialize entry: {0}")]
     Serde(#[from] serde_json::Error),
+    #[error("vault error: {0}")]
+    Vault(#[from] journal_vault::VaultError),
 }
 
-/// Persists journal entries as one JSON file per entry under a directory.
+/// Persists journal entries as one `age`-encrypted JSON file per entry under
+/// a directory.
 pub struct Storage {
     dir: PathBuf,
+    passphrase: SecretString,
 }
 
 impl Storage {
-    pub fn new(dir: impl Into<PathBuf>) -> Self {
-        Self { dir: dir.into() }
+    pub fn new(dir: impl Into<PathBuf>, passphrase: SecretString) -> Self {
+        Self {
+            dir: dir.into(),
+            passphrase,
+        }
     }
 
     fn entry_path(&self, id: &Id) -> PathBuf {
@@ -27,6 +35,9 @@ impl Storage {
     }
 
     /// Lists all entry headers, most recently updated first.
+    ///
+    /// Entries that fail to decrypt or parse are skipped and logged rather
+    /// than failing the whole call.
     pub fn list_entries(&self) -> Result<Vec<Header>, StorageError> {
         fs::create_dir_all(&self.dir)?;
 
@@ -36,16 +47,33 @@ impl Storage {
             if file.path().extension().and_then(|e| e.to_str()) != Some("json") {
                 continue;
             }
-            let contents = fs::read_to_string(file.path())?;
-            headers.push(serde_json::from_str::<Header>(&contents)?);
+            let ciphertext = fs::read(file.path())?;
+            let header = journal_vault::decrypt(&self.passphrase, &ciphertext)
+                .map_err(StorageError::from)
+                .and_then(|plaintext| {
+                    serde_json::from_slice::<Header>(&plaintext).map_err(StorageError::from)
+                });
+            match header {
+                Ok(header) => headers.push(header),
+                Err(e) => {
+                    tracing::warn!(
+                        file = %file.path().display(),
+                        error = %e,
+                        "skipping entry that failed to decrypt or parse"
+                    );
+                }
+            }
         }
         headers.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
         Ok(headers)
     }
 
     pub fn get_entry(&self, id: &Id) -> Result<Option<Entry>, StorageError> {
-        match fs::read_to_string(self.entry_path(id)) {
-            Ok(contents) => Ok(Some(serde_json::from_str(&contents)?)),
+        match fs::read(self.entry_path(id)) {
+            Ok(ciphertext) => {
+                let plaintext = journal_vault::decrypt(&self.passphrase, &ciphertext)?;
+                Ok(Some(serde_json::from_slice(&plaintext)?))
+            }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(e.into()),
         }
@@ -54,8 +82,9 @@ impl Storage {
     /// Creates or overwrites the entry with the given id.
     pub fn save_entry(&self, entry: &Entry) -> Result<(), StorageError> {
         fs::create_dir_all(&self.dir)?;
-        let contents = serde_json::to_string_pretty(entry)?;
-        fs::write(self.entry_path(&entry.header.id), contents)?;
+        let plaintext = serde_json::to_vec(entry)?;
+        let ciphertext = journal_vault::encrypt(&self.passphrase, &plaintext)?;
+        fs::write(self.entry_path(&entry.header.id), ciphertext)?;
         Ok(())
     }
 
@@ -83,6 +112,10 @@ mod tests {
         ))
     }
 
+    fn passphrase() -> SecretString {
+        SecretString::from("test passphrase".to_string())
+    }
+
     fn sample(id: Id) -> Entry {
         Entry {
             header: Header {
@@ -97,7 +130,7 @@ mod tests {
     #[test]
     fn save_get_list_delete_roundtrip() {
         let dir = temp_dir();
-        let storage = Storage::new(&dir);
+        let storage = Storage::new(&dir, passphrase());
 
         assert!(storage.list_entries().unwrap().is_empty());
 
@@ -123,7 +156,39 @@ mod tests {
     #[test]
     fn get_missing_entry_returns_none() {
         let dir = temp_dir();
-        let storage = Storage::new(&dir);
+        let storage = Storage::new(&dir, passphrase());
         assert!(storage.get_entry(&Id::new()).unwrap().is_none());
+    }
+
+    #[test]
+    fn entries_are_encrypted_at_rest() {
+        let dir = temp_dir();
+        let storage = Storage::new(&dir, passphrase());
+        let id = Id::new();
+        storage.save_entry(&sample(id)).unwrap();
+
+        let on_disk = fs::read(dir.join(format!("{id}.json"))).unwrap();
+        let as_text = String::from_utf8_lossy(&on_disk);
+        assert!(!as_text.contains("Test entry"));
+        assert!(!as_text.contains("hello"));
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn list_entries_skips_corrupt_files_without_failing() {
+        let dir = temp_dir();
+        let storage = Storage::new(&dir, passphrase());
+
+        storage.save_entry(&sample(Id::new())).unwrap();
+
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join(format!("{}.json", Id::new())), b"not valid age ciphertext").unwrap();
+
+        let headers = storage.list_entries().unwrap();
+        assert_eq!(headers.len(), 1);
+        assert_eq!(headers[0].title, "Test entry");
+
+        fs::remove_dir_all(&dir).ok();
     }
 }

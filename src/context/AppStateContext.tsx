@@ -1,6 +1,14 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { isTauri } from "@tauri-apps/api/core";
 import type { EntryHeader, JournalEntry } from "../types";
-import { deleteEntry as deleteEntryBackend, getEntry, listEntries, saveEntry as saveEntryBackend } from "../api/entries";
+import {
+  deleteEntry as deleteEntryBackend,
+  getEntry,
+  listEntries,
+  lockVault,
+  saveEntry as saveEntryBackend,
+  unlockVault,
+} from "../api/entries";
 
 const seedEntries: JournalEntry[] = [
   {
@@ -26,7 +34,7 @@ function toHeader(entry: JournalEntry): EntryHeader {
 interface AppStateContextValue {
   authenticated: boolean;
   entries: EntryHeader[];
-  login: () => void;
+  login: (passphrase: string) => Promise<boolean>;
   logout: () => void;
   loadEntry: (id: string) => Promise<JournalEntry | undefined>;
   upsertEntry: (entry: JournalEntry) => void;
@@ -43,19 +51,41 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const offlineEntries = useRef(new Map(seedEntries.map((entry) => [entry.id, entry])));
 
   useEffect(() => {
+    if (!authenticated) return;
     listEntries()
       .then((loaded) => setEntries(loaded))
       .catch(() => {
         // Not running inside Tauri (e.g. `npm run dev` in a browser) — keep seed data.
       });
-  }, []);
+  }, [authenticated]);
 
   const value = useMemo<AppStateContextValue>(
     () => ({
       authenticated,
       entries,
-      login: () => setAuthenticated(true),
-      logout: () => setAuthenticated(false),
+      login: async (passphrase) => {
+        if (!isTauri()) {
+          // Not running inside Tauri (e.g. `npm run dev` in a browser) — no real vault
+          // to unlock, so any passphrase gets you in with the seeded data.
+          setAuthenticated(true);
+          return true;
+        }
+        try {
+          await unlockVault(passphrase);
+          setAuthenticated(true);
+          return true;
+        } catch {
+          return false;
+        }
+      },
+      logout: () => {
+        setAuthenticated(false);
+        if (isTauri()) {
+          lockVault().catch(() => {
+            // Best-effort; nothing to lock into a UI state for.
+          });
+        }
+      },
       loadEntry: (id) =>
         getEntry(id)
           .then((entry) => entry ?? offlineEntries.current.get(id))

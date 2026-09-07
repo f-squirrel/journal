@@ -1,8 +1,9 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { Alert, Avatar, Box, Button, Paper, Stack, TextField, Typography } from "@mui/material";
 import AutoStoriesIcon from "@mui/icons-material/AutoStories";
 import { useAppState } from "../context/AppStateContext";
+import { hasVault } from "../api/entries";
 
 export default function LoginPage() {
   const { login } = useAppState();
@@ -10,8 +11,20 @@ export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  // null while unknown; defaults to "returning user" copy if the check fails
+  // (e.g. browser fallback, where there's no real vault).
+  const [vaultExists, setVaultExists] = useState<boolean | null>(null);
 
-  function handleSubmit(event: FormEvent) {
+  useEffect(() => {
+    hasVault()
+      .then(setVaultExists)
+      .catch(() => setVaultExists(true));
+  }, []);
+
+  const isNewVault = vaultExists === false;
+
+  async function handleSubmit(event: FormEvent) {
     event.preventDefault();
 
     if (!email.trim()) {
@@ -28,9 +41,15 @@ export default function LoginPage() {
     }
 
     setError("");
-    // TODO: replace with real authentication against the vault backend.
-    login();
-    navigate("/entries");
+    setSubmitting(true);
+    const ok = await login(password);
+    setSubmitting(false);
+
+    if (ok) {
+      navigate("/entries");
+    } else {
+      setError("Incorrect passphrase.");
+    }
   }
 
   return (
@@ -61,7 +80,7 @@ export default function LoginPage() {
           Journal
         </Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-          Sign in to continue
+          {isNewVault ? "Create a passphrase to secure your journal" : "Sign in to continue"}
         </Typography>
         <Box component="form" onSubmit={handleSubmit} noValidate>
           <Stack spacing={2} textAlign="left">
@@ -79,12 +98,18 @@ export default function LoginPage() {
               type="password"
               value={password}
               onChange={(event) => setPassword(event.target.value)}
-              autoComplete="current-password"
+              autoComplete={isNewVault ? "new-password" : "current-password"}
               fullWidth
             />
+            {isNewVault && (
+              <Alert severity="warning">
+                There's no way to recover this passphrase or your entries if you forget it.
+                Make sure to keep it somewhere safe.
+              </Alert>
+            )}
             {error && <Alert severity="error">{error}</Alert>}
-            <Button type="submit" variant="contained" size="large" disableElevation fullWidth>
-              Sign in
+            <Button type="submit" variant="contained" size="large" disableElevation fullWidth disabled={submitting}>
+              {isNewVault ? "Create vault" : "Sign in"}
             </Button>
           </Stack>
         </Box>
