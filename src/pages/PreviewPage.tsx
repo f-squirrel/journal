@@ -8,6 +8,7 @@ import remarkGfm from "remark-gfm";
 import AppShell from "../components/AppShell";
 import { useAppState } from "../context/AppStateContext";
 import type { JournalEntry } from "../types";
+import { formatUpdatedAt } from "../utils/date";
 
 export default function PreviewPage() {
   const { id } = useParams<{ id: string }>();
@@ -68,7 +69,7 @@ export default function PreviewPage() {
           {entry.title}
         </Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-          Updated {entry.updatedAt}
+          Updated {formatUpdatedAt(entry.updatedAt)}
         </Typography>
         <Paper
           elevation={0}

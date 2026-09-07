@@ -13,6 +13,7 @@ import AddIcon from "@mui/icons-material/Add";
 import NotesIcon from "@mui/icons-material/Notes";
 import AppShell from "../components/AppShell";
 import { useAppState } from "../context/AppStateContext";
+import { formatUpdatedAt } from "../utils/date";
 
 export default function EntryListPage() {
   const { entries } = useAppState();
@@ -72,7 +73,7 @@ export default function EntryListPage() {
                         </Typography>
                       </Box>
                       <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: "nowrap", pt: 0.5 }}>
-                        {entry.updatedAt}
+                        {formatUpdatedAt(entry.updatedAt)}
                       </Typography>
                     </Stack>
                   </CardContent>

@@ -59,7 +59,7 @@ export default function EditorPage() {
     upsertEntry({
       id: entryId,
       title: title.trim() || "Untitled entry",
-      updatedAt: new Date().toISOString().slice(0, 10),
+      updatedAt: new Date().toISOString(),
       markdown,
     });
     navigate(`/entries/${entryId}`);

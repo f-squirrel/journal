@@ -71,6 +71,7 @@ impl Storage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Utc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn temp_dir() -> std::path::PathBuf {
@@ -87,7 +88,7 @@ mod tests {
             header: Header {
                 id: id.to_string(),
                 title: "Test entry".to_string(),
-                updated_at: "2026-09-06".to_string(),
+                updated_at: Utc::now(),
             },
             markdown: "# hello".to_string(),
         }
