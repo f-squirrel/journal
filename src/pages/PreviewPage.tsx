@@ -1,7 +1,19 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { Box, Button, Paper, Stack, Typography } from "@mui/material";
+import {
+  Box,
+  Button,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogContentText,
+  DialogTitle,
+  Paper,
+  Stack,
+  Typography,
+} from "@mui/material";
 import ArrowBackIcon from "@mui/icons-material/ArrowBack";
+import DeleteIcon from "@mui/icons-material/Delete";
 import EditIcon from "@mui/icons-material/Edit";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -12,10 +24,12 @@ import { formatUpdatedAt } from "../utils/date";
 
 export default function PreviewPage() {
   const { id } = useParams<{ id: string }>();
-  const { loadEntry } = useAppState();
+  const { loadEntry, removeEntry } = useAppState();
   const navigate = useNavigate();
   const [entry, setEntry] = useState<JournalEntry | undefined>(undefined);
   const [loading, setLoading] = useState(true);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     if (!id) {
@@ -49,6 +63,13 @@ export default function PreviewPage() {
     );
   }
 
+  async function handleDelete() {
+    if (!entry) return;
+    setDeleting(true);
+    await removeEntry(entry.id);
+    navigate("/entries");
+  }
+
   return (
     <AppShell>
       <Box sx={{ maxWidth: 720, mx: "auto" }}>
@@ -56,14 +77,23 @@ export default function PreviewPage() {
           <Button startIcon={<ArrowBackIcon />} onClick={() => navigate("/entries")}>
             Back
           </Button>
-          <Button
-            variant="contained"
-            disableElevation
-            startIcon={<EditIcon />}
-            onClick={() => navigate(`/entries/${entry.id}/edit`)}
-          >
-            Edit
-          </Button>
+          <Stack direction="row" spacing={1.5}>
+            <Button
+              color="error"
+              startIcon={<DeleteIcon />}
+              onClick={() => setConfirmOpen(true)}
+            >
+              Delete
+            </Button>
+            <Button
+              variant="contained"
+              disableElevation
+              startIcon={<EditIcon />}
+              onClick={() => navigate(`/entries/${entry.id}/edit`)}
+            >
+              Edit
+            </Button>
+          </Stack>
         </Stack>
         <Typography variant="h4" fontWeight={700}>
           {entry.title}
@@ -79,6 +109,23 @@ export default function PreviewPage() {
           <ReactMarkdown remarkPlugins={[remarkGfm]}>{entry.markdown}</ReactMarkdown>
         </Paper>
       </Box>
+
+      <Dialog open={confirmOpen} onClose={() => setConfirmOpen(false)}>
+        <DialogTitle>Delete entry?</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            {`"${entry.title}" will be permanently deleted. This can't be undone.`}
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setConfirmOpen(false)} disabled={deleting}>
+            Cancel
+          </Button>
+          <Button color="error" onClick={handleDelete} disabled={deleting}>
+            Delete
+          </Button>
+        </DialogActions>
+      </Dialog>
     </AppShell>
   );
 }

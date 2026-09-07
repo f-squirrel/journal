@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { EntryHeader, JournalEntry } from "../types";
-import { getEntry, listEntries, saveEntry as saveEntryBackend } from "../api/entries";
+import { deleteEntry as deleteEntryBackend, getEntry, listEntries, saveEntry as saveEntryBackend } from "../api/entries";
 
 const seedEntries: JournalEntry[] = [
   {
@@ -30,6 +30,7 @@ interface AppStateContextValue {
   logout: () => void;
   loadEntry: (id: string) => Promise<JournalEntry | undefined>;
   upsertEntry: (entry: JournalEntry) => void;
+  removeEntry: (id: string) => Promise<void>;
 }
 
 const AppStateContext = createContext<AppStateContextValue | null>(null);
@@ -71,6 +72,13 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         });
         saveEntryBackend(entry).catch(() => {
           // Not running inside Tauri — entry only persists in memory for this session.
+        });
+      },
+      removeEntry: (id) => {
+        offlineEntries.current.delete(id);
+        setEntries((prev) => prev.filter((entry) => entry.id !== id));
+        return deleteEntryBackend(id).catch(() => {
+          // Not running inside Tauri — entry only removed from in-memory state for this session.
         });
       },
     }),

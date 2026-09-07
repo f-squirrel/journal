@@ -45,3 +45,12 @@ test("creating a new entry adds it to the list", async ({ page }) => {
   await page.getByRole("button", { name: "Entries" }).click();
   await expect(page.getByText("E2E test entry")).toBeVisible();
 });
+
+test("deleting an entry removes it from the list", async ({ page }) => {
+  await login(page);
+  await page.getByText("Project ideas").click();
+  await page.getByRole("button", { name: "Delete" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Delete" }).click();
+  await expect(page.getByRole("heading", { name: "Entries" })).toBeVisible();
+  await expect(page.getByText("Project ideas")).toHaveCount(0);
+});
