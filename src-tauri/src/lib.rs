@@ -1,5 +1,5 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-use journal_entry::{Entry, Header};
+use journal_entry::{Entry, Header, Id};
 use journal_storage::Storage;
 use tauri::{Manager, State};
 
@@ -9,7 +9,7 @@ fn list_entries(storage: State<Storage>) -> Result<Vec<Header>, String> {
 }
 
 #[tauri::command]
-fn get_entry(storage: State<Storage>, id: String) -> Result<Option<Entry>, String> {
+fn get_entry(storage: State<Storage>, id: Id) -> Result<Option<Entry>, String> {
     storage.get_entry(&id).map_err(|e| e.to_string())
 }
 
@@ -19,7 +19,7 @@ fn save_entry(storage: State<Storage>, entry: Entry) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn delete_entry(storage: State<Storage>, id: String) -> Result<(), String> {
+fn delete_entry(storage: State<Storage>, id: Id) -> Result<(), String> {
     storage.delete_entry(&id).map_err(|e| e.to_string())
 }
 

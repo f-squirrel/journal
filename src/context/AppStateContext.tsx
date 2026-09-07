@@ -4,14 +4,14 @@ import { getEntry, listEntries, saveEntry as saveEntryBackend } from "../api/ent
 
 const seedEntries: JournalEntry[] = [
   {
-    id: "1",
+    id: "5c1f7c9e-6e8b-4a2f-9c1a-1f6b9b6b0a01",
     title: "First day back",
     updatedAt: "2026-09-01T08:15:00.000Z",
     markdown:
       "# First day back\n\nStarted journaling again. Feels good to write things down.\n\n- Coffee\n- Long walk\n- Read a chapter",
   },
   {
-    id: "2",
+    id: "8a2e4d3b-2b7a-4f1e-8c3d-2e7a4b1d0a02",
     title: "Project ideas",
     updatedAt: "2026-09-03T19:42:00.000Z",
     markdown:

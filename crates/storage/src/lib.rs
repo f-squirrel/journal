@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use journal_entry::{Entry, Header};
+use journal_entry::{Entry, Header, Id};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -22,7 +22,7 @@ impl Storage {
         Self { dir: dir.into() }
     }
 
-    fn entry_path(&self, id: &str) -> PathBuf {
+    fn entry_path(&self, id: &Id) -> PathBuf {
         self.dir.join(format!("{id}.json"))
     }
 
@@ -43,7 +43,7 @@ impl Storage {
         Ok(headers)
     }
 
-    pub fn get_entry(&self, id: &str) -> Result<Option<Entry>, StorageError> {
+    pub fn get_entry(&self, id: &Id) -> Result<Option<Entry>, StorageError> {
         match fs::read_to_string(self.entry_path(id)) {
             Ok(contents) => Ok(Some(serde_json::from_str(&contents)?)),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -59,7 +59,7 @@ impl Storage {
         Ok(())
     }
 
-    pub fn delete_entry(&self, id: &str) -> Result<(), StorageError> {
+    pub fn delete_entry(&self, id: &Id) -> Result<(), StorageError> {
         match fs::remove_file(self.entry_path(id)) {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -83,10 +83,10 @@ mod tests {
         ))
     }
 
-    fn sample(id: &str) -> Entry {
+    fn sample(id: Id) -> Entry {
         Entry {
             header: Header {
-                id: id.to_string(),
+                id,
                 title: "Test entry".to_string(),
                 updated_at: Utc::now(),
             },
@@ -101,18 +101,20 @@ mod tests {
 
         assert!(storage.list_entries().unwrap().is_empty());
 
-        storage.save_entry(&sample("a")).unwrap();
-        storage.save_entry(&sample("b")).unwrap();
+        let a = Id::new();
+        let b = Id::new();
+        storage.save_entry(&sample(a)).unwrap();
+        storage.save_entry(&sample(b)).unwrap();
 
-        let fetched = storage.get_entry("a").unwrap().unwrap();
+        let fetched = storage.get_entry(&a).unwrap().unwrap();
         assert_eq!(fetched.markdown, "# hello");
 
         let headers = storage.list_entries().unwrap();
         assert_eq!(headers.len(), 2);
         assert!(headers.iter().all(|header| header.title == "Test entry"));
 
-        storage.delete_entry("a").unwrap();
-        assert!(storage.get_entry("a").unwrap().is_none());
+        storage.delete_entry(&a).unwrap();
+        assert!(storage.get_entry(&a).unwrap().is_none());
         assert_eq!(storage.list_entries().unwrap().len(), 1);
 
         fs::remove_dir_all(&dir).ok();
@@ -122,6 +124,6 @@ mod tests {
     fn get_missing_entry_returns_none() {
         let dir = temp_dir();
         let storage = Storage::new(&dir);
-        assert!(storage.get_entry("missing").unwrap().is_none());
+        assert!(storage.get_entry(&Id::new()).unwrap().is_none());
     }
 }

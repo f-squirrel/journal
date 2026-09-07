@@ -55,7 +55,7 @@ export default function EditorPage() {
   }
 
   function handleSave() {
-    const entryId = existing?.id ?? String(Date.now());
+    const entryId = existing?.id ?? crypto.randomUUID();
     upsertEntry({
       id: entryId,
       title: title.trim() || "Untitled entry",
