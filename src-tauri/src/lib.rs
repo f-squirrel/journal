@@ -1,19 +1,20 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-use journal_storage::{JournalEntry, Storage};
+use journal_entry::Entry;
+use journal_storage::Storage;
 use tauri::{Manager, State};
 
 #[tauri::command]
-fn list_entries(storage: State<Storage>) -> Result<Vec<JournalEntry>, String> {
+fn list_entries(storage: State<Storage>) -> Result<Vec<Entry>, String> {
     storage.list_entries().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-fn get_entry(storage: State<Storage>, id: String) -> Result<Option<JournalEntry>, String> {
+fn get_entry(storage: State<Storage>, id: String) -> Result<Option<Entry>, String> {
     storage.get_entry(&id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-fn save_entry(storage: State<Storage>, entry: JournalEntry) -> Result<(), String> {
+fn save_entry(storage: State<Storage>, entry: Entry) -> Result<(), String> {
     storage.save_entry(&entry).map_err(|e| e.to_string())
 }
 

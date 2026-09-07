@@ -1883,6 +1883,7 @@ dependencies = [
 name = "journal"
 version = "0.1.0"
 dependencies = [
+ "journal-entry",
  "journal-storage",
  "serde",
  "serde_json",
@@ -1892,10 +1893,17 @@ dependencies = [
 ]
 
 [[package]]
-name = "journal-storage"
+name = "journal-entry"
 version = "0.1.0"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "journal-storage"
+version = "0.1.0"
+dependencies = [
+ "journal-entry",
  "serde_json",
  "thiserror 2.0.20",
 ]

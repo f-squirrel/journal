@@ -46,6 +46,9 @@ is the only current form of static checking.
   `[workspace.dependencies]` for shared versions). New backend crates go
   under `crates/<name>/` as workspace members; `src-tauri` stays thin
   Tauri glue that wires up commands and manages app state (`src/lib.rs`).
+  `crates/entry` (`journal-entry`) defines the `Entry` type — an
+  `id`/`title`/`updated_at` `Header` (flattened when serialized) plus
+  `markdown` — used by `journal-storage` and the Tauri commands.
   `crates/storage` (`journal-storage`) persists entries as one JSON file
   per entry under the Tauri app data dir (see ADR 0003) and is exposed via
   the `list_entries`/`get_entry`/`save_entry`/`delete_entry` commands. Sync

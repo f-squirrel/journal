@@ -1,17 +1,8 @@
 use std::fs;
 use std::path::PathBuf;
 
-use serde::{Deserialize, Serialize};
+use journal_entry::Entry;
 use thiserror::Error;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub struct JournalEntry {
-    pub id: String,
-    pub title: String,
-    pub updated_at: String,
-    pub markdown: String,
-}
 
 #[derive(Debug, Error)]
 pub enum StorageError {
@@ -36,7 +27,7 @@ impl Storage {
     }
 
     /// Lists all entries, most recently updated first.
-    pub fn list_entries(&self) -> Result<Vec<JournalEntry>, StorageError> {
+    pub fn list_entries(&self) -> Result<Vec<Entry>, StorageError> {
         fs::create_dir_all(&self.dir)?;
 
         let mut entries = Vec::new();
@@ -46,13 +37,13 @@ impl Storage {
                 continue;
             }
             let contents = fs::read_to_string(file.path())?;
-            entries.push(serde_json::from_str::<JournalEntry>(&contents)?);
+            entries.push(serde_json::from_str::<Entry>(&contents)?);
         }
-        entries.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        entries.sort_by(|a, b| b.header.updated_at.cmp(&a.header.updated_at));
         Ok(entries)
     }
 
-    pub fn get_entry(&self, id: &str) -> Result<Option<JournalEntry>, StorageError> {
+    pub fn get_entry(&self, id: &str) -> Result<Option<Entry>, StorageError> {
         match fs::read_to_string(self.entry_path(id)) {
             Ok(contents) => Ok(Some(serde_json::from_str(&contents)?)),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -61,10 +52,10 @@ impl Storage {
     }
 
     /// Creates or overwrites the entry with the given id.
-    pub fn save_entry(&self, entry: &JournalEntry) -> Result<(), StorageError> {
+    pub fn save_entry(&self, entry: &Entry) -> Result<(), StorageError> {
         fs::create_dir_all(&self.dir)?;
         let contents = serde_json::to_string_pretty(entry)?;
-        fs::write(self.entry_path(&entry.id), contents)?;
+        fs::write(self.entry_path(&entry.header.id), contents)?;
         Ok(())
     }
 
@@ -80,6 +71,7 @@ impl Storage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use journal_entry::Header;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn temp_dir() -> std::path::PathBuf {
@@ -91,11 +83,13 @@ mod tests {
         ))
     }
 
-    fn sample(id: &str) -> JournalEntry {
-        JournalEntry {
-            id: id.to_string(),
-            title: "Test entry".to_string(),
-            updated_at: "2026-09-06".to_string(),
+    fn sample(id: &str) -> Entry {
+        Entry {
+            header: Header {
+                id: id.to_string(),
+                title: "Test entry".to_string(),
+                updated_at: "2026-09-06".to_string(),
+            },
             markdown: "# hello".to_string(),
         }
     }
