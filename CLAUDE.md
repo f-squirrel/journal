@@ -21,9 +21,15 @@ the user rather than assuming a migration must be written.
 ## Commands
 
 - `npm run dev` — run the Vite dev server only (frontend, browser).
-- `make run` / `npm run tauri dev` — run the full Tauri app (opens the native
-  window, requires a Rust toolchain). This is the primary way to see real
-  app behavior, since the app is designed to run inside Tauri, not a browser.
+- `make run` — run the full Tauri app (opens the native window, requires a
+  Rust toolchain). This is the primary way to see real app behavior, since
+  the app is designed to run inside Tauri, not a browser. It regenerates
+  `src/bindings/` first; plain `npm run tauri dev` is the same launch
+  without that step.
+- `make build` — build the native installers. Fails if `src/bindings/` is
+  stale rather than regenerating it, so a release can't ship types that
+  have drifted from the Rust ones. Plain `npm run tauri build` skips the
+  check.
 - `npm run build` — type-check (`tsc`) then build the frontend for production.
 - `npm run preview` — preview the production frontend build.
 - `npm run tauri <args>` — passthrough to the Tauri CLI (e.g. `npm run tauri build` for native installers).
@@ -31,7 +37,9 @@ the user rather than assuming a migration must be written.
   types) from the Rust definitions in `crates/entry` via ts-rs.
   `make check-bindings` regenerates and fails if the result differs from
   what is committed; run it after changing any type that crosses the
-  `invoke` bridge.
+  `invoke` bridge. `make run` and `make build` already do this for you, as
+  does CI — neither `npm run build` nor the raw `npm run tauri *` commands
+  do.
 - `npm run test:e2e` / `make test-e2e` — run the Playwright UI tests
   (`e2e/`, see ADR 0004) against the Vite dev server, which
   `playwright.config.ts` starts automatically. These run against the
