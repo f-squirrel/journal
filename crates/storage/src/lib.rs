@@ -1,8 +1,8 @@
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use journal_entry::{Entry, Header, Id};
-use secrecy::SecretString;
+use journal_vault::Vault;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -15,23 +15,26 @@ pub enum StorageError {
     Vault(#[from] journal_vault::VaultError),
 }
 
-/// Persists journal entries as one `age`-encrypted JSON file per entry under
-/// a directory.
+/// Persists journal entries as one `age`-encrypted JSON file per entry in a
+/// vault's directory.
 pub struct Storage {
-    dir: PathBuf,
-    passphrase: SecretString,
+    vault: Vault,
 }
 
 impl Storage {
-    pub fn new(dir: impl Into<PathBuf>, passphrase: SecretString) -> Self {
-        Self {
-            dir: dir.into(),
-            passphrase,
-        }
+    /// Takes the vault rather than a vault *and* a path: the vault already
+    /// knows which directory its key came from, and being handed a second one
+    /// is how entries end up encrypted to a key from somewhere else.
+    pub fn new(vault: Vault) -> Self {
+        Self { vault }
+    }
+
+    fn dir(&self) -> &Path {
+        self.vault.dir()
     }
 
     fn entry_path(&self, id: &Id) -> PathBuf {
-        self.dir.join(format!("{id}.json"))
+        self.dir().join(format!("{id}.json"))
     }
 
     /// Lists all entry headers, most recently updated first.
@@ -39,16 +42,18 @@ impl Storage {
     /// Entries that fail to decrypt or parse are skipped and logged rather
     /// than failing the whole call.
     pub fn list_entries(&self) -> Result<Vec<Header>, StorageError> {
-        fs::create_dir_all(&self.dir)?;
+        fs::create_dir_all(self.dir())?;
 
         let mut headers = Vec::new();
-        for file in fs::read_dir(&self.dir)? {
+        for file in fs::read_dir(self.dir())? {
             let file = file?;
             if file.path().extension().and_then(|e| e.to_str()) != Some("json") {
                 continue;
             }
             let ciphertext = fs::read(file.path())?;
-            let header = journal_vault::decrypt(&self.passphrase, &ciphertext)
+            let header = self
+                .vault
+                .decrypt(&ciphertext)
                 .map_err(StorageError::from)
                 .and_then(|plaintext| {
                     serde_json::from_slice::<Header>(&plaintext).map_err(StorageError::from)
@@ -76,7 +81,7 @@ impl Storage {
     pub fn get_entry(&self, id: &Id) -> Result<Option<Entry>, StorageError> {
         match fs::read(self.entry_path(id)) {
             Ok(ciphertext) => {
-                let plaintext = journal_vault::decrypt(&self.passphrase, &ciphertext)?;
+                let plaintext = self.vault.decrypt(&ciphertext)?;
                 Ok(Some(serde_json::from_slice(&plaintext)?))
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -86,9 +91,9 @@ impl Storage {
 
     /// Creates or overwrites the entry with the given id.
     pub fn save_entry(&self, entry: &Entry) -> Result<(), StorageError> {
-        fs::create_dir_all(&self.dir)?;
+        fs::create_dir_all(self.dir())?;
         let plaintext = serde_json::to_vec(entry)?;
-        let ciphertext = journal_vault::encrypt(&self.passphrase, &plaintext)?;
+        let ciphertext = self.vault.encrypt(&plaintext)?;
         fs::write(self.entry_path(&entry.header.id), ciphertext)?;
         Ok(())
     }
@@ -106,20 +111,26 @@ impl Storage {
 mod tests {
     use super::*;
     use chrono::Utc;
+    use secrecy::SecretString;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;
 
     fn temp_dir() -> std::path::PathBuf {
         static COUNTER: AtomicUsize = AtomicUsize::new(0);
         let n = COUNTER.fetch_add(1, Ordering::SeqCst);
-        std::env::temp_dir().join(format!(
-            "journal-storage-test-{}-{n}",
-            std::process::id()
-        ))
+        std::env::temp_dir().join(format!("journal-storage-test-{}-{n}", std::process::id()))
     }
 
-    fn passphrase() -> SecretString {
-        SecretString::from("test passphrase".to_string())
+    /// A `Storage` over a real vault in `dir`.
+    ///
+    /// Each test creates its own, which costs one scrypt: a vault is tied to
+    /// the directory its key came from, so there is no sharing one across
+    /// them. That is the point of the coupling, and ~0.4s per test is what it
+    /// costs.
+    fn storage(dir: &std::path::Path) -> Storage {
+        let vault =
+            Vault::open_or_create(dir, &SecretString::from("test passphrase".to_string())).unwrap();
+        Storage::new(vault)
     }
 
     fn sample(id: Id) -> Entry {
@@ -136,7 +147,7 @@ mod tests {
     #[test]
     fn save_get_list_delete_roundtrip() {
         let dir = temp_dir();
-        let storage = Storage::new(&dir, passphrase());
+        let storage = storage(&dir);
 
         assert!(storage.list_entries().unwrap().is_empty());
 
@@ -162,14 +173,14 @@ mod tests {
     #[test]
     fn get_missing_entry_returns_none() {
         let dir = temp_dir();
-        let storage = Storage::new(&dir, passphrase());
+        let storage = storage(&dir);
         assert!(storage.get_entry(&Id::new()).unwrap().is_none());
     }
 
     #[test]
     fn entries_are_encrypted_at_rest() {
         let dir = temp_dir();
-        let storage = Storage::new(&dir, passphrase());
+        let storage = storage(&dir);
         let id = Id::new();
         storage.save_entry(&sample(id)).unwrap();
 
@@ -184,12 +195,16 @@ mod tests {
     #[test]
     fn list_entries_skips_corrupt_files_without_failing() {
         let dir = temp_dir();
-        let storage = Storage::new(&dir, passphrase());
+        let storage = storage(&dir);
 
         storage.save_entry(&sample(Id::new())).unwrap();
 
         fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join(format!("{}.json", Id::new())), b"not valid age ciphertext").unwrap();
+        fs::write(
+            dir.join(format!("{}.json", Id::new())),
+            b"not valid age ciphertext",
+        )
+        .unwrap();
 
         let headers = storage.list_entries().unwrap();
         assert_eq!(headers.len(), 1);
@@ -226,7 +241,7 @@ mod tests {
         log::set_max_level(log::LevelFilter::Trace);
 
         let dir = temp_dir();
-        let storage = Storage::new(&dir, passphrase());
+        let storage = storage(&dir);
         storage.save_entry(&sample(Id::new())).unwrap();
 
         let corrupt = dir.join(format!("{}.json", Id::new()));

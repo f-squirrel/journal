@@ -119,25 +119,52 @@ field-name mismatches — a class of bug neither the Playwright suite nor
   `crates/storage` (`journal-storage`) persists entries as one JSON file
   per entry under the Tauri app data dir (see ADR 0003) and is exposed via
   the `list_entries` (returns headers only)/`get_entry`/`save_entry`/
-  `delete_entry` commands. Sync is not wired up yet.
+  `delete_entry` commands. `Storage::new` takes a `Vault` and nothing
+  else — it asks the vault for its directory rather than being handed a
+  second path that could name a different one. Sync is not wired up yet.
   `crates/vault` (`journal-vault`) encrypts every entry file at rest with
-  `age`'s scrypt passphrase recipient (see ADR 0006). The passphrase is
-  entered at login, held in memory only as a `secrecy::SecretString`, and
-  never written to disk; a `.vault-canary` file in the entries dir is how
-  the app tells "wrong passphrase" from "first run". `src-tauri` exposes
-  `has_vault`/`unlock`/`lock`, and the entry CRUD commands fail with
-  `"vault is locked"` until `unlock` succeeds. `unlock` calls the crate's
-  `open_or_create`, which owns the create-or-open decision — creating a
-  vault only when the dir holds neither a canary nor an entry file, and
-  refusing with `MissingKeyFile` when the canary is gone but entries
-  remain, so a lost key file cannot silently orphan a journal. Keep that
-  decision in the crate rather than branching on `has_vault` in a command;
-  `has_vault` is public only so `LoginPage` can pick its copy.
-  - **Migration from pre-encryption plaintext entries is deliberately not
-    supported.** Installs that predate ADR 0006 have plaintext
-    `<uuid>.json` entry files and no canary; on upgrade those files fail
-    to decrypt and are skipped by `list_entries`. This is accepted — do
-    not add a legacy-plaintext detection or conversion path.
+  `age`, under an X25519 keypair the vault owns (see ADR 0007, which
+  supersedes 0006). Three modules, one type each: `vault.rs` (`Vault` —
+  the public surface: a directory plus its key), `identity.rs`
+  (`Identity` — the keypair, and everything about how it is sealed to and
+  opened from a file), `error.rs` (`VaultError`, whose `#[error]` strings
+  are user-facing copy).
+  The passphrase protects **only** the key file — a `.vault-key` in the
+  entries dir holding the sealed identity — and is used for exactly one
+  scrypt operation, at unlock; entries are encrypted to the keypair and
+  cost sub-milliseconds. `Vault::open_or_create` returns the handle
+  `Storage` holds for the session, and the passphrase itself is never
+  written to disk nor kept on the `Vault`. The key file also *is* the
+  canary: a wrong passphrase is a failure to open it, which is how the app
+  tells "wrong passphrase" from "first run".
+  `src-tauri` exposes `has_vault`/`unlock`/`lock`, and the entry CRUD
+  commands fail with `"vault is locked"` until `unlock` succeeds. The
+  `unlock` command calls `Vault::open_or_create`, which owns the
+  create-or-open decision — creating a vault only when the dir holds
+  neither a key file nor an entry file, and refusing with `MissingKeyFile`
+  when the key file is gone but entries remain, so a lost key file cannot
+  silently orphan a journal. `Vault::create`/`Vault::unlock` are private
+  so that decision cannot be made anywhere else; keep it that way rather
+  than branching on `Vault::exists` in a command. `Vault::exists` is
+  public only so `LoginPage` can pick its copy.
+  - The key file's scrypt work factor is **pinned** (`WORK_FACTOR` in
+    `identity.rs`) rather than benchmarked, and capped on read
+    (`MAX_WORK_FACTOR`). `age` otherwise picks the factor by
+    timing the writing machine and refuses on read anything much above
+    what the reading machine benchmarks, so a desktop-written file is
+    undecryptable on a phone — and the key file is the only copy of the
+    key. Do not let `age` choose either number.
+  - Because unoptimized scrypt is ~40x slower, the root `Cargo.toml`
+    raises `opt-level` for the KDF's crates in the **dev** profile. Without
+    it a `cargo test` or `make run` unlock takes ~17s instead of ~0.8s.
+  - **Migration between on-disk formats is deliberately not supported.**
+    Not from pre-encryption plaintext (installs predating ADR 0006), and
+    not from ADR 0006's scrypt-per-file entries either. Such files fail to
+    decrypt and are skipped by `list_entries` with a `warn!`. Do not add
+    legacy-format detection or a conversion path — delete the entries
+    directory when the format changes under you in development, and per
+    the alpha note above, confirm with the user first when it would drop
+    their local data.
   - `tauri.conf.json` — app identifier, window config, build hooks
     (`beforeDevCommand`/`beforeBuildCommand` run the npm scripts above).
   - `capabilities/default.json` — Tauri's permission/capability grants for

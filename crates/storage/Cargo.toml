@@ -8,6 +8,9 @@ chrono = { workspace = true }
 journal-entry = { path = "../entry" }
 journal-vault = { path = "../vault" }
 log = { workspace = true }
-secrecy = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+# Only the tests build a vault of their own; `Storage` takes one already open.
+secrecy = { workspace = true }

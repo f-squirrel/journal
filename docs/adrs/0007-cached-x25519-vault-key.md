@@ -25,8 +25,19 @@ encryption key. The passphrase protects only that key, not the entries:
 - **Every entry** is encrypted to that X25519 recipient and decrypted with
   that identity. No scrypt, no passphrase, no per-file key derivation.
 
-The `Identity` used for the key file sets an explicit
-`set_max_work_factor` cap rather than inheriting `age`'s default.
+Both sides of the key file's scrypt work factor are constants, not
+benchmarks. The `Recipient` calls `set_work_factor` with a pinned
+`KEY_FILE_WORK_FACTOR` (18, what the Go implementation of age writes
+unconditionally, ~0.4s on a desktop) instead of letting `age` time the
+writing machine; the `Identity` calls `set_max_work_factor` with a
+deliberate `KEY_FILE_MAX_WORK_FACTOR` (20) instead of inheriting `age`'s
+"this machine's benchmark, plus 4".
+
+Pinning the *write* side was not in the first draft of this decision, and
+is what makes the design safe: leaving it benchmarked would reproduce the
+cross-device lockout below on the one file that matters most, where —
+unlike an entry — there is no second copy of the key to fall back on. That
+the pinned factor stays within the cap is a compile-time assertion.
 
 The passphrase is still never written to disk, and `secrecy::SecretString`
 still holds it (and now the serialized key) in memory.
@@ -78,6 +89,13 @@ installed base of zero, which makes this the cheapest possible moment to
 change it and removes the incremental-migration concern ADR 0006 designed
 for.
 
+*(Overtaken between this ADR and the implementation: fixing that field-name
+mismatch is what made saves start working, so by the time this landed the
+dev machine did hold real encrypted entries. They were confirmed
+disposable and deleted. The conclusion stands — no migration — but the
+premise is now "the installed base was one developer's scratch entry",
+not zero.)*
+
 ## Alternatives considered
 
 - **Keep per-file scrypt and pin a fixed `log_n`.** Setting an explicit
@@ -118,3 +136,15 @@ cached-key design, and it is accepted here, but it means:
 Changing the passphrase becomes cheap (re-seal one file) and is now a
 plausible future feature, where under ADR 0006 it would have meant
 re-encrypting every entry.
+
+The attacker-controlled-work problem has no test behind it, and the
+explicit `KEY_FILE_MAX_WORK_FACTOR` is its whole mitigation. Proving it
+would mean either paying the absurd cost the cap exists to refuse, or
+forging a header whose MAC is checked only *after* that cost is paid.
+Stated here rather than covered by a test that pretends otherwise.
+
+Unoptimized scrypt is roughly 40x slower than optimized, which would make
+a `cargo test` or `make run` unlock take ~17s at the pinned factor. The
+root `Cargo.toml` therefore raises `opt-level` for the KDF's crates in the
+dev profile. Calibrating the constant against release timings is only
+honest if development pays a comparable cost.

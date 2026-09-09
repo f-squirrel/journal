@@ -4,6 +4,7 @@ use std::sync::Mutex;
 
 use journal_entry::{Entry, Header, Id};
 use journal_storage::Storage;
+use journal_vault::Vault;
 use secrecy::SecretString;
 use tauri::{Manager, Runtime, State};
 
@@ -21,7 +22,7 @@ const LOCKED_ERROR: &str = "vault is locked";
 #[tauri::command]
 fn has_vault(state: State<VaultStateMutex>) -> Result<bool, String> {
     let state = state.lock().map_err(|e| e.to_string())?;
-    Ok(journal_vault::has_vault(&state.dir))
+    Ok(Vault::exists(&state.dir))
 }
 
 #[tauri::command]
@@ -29,9 +30,9 @@ fn unlock(state: State<VaultStateMutex>, passphrase: String) -> Result<(), Strin
     let passphrase = SecretString::from(passphrase);
     let mut state = state.lock().map_err(|e| e.to_string())?;
 
-    journal_vault::open_or_create(&state.dir, &passphrase).map_err(|e| e.to_string())?;
+    let vault = Vault::open_or_create(&state.dir, &passphrase).map_err(|e| e.to_string())?;
 
-    state.storage = Some(Storage::new(state.dir.clone(), passphrase));
+    state.storage = Some(Storage::new(vault));
     Ok(())
 }
 
