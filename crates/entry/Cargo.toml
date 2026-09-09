@@ -7,3 +7,13 @@ edition = "2021"
 chrono = { workspace = true }
 serde = { workspace = true }
 uuid = { workspace = true }
+ts-rs = { workspace = true, optional = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+
+[features]
+# Enables the `TS` derives that generate `src/bindings/*.ts`. Off by default
+# so the codegen crate stays out of the shipped app binary; the generation
+# itself runs as `cargo test -p journal-entry --features ts`.
+ts = ["dep:ts-rs"]

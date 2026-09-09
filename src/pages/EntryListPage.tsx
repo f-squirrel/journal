@@ -73,7 +73,7 @@ export default function EntryListPage() {
                         </Typography>
                       </Box>
                       <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: "nowrap", pt: 0.5 }}>
-                        {formatUpdatedAt(entry.updatedAt)}
+                        {formatUpdatedAt(entry.updated_at)}
                       </Typography>
                     </Stack>
                   </CardContent>

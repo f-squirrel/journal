@@ -99,7 +99,7 @@ export default function PreviewPage() {
           {entry.title}
         </Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-          Updated {formatUpdatedAt(entry.updatedAt)}
+          Updated {formatUpdatedAt(entry.updated_at)}
         </Typography>
         <Paper
           elevation={0}

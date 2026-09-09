@@ -14,21 +14,21 @@ const seedEntries: JournalEntry[] = [
   {
     id: "5c1f7c9e-6e8b-4a2f-9c1a-1f6b9b6b0a01",
     title: "First day back",
-    updatedAt: "2026-09-01T08:15:00.000Z",
+    updated_at: "2026-09-01T08:15:00.000Z",
     markdown:
       "# First day back\n\nStarted journaling again. Feels good to write things down.\n\n- Coffee\n- Long walk\n- Read a chapter",
   },
   {
     id: "8a2e4d3b-2b7a-4f1e-8c3d-2e7a4b1d0a02",
     title: "Project ideas",
-    updatedAt: "2026-09-03T19:42:00.000Z",
+    updated_at: "2026-09-03T19:42:00.000Z",
     markdown:
       "# Project ideas\n\nSome things I want to build:\n\n1. A journaling app\n2. A recipe tracker\n\n> Ideas are cheap, execution is everything.",
   },
 ];
 
 function toHeader(entry: JournalEntry): EntryHeader {
-  return { id: entry.id, title: entry.title, updatedAt: entry.updatedAt };
+  return { id: entry.id, title: entry.title, updated_at: entry.updated_at };
 }
 
 interface AppStateContextValue {

@@ -27,6 +27,11 @@ the user rather than assuming a migration must be written.
 - `npm run build` — type-check (`tsc`) then build the frontend for production.
 - `npm run preview` — preview the production frontend build.
 - `npm run tauri <args>` — passthrough to the Tauri CLI (e.g. `npm run tauri build` for native installers).
+- `make bindings` — regenerate `src/bindings/*.ts` (the TypeScript wire
+  types) from the Rust definitions in `crates/entry` via ts-rs.
+  `make check-bindings` regenerates and fails if the result differs from
+  what is committed; run it after changing any type that crosses the
+  `invoke` bridge.
 - `npm run test:e2e` / `make test-e2e` — run the Playwright UI tests
   (`e2e/`, see ADR 0004) against the Vite dev server, which
   `playwright.config.ts` starts automatically. These run against the
@@ -36,7 +41,10 @@ the user rather than assuming a migration must be written.
 There is no linter configured yet, and no unit tests for the frontend (Rust
 crates have `cargo test` unit tests, e.g. `crates/storage`). `tsc` (via
 `npm run build`) is the current form of static checking, alongside the
-Playwright UI tests above.
+Playwright UI tests above. Because the frontend's wire types are generated
+from Rust (see `src/bindings/` below), `tsc` also catches `invoke`
+field-name mismatches — a class of bug neither the Playwright suite nor
+`cargo test` can see, since the browser fallback never crosses the bridge.
 
 ## Architecture
 
@@ -57,6 +65,16 @@ Playwright UI tests above.
     on `prefers-color-scheme` in `App.tsx`.
   - `pages/` holds one component per route (Login, EntryList, Preview,
     Editor); `components/AppShell.tsx` is the shared page chrome.
+  - `src/bindings/` is **generated** — do not edit by hand. ts-rs derives
+    it from `crates/entry` (behind that crate's off-by-default `ts`
+    feature, so the codegen crate stays out of the shipped binary).
+    `src/types.ts` re-exports it under the names the app uses
+    (`EntryHeader`, `JournalEntry`), so imports stay pointed at
+    `../types`. Rename a field in Rust without running `make bindings`
+    and the check above fails; run it and `tsc` reports every call site.
+    Wire fields therefore read `snake_case` in TypeScript, which is
+    deliberate — purely local names (e.g. `formatUpdatedAt`'s parameter)
+    stay camelCase.
   - Entries are markdown (`types.ts` `JournalEntry.markdown`), rendered with
     `react-markdown` + `remark-gfm`.
 - **Backend** (`src-tauri/`): Rust, Tauri v2, part of a Cargo workspace
@@ -67,6 +85,12 @@ Playwright UI tests above.
   `crates/entry` (`journal-entry`) defines the `Entry` type — an
   `id`/`title`/`updated_at` `Header` (flattened when serialized) plus
   `markdown` — used by `journal-storage` and the Tauri commands.
+  Rust names the wire format and the generated TypeScript follows, so
+  these types stay `snake_case` on both sides (`updated_at`, not
+  `updatedAt`) — do not add camelCase renames to make the frontend read
+  more idiomatically. One serde impl serves both the `invoke` wire format
+  and the encrypted on-disk payload, so renaming a field changes the
+  on-disk format too.
   `crates/storage` (`journal-storage`) persists entries as one JSON file
   per entry under the Tauri app data dir (see ADR 0003) and is exposed via
   the `list_entries` (returns headers only)/`get_entry`/`save_entry`/

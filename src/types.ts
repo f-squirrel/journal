@@ -1,9 +1,11 @@
-export interface EntryHeader {
-  id: string;
-  title: string;
-  updatedAt: string;
-}
-
-export interface JournalEntry extends EntryHeader {
-  markdown: string;
-}
+// The shapes below cross the Tauri `invoke` bridge, so they are generated from
+// the Rust definitions in `crates/entry` by ts-rs rather than hand-written —
+// a field rename on the Rust side then breaks `tsc` instead of silently
+// failing at runtime. Regenerate with:
+//
+//     cargo test -p journal-entry --features ts
+//
+// The app imports these names from here, not from `./bindings`, so the
+// generated file names stay an implementation detail.
+export type { Header as EntryHeader } from "./bindings/Header";
+export type { Entry as JournalEntry } from "./bindings/Entry";
