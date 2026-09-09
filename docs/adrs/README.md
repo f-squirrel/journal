@@ -10,3 +10,4 @@
 | [0006](0006-age-scrypt-vault-encryption.md) | Encrypt entries at rest with `age`, using per-file scrypt | Superseded by 0007 |
 | [0007](0007-cached-x25519-vault-key.md) | Derive a cached X25519 key at unlock instead of scrypt per file | Accepted |
 | [0008](0008-tauri-plugin-log-for-logging.md) | Use `tauri-plugin-log` as the app's log sink | Accepted |
+| [0009](0009-blob-store-seam-and-local-first-sync.md) | Layer entry storage over a blob store, and sync local-first | Accepted |

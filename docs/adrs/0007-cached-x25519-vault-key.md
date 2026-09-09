@@ -6,6 +6,10 @@ Accepted — 2026-09-08
 
 Supersedes [0006](0006-age-scrypt-vault-encryption.md).
 
+Amended by [0009](0009-blob-store-seam-and-local-first-sync.md): the sealed
+key file is a blob in the entry store, not a path the vault owns. The
+cached-key scheme below is unchanged.
+
 ## Decision
 
 `journal-vault` keeps a long-lived `age::x25519` keypair as the vault's real
