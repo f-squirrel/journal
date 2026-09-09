@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
+  Alert,
   Box,
   Button,
   Dialog,
@@ -21,6 +22,7 @@ import AppShell from "../components/AppShell";
 import { useAppState } from "../context/AppStateContext";
 import type { JournalEntry } from "../types";
 import { formatUpdatedAt } from "../utils/date";
+import { errorMessage } from "../utils/errors";
 
 export default function PreviewPage() {
   const { id } = useParams<{ id: string }>();
@@ -28,8 +30,10 @@ export default function PreviewPage() {
   const navigate = useNavigate();
   const [entry, setEntry] = useState<JournalEntry | undefined>(undefined);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
 
   useEffect(() => {
     if (!id) {
@@ -39,11 +43,20 @@ export default function PreviewPage() {
     }
     let cancelled = false;
     setLoading(true);
-    loadEntry(id).then((loaded) => {
-      if (cancelled) return;
-      setEntry(loaded);
-      setLoading(false);
-    });
+    setLoadError("");
+    loadEntry(id)
+      .then((loaded) => {
+        if (cancelled) return;
+        setEntry(loaded);
+        setLoading(false);
+      })
+      .catch((err) => {
+        // A failed read is not a missing entry — say which one it was, rather
+        // than rendering "Entry not found." over a vault that is merely locked.
+        if (cancelled) return;
+        setLoadError(errorMessage(err));
+        setLoading(false);
+      });
     return () => {
       cancelled = true;
     };
@@ -51,6 +64,16 @@ export default function PreviewPage() {
 
   if (loading) {
     return null;
+  }
+
+  if (loadError) {
+    return (
+      <AppShell>
+        <Alert severity="error" sx={{ maxWidth: 720, mx: "auto", mt: 6 }}>
+          {loadError}
+        </Alert>
+      </AppShell>
+    );
   }
 
   if (!entry) {
@@ -66,7 +89,17 @@ export default function PreviewPage() {
   async function handleDelete() {
     if (!entry) return;
     setDeleting(true);
-    await removeEntry(entry.id);
+    setDeleteError("");
+    try {
+      await removeEntry(entry.id);
+    } catch (err) {
+      // The file is still on disk, so keep the dialog open and usable rather
+      // than navigating back to a list the entry has vanished from.
+      setDeleteError(errorMessage(err));
+      return;
+    } finally {
+      setDeleting(false);
+    }
     navigate("/entries");
   }
 
@@ -81,7 +114,10 @@ export default function PreviewPage() {
             <Button
               color="error"
               startIcon={<DeleteIcon />}
-              onClick={() => setConfirmOpen(true)}
+              onClick={() => {
+                setDeleteError("");
+                setConfirmOpen(true);
+              }}
             >
               Delete
             </Button>
@@ -116,6 +152,11 @@ export default function PreviewPage() {
           <DialogContentText>
             {`"${entry.title}" will be permanently deleted. This can't be undone.`}
           </DialogContentText>
+          {deleteError && (
+            <Alert severity="error" sx={{ mt: 2 }}>
+              {deleteError}
+            </Alert>
+          )}
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setConfirmOpen(false)} disabled={deleting}>

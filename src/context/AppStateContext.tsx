@@ -1,5 +1,12 @@
-import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { isTauri } from "@tauri-apps/api/core";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 import type { EntryHeader, JournalEntry } from "../types";
 import {
   deleteEntry as deleteEntryBackend,
@@ -9,23 +16,6 @@ import {
   saveEntry as saveEntryBackend,
   unlockVault,
 } from "../api/entries";
-
-const seedEntries: JournalEntry[] = [
-  {
-    id: "5c1f7c9e-6e8b-4a2f-9c1a-1f6b9b6b0a01",
-    title: "First day back",
-    updated_at: "2026-09-01T08:15:00.000Z",
-    markdown:
-      "# First day back\n\nStarted journaling again. Feels good to write things down.\n\n- Coffee\n- Long walk\n- Read a chapter",
-  },
-  {
-    id: "8a2e4d3b-2b7a-4f1e-8c3d-2e7a4b1d0a02",
-    title: "Project ideas",
-    updated_at: "2026-09-03T19:42:00.000Z",
-    markdown:
-      "# Project ideas\n\nSome things I want to build:\n\n1. A journaling app\n2. A recipe tracker\n\n> Ideas are cheap, execution is everything.",
-  },
-];
 
 function toHeader(entry: JournalEntry): EntryHeader {
   return { id: entry.id, title: entry.title, updated_at: entry.updated_at };
@@ -37,7 +27,7 @@ interface AppStateContextValue {
   login: (passphrase: string) => Promise<boolean>;
   logout: () => void;
   loadEntry: (id: string) => Promise<JournalEntry | undefined>;
-  upsertEntry: (entry: JournalEntry) => void;
+  upsertEntry: (entry: JournalEntry) => Promise<void>;
   removeEntry: (id: string) => Promise<void>;
 }
 
@@ -45,31 +35,29 @@ const AppStateContext = createContext<AppStateContextValue | null>(null);
 
 export function AppStateProvider({ children }: { children: ReactNode }) {
   const [authenticated, setAuthenticated] = useState(false);
-  const [entries, setEntries] = useState<EntryHeader[]>(seedEntries.map(toHeader));
-
-  // Fallback store for when `invoke` isn't available (e.g. `npm run dev` in a browser).
-  const offlineEntries = useRef(new Map(seedEntries.map((entry) => [entry.id, entry])));
+  const [entries, setEntries] = useState<EntryHeader[]>([]);
 
   useEffect(() => {
     if (!authenticated) return;
     listEntries()
       .then((loaded) => setEntries(loaded))
-      .catch(() => {
-        // Not running inside Tauri (e.g. `npm run dev` in a browser) — keep seed data.
+      .catch((err) => {
+        // No surface to show this on yet; without the log it would be an
+        // unhandled rejection, which is how the failures P0-1 is about hid.
+        console.error("Failed to list entries:", err);
       });
   }, [authenticated]);
+
+  // Stable identity: both EditorPage and PreviewPage key a `useEffect` on
+  // `loadEntry`, so rebuilding it whenever `entries` changes would re-run
+  // those effects and reset the editor's draft mid-save.
+  const loadEntry = useCallback((id: string) => getEntry(id).then((entry) => entry ?? undefined), []);
 
   const value = useMemo<AppStateContextValue>(
     () => ({
       authenticated,
       entries,
       login: async (passphrase) => {
-        if (!isTauri()) {
-          // Not running inside Tauri (e.g. `npm run dev` in a browser) — no real vault
-          // to unlock, so any passphrase gets you in with the seeded data.
-          setAuthenticated(true);
-          return true;
-        }
         try {
           await unlockVault(passphrase);
           setAuthenticated(true);
@@ -80,18 +68,19 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       },
       logout: () => {
         setAuthenticated(false);
-        if (isTauri()) {
-          lockVault().catch(() => {
-            // Best-effort; nothing to lock into a UI state for.
-          });
-        }
+        // Decrypted titles must not outlive the session in the webview heap.
+        setEntries([]);
+        lockVault().catch(() => {
+          // Best-effort; nothing to lock into a UI state for.
+        });
       },
-      loadEntry: (id) =>
-        getEntry(id)
-          .then((entry) => entry ?? offlineEntries.current.get(id))
-          .catch(() => offlineEntries.current.get(id)),
-      upsertEntry: (entry) => {
-        offlineEntries.current.set(entry.id, entry);
+      loadEntry,
+      // `upsertEntry` and `removeEntry` update React state optimistically and
+      // then reject if the backend refuses, rolling the optimistic edit back
+      // first: showing an entry as saved while nothing reached disk is how it
+      // silently disappears on the next launch.
+      upsertEntry: async (entry) => {
+        const previous = entries;
         setEntries((prev) => {
           const header = toHeader(entry);
           const index = prev.findIndex((e) => e.id === entry.id);
@@ -100,19 +89,25 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
           next[index] = header;
           return next;
         });
-        saveEntryBackend(entry).catch(() => {
-          // Not running inside Tauri — entry only persists in memory for this session.
-        });
+        try {
+          await saveEntryBackend(entry);
+        } catch (err) {
+          setEntries(previous);
+          throw err;
+        }
       },
-      removeEntry: (id) => {
-        offlineEntries.current.delete(id);
+      removeEntry: async (id) => {
+        const previous = entries;
         setEntries((prev) => prev.filter((entry) => entry.id !== id));
-        return deleteEntryBackend(id).catch(() => {
-          // Not running inside Tauri — entry only removed from in-memory state for this session.
-        });
+        try {
+          await deleteEntryBackend(id);
+        } catch (err) {
+          setEntries(previous);
+          throw err;
+        }
       },
     }),
-    [authenticated, entries],
+    [authenticated, entries, loadEntry],
   );
 
   return <AppStateContext.Provider value={value}>{children}</AppStateContext.Provider>;

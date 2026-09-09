@@ -36,7 +36,8 @@ the user rather than assuming a migration must be written.
   (`e2e/`, see ADR 0004) against the Vite dev server, which
   `playwright.config.ts` starts automatically. These run against the
   browser fallback (seeded in-memory data), not the Rust backend — see
-  `context/AppStateContext.tsx` below.
+  `src/api/entries.ts` below, which also carries the URL fault-injection
+  hook the suite uses to make that fallback fail on demand.
 
 There is no linter configured yet, and no unit tests for the frontend (Rust
 crates have `cargo test` unit tests, e.g. `crates/storage`). `tsc` (via
@@ -56,11 +57,25 @@ field-name mismatches — a class of bug neither the Playwright suite nor
   - `context/AppStateContext.tsx` is the single source of app state right
     now: auth flag and the list of entry headers (`list_entries` returns
     `Header`, not the full entry). `loadEntry(id)` fetches a full entry via
-    `get_entry` on demand (used when opening or editing an entry); saves go
-    through `src/api/entries.ts` (falls back to seeded in-memory data when
-    `invoke` isn't available, e.g. `npm run dev` in a browser). All pages
-    read/write through `useAppState()` rather than local state or prop
-    drilling.
+    `get_entry` on demand (used when opening or editing an entry); saves
+    and deletes go through `src/api/entries.ts`. The context knows nothing
+    about whether a backend exists, so every rejection it sees is a real
+    failure: `upsertEntry`/`removeEntry` update state optimistically, then
+    roll that update back and reject if the backend refuses, letting the
+    page keep the draft and show the error rather than reporting a save
+    that never reached disk. `loadEntry`'s identity must stay stable
+    (`useCallback`, no deps) — both `EditorPage` and `PreviewPage` key a
+    `useEffect` on it, so rebuilding it on every `entries` change re-runs
+    those effects and wipes the editor's draft. All pages read/write
+    through `useAppState()` rather than local state or prop drilling.
+  - `src/api/entries.ts` is the only module that knows whether a Rust
+    backend exists: inside Tauri every call goes over `invoke` and
+    rejections propagate untouched; outside it (`npm run dev`, Playwright)
+    it serves a seeded in-memory vault. On that fallback path only — so a
+    shipped build cannot be steered by a URL — it parses a fault-injection
+    hook once at module load: `?fail=<ops>`, `?failMessage=<text>`,
+    `?slow=<ops>` and `?vault=new`. The app uses `HashRouter`, so the query
+    string goes *before* the hash (`/?fail=save`, not `/#/?fail=save`).
   - `theme.ts` provides `getTheme(mode)`, switched between light/dark based
     on `prefers-color-scheme` in `App.tsx`.
   - `pages/` holds one component per route (Login, EntryList, Preview,

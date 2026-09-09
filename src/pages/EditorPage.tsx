@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { Box, Button, Paper, Stack, TextField, Typography } from "@mui/material";
+import { Alert, Box, Button, Paper, Stack, TextField, Typography } from "@mui/material";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import AppShell from "../components/AppShell";
 import { useAppState } from "../context/AppStateContext";
 import type { JournalEntry } from "../types";
+import { errorMessage } from "../utils/errors";
 
 export default function EditorPage() {
   const { id } = useParams<{ id: string }>();
@@ -15,6 +16,9 @@ export default function EditorPage() {
 
   const [existing, setExisting] = useState<JournalEntry | undefined>(undefined);
   const [loading, setLoading] = useState(!isNew);
+  const [loadError, setLoadError] = useState("");
+  const [saveError, setSaveError] = useState("");
+  const [saving, setSaving] = useState(false);
   const [title, setTitle] = useState("");
   const [markdown, setMarkdown] = useState("");
 
@@ -28,13 +32,20 @@ export default function EditorPage() {
     }
     let cancelled = false;
     setLoading(true);
-    loadEntry(id ?? "").then((loaded) => {
-      if (cancelled) return;
-      setExisting(loaded);
-      setTitle(loaded?.title ?? "");
-      setMarkdown(loaded?.markdown ?? "");
-      setLoading(false);
-    });
+    setLoadError("");
+    loadEntry(id ?? "")
+      .then((loaded) => {
+        if (cancelled) return;
+        setExisting(loaded);
+        setTitle(loaded?.title ?? "");
+        setMarkdown(loaded?.markdown ?? "");
+        setLoading(false);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setLoadError(errorMessage(err));
+        setLoading(false);
+      });
     return () => {
       cancelled = true;
     };
@@ -42,6 +53,16 @@ export default function EditorPage() {
 
   if (loading) {
     return null;
+  }
+
+  if (loadError) {
+    return (
+      <AppShell>
+        <Alert severity="error" sx={{ maxWidth: 720, mx: "auto", mt: 6 }}>
+          {loadError}
+        </Alert>
+      </AppShell>
+    );
   }
 
   if (!isNew && !existing) {
@@ -54,14 +75,24 @@ export default function EditorPage() {
     );
   }
 
-  function handleSave() {
+  async function handleSave() {
     const entryId = existing?.id ?? crypto.randomUUID();
-    upsertEntry({
-      id: entryId,
-      title: title.trim() || "Untitled entry",
-      updated_at: new Date().toISOString(),
-      markdown,
-    });
+    setSaving(true);
+    setSaveError("");
+    try {
+      await upsertEntry({
+        id: entryId,
+        title: title.trim() || "Untitled entry",
+        updated_at: new Date().toISOString(),
+        markdown,
+      });
+    } catch (err) {
+      // Nothing reached disk, so stay put with the draft intact.
+      setSaveError(errorMessage(err));
+      return;
+    } finally {
+      setSaving(false);
+    }
     navigate(`/entries/${entryId}`);
   }
 
@@ -77,10 +108,11 @@ export default function EditorPage() {
             sx={{ flex: 1, "& input": { fontSize: "1.2rem", fontWeight: 600 } }}
           />
           <Button onClick={() => navigate(existing ? `/entries/${existing.id}` : "/entries")}>Cancel</Button>
-          <Button variant="contained" disableElevation onClick={handleSave}>
+          <Button variant="contained" disableElevation onClick={handleSave} disabled={saving}>
             Save
           </Button>
         </Stack>
+        {saveError && <Alert severity="error">{saveError}</Alert>}
         <Box
           sx={{
             flex: 1,

@@ -12,14 +12,13 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  // null while unknown; defaults to "returning user" copy if the check fails
-  // (e.g. browser fallback, where there's no real vault).
+  // null while unknown, which renders the "returning user" copy.
   const [vaultExists, setVaultExists] = useState<boolean | null>(null);
 
   useEffect(() => {
     hasVault()
       .then(setVaultExists)
-      .catch(() => setVaultExists(true));
+      .catch((err) => console.error("Failed to check for a vault:", err));
   }, []);
 
   const isNewVault = vaultExists === false;
