@@ -9,3 +9,4 @@
 | [0005](0005-uuid-backed-entry-ids.md) | Use UUID-backed entry ids generated on the frontend | Accepted |
 | [0006](0006-age-scrypt-vault-encryption.md) | Encrypt entries at rest with `age`, using per-file scrypt | Superseded by 0007 |
 | [0007](0007-cached-x25519-vault-key.md) | Derive a cached X25519 key at unlock instead of scrypt per file | Accepted |
+| [0008](0008-tauri-plugin-log-for-logging.md) | Use `tauri-plugin-log` as the app's log sink | Accepted |
