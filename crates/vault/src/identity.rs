@@ -1,20 +1,26 @@
-use std::fs;
-use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
+use journal_store::BlobName;
 use secrecy::zeroize::Zeroize;
 use secrecy::{ExposeSecret, SecretString};
 
 use crate::VaultError;
 
-const KEY_FILE: &str = ".vault-key";
+/// The name of the blob a vault's sealed key lives in.
+///
+/// A blob in the entry store rather than a path on this machine, so that a
+/// store replicated to another device carries the key with it — see ADR 0009.
+/// Without it the other device holds ciphertext that no passphrase can open.
+pub(crate) fn key_blob() -> BlobName {
+    BlobName::literal(".vault-key")
+}
 
 /// The scrypt work factor the key is sealed with, `N = 2^18`.
 ///
 /// Pinned rather than left to `age`, which benchmarks the *writing* machine to
 /// land near a second and stamps the result into the file. That number is the
 /// one thing a vault must never disagree with itself about across devices: this
-/// file holds the only copy of the key, and a reader that refuses the factor
+/// blob holds the only copy of the key, and a reader that refuses the factor
 /// cannot fall back on the passphrase. 18 is what the Go implementation of age
 /// writes unconditionally, and measures ~0.4s on a desktop and a couple of
 /// seconds on a phone — paid once per unlock.
@@ -33,17 +39,15 @@ const MAX_WORK_FACTOR: u8 = 20;
 /// time a test could observe it the vault is already unopenable.
 const _: () = assert!(WORK_FACTOR <= MAX_WORK_FACTOR);
 
-/// Where a vault's key is stored inside its directory.
-pub(crate) fn key_path(dir: &Path) -> PathBuf {
-    dir.join(KEY_FILE)
-}
-
-/// The vault's key: an X25519 keypair, and everything about how it is stored.
+/// The vault's key: an X25519 keypair, and everything about how it is sealed.
 ///
 /// Sealing and unsealing are the key's own business rather than a file type's,
 /// because the two halves are one format: the passphrase-derived scrypt layer
 /// and the `AGE-SECRET-KEY-1…` encoding inside it only ever appear together.
 /// Nothing outside this module sees either.
+///
+/// Bytes in, bytes out: where the sealed key is *kept* is a
+/// [`BlobStore`](journal_store::BlobStore)'s business, not this type's.
 #[derive(Clone)]
 pub(crate) struct Identity {
     identity: age::x25519::Identity,
@@ -55,14 +59,13 @@ impl Identity {
         Self::from_age(age::x25519::Identity::generate())
     }
 
-    /// Unseals the key stored at `path`.
+    /// Unseals a key from the bytes [`Self::seal`] produced.
     ///
     /// The one scrypt operation in the whole design, and the only place the
     /// passphrase is used at all.
-    pub(crate) fn open(path: &Path, passphrase: &SecretString) -> Result<Self, VaultError> {
-        let sealed = fs::read(path)?;
+    pub(crate) fn open(sealed: &[u8], passphrase: &SecretString) -> Result<Self, VaultError> {
         let mut serialized =
-            unseal(passphrase, &sealed).map_err(|_| VaultError::WrongPassphrase)?;
+            decrypt_with_passphrase(passphrase, sealed).map_err(|_| VaultError::WrongPassphrase)?;
         let identity = std::str::from_utf8(&serialized)
             .ok()
             .and_then(|s| age::x25519::Identity::from_str(s).ok());
@@ -72,15 +75,10 @@ impl Identity {
         Ok(Self::from_age(identity.ok_or(VaultError::CorruptKeyFile)?))
     }
 
-    /// Seals this key to `path`, creating its directory if it is not there yet.
-    pub(crate) fn seal_to(&self, path: &Path, passphrase: &SecretString) -> Result<(), VaultError> {
-        if let Some(dir) = path.parent() {
-            fs::create_dir_all(dir)?;
-        }
+    /// Seals this key under `passphrase`, ready to be stored.
+    pub(crate) fn seal(&self, passphrase: &SecretString) -> Result<Vec<u8>, VaultError> {
         let serialized = self.identity.to_string();
-        let sealed = seal(passphrase, serialized.expose_secret().as_bytes())?;
-        fs::write(path, sealed)?;
-        Ok(())
+        encrypt_with_passphrase(passphrase, serialized.expose_secret().as_bytes())
     }
 
     /// Encrypts `plaintext` to this key. Sub-millisecond: no key derivation,
@@ -110,7 +108,10 @@ impl Identity {
 
 /// Seals bytes under `passphrase` with `age`'s scrypt recipient, at the pinned
 /// [`WORK_FACTOR`].
-fn seal(passphrase: &SecretString, plaintext: &[u8]) -> Result<Vec<u8>, VaultError> {
+fn encrypt_with_passphrase(
+    passphrase: &SecretString,
+    plaintext: &[u8],
+) -> Result<Vec<u8>, VaultError> {
     let mut recipient = age::scrypt::Recipient::new(passphrase.clone());
     recipient.set_work_factor(WORK_FACTOR);
     Ok(age::encrypt(&recipient, plaintext)?)
@@ -118,7 +119,10 @@ fn seal(passphrase: &SecretString, plaintext: &[u8]) -> Result<Vec<u8>, VaultErr
 
 /// Unseals bytes with `passphrase`, refusing to do more work than
 /// [`MAX_WORK_FACTOR`].
-fn unseal(passphrase: &SecretString, ciphertext: &[u8]) -> Result<Vec<u8>, VaultError> {
+fn decrypt_with_passphrase(
+    passphrase: &SecretString,
+    ciphertext: &[u8],
+) -> Result<Vec<u8>, VaultError> {
     let mut identity = age::scrypt::Identity::new(passphrase.clone());
     identity.set_max_work_factor(MAX_WORK_FACTOR);
     Ok(age::decrypt(&identity, ciphertext)?)
@@ -127,27 +131,22 @@ fn unseal(passphrase: &SecretString, ciphertext: &[u8]) -> Result<Vec<u8>, Vault
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::{passphrase, temp_dir};
+    use crate::testing::passphrase;
 
     #[test]
-    fn the_key_file_is_portable_across_devices() {
-        // The key file is the one file still sealed with scrypt, and under this
-        // design it holds the only copy of the vault key — so a work factor a
-        // slower device refuses loses the journal outright rather than merely
-        // slowing it down. Both sides of that number are therefore constants,
-        // not benchmarks of whatever machine is running.
-        let dir = temp_dir();
-        let path = key_path(&dir);
-        Identity::generate()
-            .seal_to(&path, &passphrase("hunter2"))
-            .unwrap();
-        let sealed = fs::read(&path).unwrap();
+    fn the_sealed_key_is_portable_across_devices() {
+        // The key is the one thing still sealed with scrypt, and under this
+        // design it is the only copy — so a work factor a slower device refuses
+        // loses the journal outright rather than merely slowing it down. Both
+        // sides of that number are therefore constants, not benchmarks of
+        // whatever machine is running.
+        let sealed = Identity::generate().seal(&passphrase("hunter2")).unwrap();
 
         let header = String::from_utf8_lossy(&sealed);
         let stanza = header
             .lines()
             .find(|line| line.starts_with("-> scrypt "))
-            .expect("key file is scrypt-sealed");
+            .expect("the key is scrypt-sealed");
         let written: u8 = stanza
             .split_whitespace()
             .next_back()
@@ -159,7 +158,7 @@ mod tests {
         // the property.
         assert_eq!(
             written, WORK_FACTOR,
-            "key file carries a benchmarked work factor, not the pinned one"
+            "sealed key carries a benchmarked work factor, not the pinned one"
         );
 
         let mut slowest_supported_device = age::scrypt::Identity::new(passphrase("hunter2"));
@@ -169,43 +168,38 @@ mod tests {
                 age::decrypt(&slowest_supported_device, &sealed),
                 Err(age::DecryptError::ExcessiveWork { .. })
             ),
-            "key file rejected for its work factor on a lower-powered device"
+            "sealed key rejected for its work factor on a lower-powered device"
         );
-
-        fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn sealing_then_opening_returns_the_same_key() {
-        let dir = temp_dir();
-        let path = key_path(&dir);
         let key = Identity::generate();
-        key.seal_to(&path, &passphrase("hunter2")).unwrap();
+        let sealed = key.seal(&passphrase("hunter2")).unwrap();
 
-        let reopened = Identity::open(&path, &passphrase("hunter2")).unwrap();
+        let reopened = Identity::open(&sealed, &passphrase("hunter2")).unwrap();
         assert_eq!(key.public(), reopened.public());
-
-        fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
-    fn a_key_file_that_opens_but_does_not_parse_is_not_a_wrong_passphrase() {
-        // The passphrase provably worked — the file unsealed — so blaming it
-        // would send the user round a loop no correct passphrase can exit.
-        let dir = temp_dir();
-        fs::create_dir_all(&dir).unwrap();
-        let path = key_path(&dir);
-        fs::write(
-            &path,
-            seal(&passphrase("hunter2"), b"not an age secret key").unwrap(),
-        )
-        .unwrap();
+    fn the_wrong_passphrase_does_not_open_a_sealed_key() {
+        let sealed = Identity::generate().seal(&passphrase("hunter2")).unwrap();
+        let Err(err) = Identity::open(&sealed, &passphrase("typo")) else {
+            panic!("the wrong passphrase unsealed a key");
+        };
+        assert!(matches!(err, VaultError::WrongPassphrase), "got {err:?}");
+    }
 
-        let Err(err) = Identity::open(&path, &passphrase("hunter2")) else {
+    #[test]
+    fn a_key_that_opens_but_does_not_parse_is_not_a_wrong_passphrase() {
+        // The passphrase provably worked — the blob unsealed — so blaming it
+        // would send the user round a loop no correct passphrase can exit.
+        let sealed =
+            encrypt_with_passphrase(&passphrase("hunter2"), b"not an age secret key").unwrap();
+
+        let Err(err) = Identity::open(&sealed, &passphrase("hunter2")) else {
             panic!("a sealed value that is not a key must not open a vault");
         };
         assert!(matches!(err, VaultError::CorruptKeyFile), "got {err:?}");
-
-        fs::remove_dir_all(&dir).ok();
     }
 }

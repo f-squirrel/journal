@@ -27,6 +27,8 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 journal-entry = { path = "../crates/entry" }
 journal-storage = { path = "../crates/storage" }
+journal-store = { path = "../crates/store" }
+journal-fs-store = { path = "../crates/fs-store" }
 journal-vault = { path = "../crates/vault" }
 
 [dev-dependencies]

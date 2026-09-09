@@ -5,5 +5,10 @@ edition = "2021"
 
 [dependencies]
 age = { workspace = true }
+journal-store = { path = "../store" }
 secrecy = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+# Only the tests need a concrete store; the crate itself speaks `BlobStore`.
+journal-fs-store = { path = "../fs-store" }

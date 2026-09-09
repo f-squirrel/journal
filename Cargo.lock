@@ -2475,7 +2475,9 @@ name = "journal"
 version = "0.1.0"
 dependencies = [
  "journal-entry",
+ "journal-fs-store",
  "journal-storage",
+ "journal-store",
  "journal-vault",
  "log",
  "secrecy",
@@ -2499,15 +2501,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "journal-fs-store"
+version = "0.1.0"
+dependencies = [
+ "journal-store",
+]
+
+[[package]]
 name = "journal-storage"
 version = "0.1.0"
 dependencies = [
  "chrono",
  "journal-entry",
+ "journal-fs-store",
+ "journal-store",
  "journal-vault",
  "log",
  "secrecy",
+ "serde",
  "serde_json",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "journal-store"
+version = "0.1.0"
+dependencies = [
  "thiserror 2.0.20",
 ]
 
@@ -2516,6 +2535,8 @@ name = "journal-vault"
 version = "0.1.0"
 dependencies = [
  "age",
+ "journal-fs-store",
+ "journal-store",
  "secrecy",
  "thiserror 2.0.20",
 ]

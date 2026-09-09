@@ -1,17 +1,23 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use journal_entry::{Entry, Header, Id};
+use journal_fs_store::FsStore;
 use journal_storage::Storage;
+use journal_store::BlobStore;
 use journal_vault::Vault;
 use secrecy::SecretString;
 use tauri::{Manager, Runtime, State};
 
-/// Vault directory plus the unlocked `Storage`, if any. `storage` is `None`
-/// until `unlock` succeeds, and is cleared again by `lock`.
+/// The blob store the journal lives in, plus the unlocked `Storage` over it,
+/// if any. `storage` is `None` until `unlock` succeeds, and is cleared again by
+/// `lock`.
+///
+/// The store outlives the lock state because `has_vault` has to answer before
+/// there is any passphrase to open one with. It is the only copy of "where the
+/// journal is" in the app — the layers below take it as given (ADR 0009).
 struct VaultState {
-    dir: PathBuf,
+    store: Arc<dyn BlobStore>,
     storage: Option<Storage>,
 }
 
@@ -22,7 +28,7 @@ const LOCKED_ERROR: &str = "vault is locked";
 #[tauri::command]
 fn has_vault(state: State<VaultStateMutex>) -> Result<bool, String> {
     let state = state.lock().map_err(|e| e.to_string())?;
-    Ok(Vault::exists(&state.dir))
+    Vault::exists(&*state.store).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -30,9 +36,9 @@ fn unlock(state: State<VaultStateMutex>, passphrase: String) -> Result<(), Strin
     let passphrase = SecretString::from(passphrase);
     let mut state = state.lock().map_err(|e| e.to_string())?;
 
-    let vault = Vault::open_or_create(&state.dir, &passphrase).map_err(|e| e.to_string())?;
+    let storage = Storage::open(state.store.clone(), &passphrase).map_err(|e| e.to_string())?;
 
-    state.storage = Some(Storage::new(vault));
+    state.storage = Some(storage);
     Ok(())
 }
 
@@ -105,7 +111,7 @@ pub fn run() {
         .setup(|app| {
             let entries_dir = app.path().app_data_dir()?.join("entries");
             app.manage(Mutex::new(VaultState {
-                dir: entries_dir,
+                store: Arc::new(FsStore::new(entries_dir)),
                 storage: None,
             }));
 

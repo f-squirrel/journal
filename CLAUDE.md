@@ -116,37 +116,51 @@ field-name mismatches — a class of bug neither the Playwright suite nor
   more idiomatically. One serde impl serves both the `invoke` wire format
   and the encrypted on-disk payload, so renaming a field changes the
   on-disk format too.
-  `crates/storage` (`journal-storage`) persists entries as one JSON file
-  per entry under the Tauri app data dir (see ADR 0003) and is exposed via
-  the `list_entries` (returns headers only)/`get_entry`/`save_entry`/
-  `delete_entry` commands. `Storage::new` takes a `Vault` and nothing
-  else — it asks the vault for its directory rather than being handed a
-  second path that could name a different one. Sync is not wired up yet.
-  `crates/vault` (`journal-vault`) encrypts every entry file at rest with
+  `crates/store` (`journal-store`) defines the `BlobStore` trait — named
+  opaque byte blobs (`get`/`put`/`delete`/`list`/`contains`) — and
+  `BlobName`, the validated newtype its methods take, so a name cannot
+  address anything outside the store. It holds no implementation:
+  `crates/fs-store` (`journal-fs-store`) is the local one, one file per
+  blob in a directory. Every layer above depends on the trait crate; only
+  `src-tauri` names a concrete store, and the crates between reach for
+  `journal-fs-store` as a dev-dependency for their tests. See ADR 0009
+  for the three-layer split and the local-first sync plan.
+  `crates/storage` (`journal-storage`) is the layer that knows what an
+  entry *is*: `{id}.json` blob naming, serde, and the header sort. One
+  encrypted blob per entry (see ADR 0003), exposed via the `list_entries`
+  (returns headers only)/`get_entry`/`save_entry`/`delete_entry`
+  commands. `Storage::open(store, passphrase)` owns the create-or-open
+  decision — creating a vault only when the store holds neither a key
+  blob nor an entry blob, and refusing with `MissingKeyFile` when the key
+  is gone but entries remain, so a lost key cannot silently orphan a
+  journal. That decision lives here, not in `journal-vault`, because only
+  this layer knows what an entry blob is named; keep it that way rather
+  than branching on `Vault::exists` in a command. Sync is not wired up
+  yet.
+  `crates/vault` (`journal-vault`) encrypts every entry blob at rest with
   `age`, under an X25519 keypair the vault owns (see ADR 0007, which
-  supersedes 0006). Three modules, one type each: `vault.rs` (`Vault` —
-  the public surface: a directory plus its key), `identity.rs`
-  (`Identity` — the keypair, and everything about how it is sealed to and
-  opened from a file), `error.rs` (`VaultError`, whose `#[error]` strings
-  are user-facing copy).
-  The passphrase protects **only** the key file — a `.vault-key` in the
-  entries dir holding the sealed identity — and is used for exactly one
-  scrypt operation, at unlock; entries are encrypted to the keypair and
-  cost sub-milliseconds. `Vault::open_or_create` returns the handle
-  `Storage` holds for the session, and the passphrase itself is never
-  written to disk nor kept on the `Vault`. The key file also *is* the
-  canary: a wrong passphrase is a failure to open it, which is how the app
-  tells "wrong passphrase" from "first run".
+  supersedes 0006, amended by 0009, which moved the key into the store).
+  Four modules: `vault.rs` (`Vault` — the key and nothing else; it owns
+  no directory), `cipher.rs` (`Cipher` — the two-method trait `Storage`
+  depends on, so it never sees key handling and its tests can stand in a
+  fake), `identity.rs` (`Identity` — the keypair, and everything about
+  how it is sealed to and opened from bytes), `error.rs` (`VaultError`,
+  whose `#[error]` strings are user-facing copy).
+  The passphrase protects **only** the sealed key — a `.vault-key` blob
+  in the same store as the entries, so a store synced to another device
+  carries the key with it — and is used for exactly one scrypt operation,
+  at unlock; entries are encrypted to the keypair and cost
+  sub-milliseconds. The passphrase itself is never written to disk nor
+  kept on the `Vault`. The key blob also *is* the canary: a wrong
+  passphrase is a failure to open it, which is how the app tells "wrong
+  passphrase" from "first run".
   `src-tauri` exposes `has_vault`/`unlock`/`lock`, and the entry CRUD
   commands fail with `"vault is locked"` until `unlock` succeeds. The
-  `unlock` command calls `Vault::open_or_create`, which owns the
-  create-or-open decision — creating a vault only when the dir holds
-  neither a key file nor an entry file, and refusing with `MissingKeyFile`
-  when the key file is gone but entries remain, so a lost key file cannot
-  silently orphan a journal. `Vault::create`/`Vault::unlock` are private
-  so that decision cannot be made anywhere else; keep it that way rather
-  than branching on `Vault::exists` in a command. `Vault::exists` is
-  public only so `LoginPage` can pick its copy.
+  `unlock` command calls `Storage::open`. `Vault::create`/`Vault::unlock`
+  are public but `Storage::open` is their only caller — keep it that way,
+  since a fresh key written over existing entries orphans all of them.
+  `Vault::exists` is public only so `has_vault` (and thus `LoginPage`)
+  can pick its copy.
   - The key file's scrypt work factor is **pinned** (`WORK_FACTOR` in
     `identity.rs`) rather than benchmarked, and capped on read
     (`MAX_WORK_FACTOR`). `age` otherwise picks the factor by
