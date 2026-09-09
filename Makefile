@@ -1,6 +1,8 @@
 .PHONY: run test-e2e bindings check-bindings
 
-run:
+# Regenerate first: launching the app against stale bindings is how a broken
+# `invoke` bridge stays invisible (`tsc` passes, the command fails at runtime).
+run: bindings
 	npm run tauri dev
 
 test-e2e:
