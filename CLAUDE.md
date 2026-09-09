@@ -126,7 +126,13 @@ field-name mismatches — a class of bug neither the Playwright suite nor
   never written to disk; a `.vault-canary` file in the entries dir is how
   the app tells "wrong passphrase" from "first run". `src-tauri` exposes
   `has_vault`/`unlock`/`lock`, and the entry CRUD commands fail with
-  `"vault is locked"` until `unlock` succeeds.
+  `"vault is locked"` until `unlock` succeeds. `unlock` calls the crate's
+  `open_or_create`, which owns the create-or-open decision — creating a
+  vault only when the dir holds neither a canary nor an entry file, and
+  refusing with `MissingKeyFile` when the canary is gone but entries
+  remain, so a lost key file cannot silently orphan a journal. Keep that
+  decision in the crate rather than branching on `has_vault` in a command;
+  `has_vault` is public only so `LoginPage` can pick its copy.
   - **Migration from pre-encryption plaintext entries is deliberately not
     supported.** Installs that predate ADR 0006 have plaintext
     `<uuid>.json` entry files and no canary; on upgrade those files fail

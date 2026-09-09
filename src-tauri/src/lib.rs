@@ -29,11 +29,7 @@ fn unlock(state: State<VaultStateMutex>, passphrase: String) -> Result<(), Strin
     let passphrase = SecretString::from(passphrase);
     let mut state = state.lock().map_err(|e| e.to_string())?;
 
-    if journal_vault::has_vault(&state.dir) {
-        journal_vault::unlock_vault(&state.dir, &passphrase).map_err(|e| e.to_string())?;
-    } else {
-        journal_vault::create_vault(&state.dir, &passphrase).map_err(|e| e.to_string())?;
-    }
+    journal_vault::open_or_create(&state.dir, &passphrase).map_err(|e| e.to_string())?;
 
     state.storage = Some(Storage::new(state.dir.clone(), passphrase));
     Ok(())

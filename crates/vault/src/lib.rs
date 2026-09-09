@@ -17,6 +17,12 @@ pub enum VaultError {
     Decrypt(#[from] age::DecryptError),
     #[error("wrong passphrase")]
     WrongPassphrase,
+    #[error(
+        "this folder holds journal entries but its key file is missing. \
+         Restore the vault's key file from a backup — creating a new vault \
+         here would leave the existing entries unreadable."
+    )]
+    MissingKeyFile,
 }
 
 fn canary_path(dir: &Path) -> PathBuf {
@@ -28,8 +34,47 @@ pub fn has_vault(dir: &Path) -> bool {
     canary_path(dir).is_file()
 }
 
+/// Opens the vault in `dir` with `passphrase`, creating it if `dir` holds no
+/// vault at all.
+///
+/// "Create or open?" deliberately lives here rather than in the command layer:
+/// getting it wrong means writing a fresh key file over a directory whose
+/// entries were sealed under a different passphrase, orphaning every one of
+/// them. A missing key file next to surviving entry files is that case, and is
+/// refused with [`VaultError::MissingKeyFile`] rather than treated as a first
+/// run.
+pub fn open_or_create(dir: &Path, passphrase: &SecretString) -> Result<(), VaultError> {
+    if has_vault(dir) {
+        return unlock_vault(dir, passphrase);
+    }
+    if holds_entry_files(dir)? {
+        return Err(VaultError::MissingKeyFile);
+    }
+    create_vault(dir, passphrase)
+}
+
+/// Whether `dir` holds at least one entry file.
+///
+/// The `is_file` test is load-bearing: a *directory* named `<uuid>.json` is
+/// reachable, and counting one would permanently refuse to create a vault,
+/// pointing the user at a backup that does not exist.
+fn holds_entry_files(dir: &Path) -> Result<bool, VaultError> {
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(e.into()),
+    };
+    for file in entries {
+        let path = file?.path();
+        if path.is_file() && path.extension().and_then(|e| e.to_str()) == Some("json") {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// Creates a new vault in `dir`, sealing a known canary value with `passphrase`.
-pub fn create_vault(dir: &Path, passphrase: &SecretString) -> Result<(), VaultError> {
+fn create_vault(dir: &Path, passphrase: &SecretString) -> Result<(), VaultError> {
     fs::create_dir_all(dir)?;
     let ciphertext = encrypt(passphrase, CANARY_MAGIC)?;
     fs::write(canary_path(dir), ciphertext)?;
@@ -37,7 +82,7 @@ pub fn create_vault(dir: &Path, passphrase: &SecretString) -> Result<(), VaultEr
 }
 
 /// Verifies `passphrase` against the vault's canary file in `dir`.
-pub fn unlock_vault(dir: &Path, passphrase: &SecretString) -> Result<(), VaultError> {
+fn unlock_vault(dir: &Path, passphrase: &SecretString) -> Result<(), VaultError> {
     let ciphertext = fs::read(canary_path(dir))?;
     let plaintext = decrypt(passphrase, &ciphertext).map_err(|_| VaultError::WrongPassphrase)?;
     if plaintext != CANARY_MAGIC {
@@ -123,5 +168,37 @@ mod tests {
     fn decrypting_non_age_data_returns_clean_error_not_panic() {
         let err = decrypt(&passphrase("hunter2"), b"not age ciphertext at all").unwrap_err();
         assert!(matches!(err, VaultError::Decrypt(_)));
+    }
+
+    #[test]
+    fn open_or_create_refuses_when_the_key_file_is_missing_but_entries_remain() {
+        let dir = temp_dir();
+        create_vault(&dir, &passphrase("right")).unwrap();
+        let entry = encrypt(&passphrase("right"), b"{}").unwrap();
+        fs::write(
+            dir.join("5c1f7c9e-6e8b-4a2f-9c1a-1f6b9b6b0a01.json"),
+            &entry,
+        )
+        .unwrap();
+        fs::remove_file(canary_path(&dir)).unwrap();
+
+        let err = open_or_create(&dir, &passphrase("typo")).unwrap_err();
+        assert!(matches!(err, VaultError::MissingKeyFile));
+        // The assertion that matters: an error that still wrote a key file
+        // would have orphaned the entry anyway.
+        assert!(!has_vault(&dir));
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_directory_named_like_an_entry_does_not_block_creation() {
+        let dir = temp_dir();
+        fs::create_dir_all(dir.join("5c1f7c9e-6e8b-4a2f-9c1a-1f6b9b6b0a01.json")).unwrap();
+
+        open_or_create(&dir, &passphrase("fresh start")).unwrap();
+        assert!(has_vault(&dir));
+
+        fs::remove_dir_all(&dir).ok();
     }
 }
