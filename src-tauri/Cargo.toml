@@ -19,10 +19,17 @@ tauri-build = { workspace = true }
 
 [dependencies]
 tauri = { workspace = true }
+tauri-plugin-log = { workspace = true }
 tauri-plugin-opener = { workspace = true }
+log = { workspace = true }
 secrecy = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 journal-entry = { path = "../crates/entry" }
 journal-storage = { path = "../crates/storage" }
 journal-vault = { path = "../crates/vault" }
+
+[dev-dependencies]
+# `tauri::test` runs the real builder over a mock runtime, so the logging
+# plugin's setup hook (which is what installs the logger) actually runs.
+tauri = { workspace = true, features = ["test"] }

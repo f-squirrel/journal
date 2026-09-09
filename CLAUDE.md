@@ -48,7 +48,9 @@ the user rather than assuming a migration must be written.
   hook the suite uses to make that fallback fail on demand.
 
 There is no linter configured yet, and no unit tests for the frontend (Rust
-crates have `cargo test` unit tests, e.g. `crates/storage`). `tsc` (via
+crates have `cargo test` unit tests, e.g. `crates/storage`; `src-tauri`'s
+run over `tauri::test`'s mock runtime, from its `tauri = { features =
+["test"] }` dev-dependency). `tsc` (via
 `npm run build`) is the current form of static checking, alongside the
 Playwright UI tests above. Because the frontend's wire types are generated
 from Rust (see `src/bindings/` below), `tsc` also catches `invoke`
@@ -134,6 +136,11 @@ field-name mismatches — a class of bug neither the Playwright suite nor
     (`beforeDevCommand`/`beforeBuildCommand` run the npm scripts above).
   - `capabilities/default.json` — Tauri's permission/capability grants for
     the webview; extend this when adding new Tauri plugins or commands.
+  - Logging goes through `tauri-plugin-log`, registered as
+    `logging_plugin()` in `src/lib.rs`. Backend crates log with `log`
+    (not `tracing`); the plugin routes `Stderr` to logcat on Android and
+    oslog on iOS, so one registration covers all three targets. Level is
+    fixed at `Info` — it does not read `RUST_LOG`.
 - Frontend and backend communicate via Tauri's `invoke()` bridge
   (`@tauri-apps/api`), wrapped in `src/api/entries.ts` for entry CRUD.
 

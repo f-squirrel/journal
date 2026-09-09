@@ -56,10 +56,15 @@ impl Storage {
             match header {
                 Ok(header) => headers.push(header),
                 Err(e) => {
-                    tracing::warn!(
-                        file = %file.path().display(),
-                        error = %e,
-                        "skipping entry that failed to decrypt or parse"
+                    // Rendered before the `warn!` rather than inside it: `age`'s
+                    // error `Display` lazily loads its i18n bundle and logs while
+                    // doing so, and a sink that holds a lock across formatting its
+                    // own record (fern's file target, say) would deadlock on the
+                    // reentrant call. Formatting here keeps those records outside.
+                    let error = e.to_string();
+                    log::warn!(
+                        "skipping entry that failed to decrypt or parse: file={}, error={error}",
+                        file.path().display(),
                     );
                 }
             }
@@ -102,6 +107,7 @@ mod tests {
     use super::*;
     use chrono::Utc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
 
     fn temp_dir() -> std::path::PathBuf {
         static COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -188,6 +194,51 @@ mod tests {
         let headers = storage.list_entries().unwrap();
         assert_eq!(headers.len(), 1);
         assert_eq!(headers[0].title, "Test entry");
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    static CAPTURED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+    /// `log`'s logger is global and install-once, so
+    /// `list_entries_logs_the_file_it_skipped` is the only test in this crate
+    /// allowed to install one.
+    struct CapturingLogger;
+
+    impl log::Log for CapturingLogger {
+        fn enabled(&self, _: &log::Metadata) -> bool {
+            true
+        }
+
+        fn log(&self, record: &log::Record) {
+            // Formatted before the lock is taken: formatting a record can emit
+            // records of its own, and `CAPTURED` is not reentrant.
+            let message = record.args().to_string();
+            CAPTURED.lock().unwrap().push(message);
+        }
+
+        fn flush(&self) {}
+    }
+
+    #[test]
+    fn list_entries_logs_the_file_it_skipped() {
+        log::set_logger(&CapturingLogger).expect("only test installing a logger");
+        log::set_max_level(log::LevelFilter::Trace);
+
+        let dir = temp_dir();
+        let storage = Storage::new(&dir, passphrase());
+        storage.save_entry(&sample(Id::new())).unwrap();
+
+        let corrupt = dir.join(format!("{}.json", Id::new()));
+        fs::write(&corrupt, b"not valid age ciphertext").unwrap();
+
+        assert_eq!(storage.list_entries().unwrap().len(), 1);
+
+        let captured = CAPTURED.lock().unwrap().join("\n");
+        assert!(
+            captured.contains(&corrupt.display().to_string()),
+            "no log record named the skipped file; captured: {captured:?}"
+        );
 
         fs::remove_dir_all(&dir).ok();
     }
