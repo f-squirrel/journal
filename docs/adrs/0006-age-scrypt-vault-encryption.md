@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted — 2026-09-07
+Superseded by [ADR 0007](0007-cached-x25519-vault-key.md) — 2026-09-08
 
 ## Decision
 

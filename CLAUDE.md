@@ -70,7 +70,19 @@ Playwright UI tests above.
   `crates/storage` (`journal-storage`) persists entries as one JSON file
   per entry under the Tauri app data dir (see ADR 0003) and is exposed via
   the `list_entries` (returns headers only)/`get_entry`/`save_entry`/
-  `delete_entry` commands. Sync and encryption are not wired up yet.
+  `delete_entry` commands. Sync is not wired up yet.
+  `crates/vault` (`journal-vault`) encrypts every entry file at rest with
+  `age`'s scrypt passphrase recipient (see ADR 0006). The passphrase is
+  entered at login, held in memory only as a `secrecy::SecretString`, and
+  never written to disk; a `.vault-canary` file in the entries dir is how
+  the app tells "wrong passphrase" from "first run". `src-tauri` exposes
+  `has_vault`/`unlock`/`lock`, and the entry CRUD commands fail with
+  `"vault is locked"` until `unlock` succeeds.
+  - **Migration from pre-encryption plaintext entries is deliberately not
+    supported.** Installs that predate ADR 0006 have plaintext
+    `<uuid>.json` entry files and no canary; on upgrade those files fail
+    to decrypt and are skipped by `list_entries`. This is accepted — do
+    not add a legacy-plaintext detection or conversion path.
   - `tauri.conf.json` — app identifier, window config, build hooks
     (`beforeDevCommand`/`beforeBuildCommand` run the npm scripts above).
   - `capabilities/default.json` — Tauri's permission/capability grants for
