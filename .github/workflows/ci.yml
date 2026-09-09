@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    name: cargo test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # Cheap, needs no system libraries, and is the most likely thing to be
+      # stale, so it runs before the apt install that only `src-tauri` needs.
+      - name: Check src/bindings is not stale
+        run: make check-bindings
+
+      # Tauri v2 on Ubuntu 24.04. Only `src-tauri` needs these; the other
+      # crates build without them.
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            libssl-dev \
+            build-essential \
+            curl wget file
+
+      - run: cargo test --workspace
+
+  web:
+    name: tsc + playwright
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # `npm run build` is `tsc` then vite; the type-check is the half that
+      # catches `invoke` field-name mismatches against the committed bindings.
+      - run: npm run build
+
+      # Playwright starts the Vite dev server itself (playwright.config.ts),
+      # so this needs no separate serve step. It exercises the browser
+      # fallback in src/api/entries.ts, not the Rust backend.
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
