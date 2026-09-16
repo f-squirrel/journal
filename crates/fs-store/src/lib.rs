@@ -7,8 +7,16 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use journal_store::{BlobName, BlobStore, StoreError};
+
+/// What a half-written blob is called until it is renamed into place.
+///
+/// Files ending in this are the store's own scratch, not blobs: [`FsStore::list`]
+/// skips them, so a crash between the write and the rename leaves litter rather
+/// than an entry the layers above try to decrypt.
+const TEMP_EXT: &str = ".tmp";
 
 /// A [`BlobStore`] backed by one file per blob in a single directory.
 ///
@@ -37,6 +45,23 @@ impl FsStore {
     fn path(&self, name: &BlobName) -> PathBuf {
         self.dir.join(name.as_str())
     }
+
+    /// A scratch path in the same directory, used once and never reused.
+    ///
+    /// Same directory because [`put`](FsStore::put) finishes with a rename, and
+    /// rename is only atomic within one filesystem. Unique per call because two
+    /// threads saving the same entry would otherwise write the same temp file:
+    /// interleaving *there* tears the blob just as a shared `fs::write` would,
+    /// which is the whole defect this is here to fix.
+    fn temp_path(&self, name: &BlobName) -> PathBuf {
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        self.dir.join(format!(
+            "{}.{}-{n}{TEMP_EXT}",
+            name.as_str(),
+            std::process::id()
+        ))
+    }
 }
 
 impl BlobStore for FsStore {
@@ -48,9 +73,24 @@ impl BlobStore for FsStore {
         }
     }
 
+    /// Writes the bytes to a temp file and renames it into place.
+    ///
+    /// A bare `fs::write` truncates before it writes, so a reader — or a second
+    /// writer — that arrives mid-call sees a torn blob. Commands have run
+    /// concurrently since they moved off the main thread (P1-1), and the
+    /// truncation window is an entry lost rather than an entry stale. Rename is
+    /// atomic within a directory on every platform the app targets, so a reader
+    /// sees either the old blob or the new one.
     fn put(&self, name: &BlobName, bytes: &[u8]) -> Result<(), StoreError> {
         fs::create_dir_all(&self.dir)?;
-        fs::write(self.path(name), bytes)?;
+        let temp = self.temp_path(name);
+        fs::write(&temp, bytes)?;
+        if let Err(e) = fs::rename(&temp, self.path(name)) {
+            // The blob is untouched, but the scratch file would otherwise stay
+            // in the store's directory for good.
+            fs::remove_file(&temp).ok();
+            return Err(e.into());
+        }
         Ok(())
     }
 
@@ -76,6 +116,16 @@ impl BlobStore for FsStore {
             // reachable, and a caller that counted one would decide the store
             // holds data it cannot read.
             if !file.path().is_file() {
+                continue;
+            }
+            // Scratch from a `put` that was interrupted between its write and
+            // its rename. It is not a blob, and reporting it as one would hand
+            // the layer above a half-written entry to decrypt.
+            if file
+                .file_name()
+                .as_encoded_bytes()
+                .ends_with(TEMP_EXT.as_bytes())
+            {
                 continue;
             }
             // A filename this store could not have written — something not
@@ -128,6 +178,41 @@ mod tests {
         store.put(&name("a.json"), b"first").unwrap();
         store.put(&name("a.json"), b"second").unwrap();
         assert_eq!(store.get(&name("a.json")).unwrap().unwrap(), b"second");
+        fs::remove_dir_all(store.dir()).ok();
+    }
+
+    /// P1-4 guard (green before and after): `put` is a write-then-rename, and
+    /// what that must never do is leave its scratch file in the store — where
+    /// `list` would report it as a blob and the vault above would try to
+    /// decrypt half an entry.
+    #[test]
+    fn put_leaves_no_temp_file_behind() {
+        let store = temp_store();
+        store.put(&name("a.json"), b"first").unwrap();
+        store.put(&name("a.json"), b"second").unwrap();
+
+        assert_eq!(store.list().unwrap(), [name("a.json")]);
+        assert!(
+            !fs::read_dir(store.dir()).unwrap().any(|f| f
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .ends_with(TEMP_EXT)),
+            "a scratch file was left in the store"
+        );
+        fs::remove_dir_all(store.dir()).ok();
+    }
+
+    #[test]
+    fn list_skips_scratch_left_by_an_interrupted_put() {
+        // A `put` that died between its write and its rename: the bytes are on
+        // disk under a name no caller asked for. "Nothing was written" is the
+        // only honest answer, since the rename never happened.
+        let store = temp_store();
+        store.put(&name("a.json"), b"1").unwrap();
+        fs::write(store.dir().join(format!("b.json.999-0{TEMP_EXT}")), b"half").unwrap();
+
+        assert_eq!(store.list().unwrap(), [name("a.json")]);
         fs::remove_dir_all(store.dir()).ok();
     }
 

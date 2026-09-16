@@ -458,6 +458,39 @@ mod tests {
         }
     }
 
+    /// P1-4 guard (green before and after — atomicity is `rename`'s guarantee,
+    /// and racing threads can only ever fail to disprove it). Since P1-1 two
+    /// saves for the same id can interleave, so the store writes to scratch and
+    /// renames; this asserts the invariant that leaves behind, one layer up
+    /// from where the rename happens.
+    #[test]
+    fn save_entry_leaves_no_temp_file() {
+        let store = temp_store();
+        let vault = fake_vault(store.clone());
+        let id = Id::new();
+
+        vault.save_entry(&sample(id)).unwrap();
+        let mut second = sample(id);
+        second.header.title = "Second".into();
+        vault.save_entry(&second).unwrap();
+
+        assert_eq!(
+            vault.get_entry(&id).unwrap().unwrap().header.title,
+            "Second"
+        );
+        assert_eq!(vault.list_entries().unwrap().len(), 1);
+        assert!(
+            !fs::read_dir(store.dir()).unwrap().any(|f| f
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .ends_with(".tmp")),
+            "a scratch file was left in the vault directory"
+        );
+
+        discard(&store);
+    }
+
     #[test]
     fn entries_are_encrypted_at_rest() {
         // The one test here that uses a real vault for the entries themselves:
