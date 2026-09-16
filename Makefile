@@ -1,4 +1,4 @@
-.PHONY: run build test-e2e bindings check-bindings
+.PHONY: run build test rust-test test-e2e bindings check-bindings
 
 # Regenerate first: launching the app against stale bindings is how a broken
 # `invoke` bridge stays invisible (`tsc` passes, the command fails at runtime).
@@ -9,6 +9,13 @@ run: bindings
 # build should fail on binding drift, not quietly paper over it.
 build: check-bindings
 	npm run tauri build
+
+# The whole suite: the Rust unit tests first, since they are the faster
+# feedback and the e2e run has to start a dev server.
+test: rust-test test-e2e
+
+rust-test:
+	cargo test
 
 test-e2e:
 	npm run test:e2e -- $(ARGS)

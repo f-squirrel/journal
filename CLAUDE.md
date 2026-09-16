@@ -46,6 +46,8 @@ the user rather than assuming a migration must be written.
   browser fallback (seeded in-memory data), not the Rust backend — see
   `src/api/entries.ts` below, which also carries the URL fault-injection
   hook the suite uses to make that fallback fail on demand.
+- `make rust-test` — `cargo test` over the whole workspace.
+- `make test` — the whole suite: `rust-test` then `test-e2e`, in that order.
 
 There is no linter configured yet, and no unit tests for the frontend (Rust
 crates have `cargo test` unit tests, e.g. `crates/vault`; `src-tauri`'s
