@@ -15,15 +15,15 @@ pub enum KeyError {
     Encrypt(#[from] age::EncryptError),
     #[error("failed to decrypt vault data: {0}")]
     Decrypt(#[from] age::DecryptError),
-    #[error("wrong passphrase")]
+    #[error("Incorrect passphrase.")]
     WrongPassphrase,
     #[error(
-        "this vault's key file is damaged. Restore it from a backup — the \
+        "This vault's key file is damaged. Restore it from a backup — the \
          entries here cannot be read without it."
     )]
     CorruptKeyFile,
     #[error(
-        "this folder holds journal entries but its key file is missing. \
+        "This folder holds journal entries but its key file is missing. \
          Restore the vault's key file from a backup — creating a new vault \
          here would leave the existing entries unreadable."
     )]
@@ -33,7 +33,7 @@ pub enum KeyError {
     /// [`Keyring::exists`](crate::Keyring::exists) first, which `Vault::open`
     /// does — so this is a wiring bug surfacing as an error rather than as a
     /// fresh key written over nothing.
-    #[error("there is no vault here yet")]
+    #[error("There is no vault here yet.")]
     NoVault,
 }
 

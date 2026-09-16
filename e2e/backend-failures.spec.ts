@@ -52,3 +52,18 @@ test("a failed load does not render stale content", async ({ page }) => {
   await expect(page.getByText("Vault is locked.")).toBeVisible();
   await expect(page.getByText("Started journaling again.")).toHaveCount(0);
 });
+
+test("an unlock failure shows the backend's own message", async ({ page }) => {
+  await page.goto("/?fail=unlock&failMessage=Vault+key+file+is+missing.");
+  await page.getByLabel("Passphrase").fill("password123");
+  await page.getByRole("button", { name: "Sign in" }).click();
+
+  await expect(page.getByText("Vault key file is missing.")).toBeVisible();
+  // Load-bearing: a fix that appends the real error under the old constant
+  // would otherwise pass, and "Incorrect passphrase." is the one failure the
+  // app declares unrecoverable.
+  await expect(page.getByText("Incorrect passphrase.")).toHaveCount(0);
+  // P2-5: reachable only now that `login` rejects. Without the `finally` the
+  // button stays disabled forever and the user is stranded on this screen.
+  await expect(page.getByRole("button", { name: "Sign in" })).toBeEnabled();
+});

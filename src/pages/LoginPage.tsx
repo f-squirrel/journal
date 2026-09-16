@@ -32,13 +32,18 @@ export default function LoginPage() {
 
     setError("");
     setSubmitting(true);
-    const ok = await login(password);
-    setSubmitting(false);
-
-    if (ok) {
+    try {
+      await login(password);
       navigate("/entries");
-    } else {
-      setError("Incorrect passphrase.");
+    } catch (err) {
+      // Shown verbatim: the backend's `#[error]` strings are the user-facing
+      // copy, so there is no mapping table here to fall out of step with them.
+      setError(String(err));
+    } finally {
+      // In a `finally` because `login` now rejects: re-enabling the button
+      // only on the way out of the `try` strands the user on this screen
+      // after any failure.
+      setSubmitting(false);
     }
   }
 

@@ -24,7 +24,7 @@ function toHeader(entry: JournalEntry): EntryHeader {
 interface AppStateContextValue {
   authenticated: boolean;
   entries: EntryHeader[];
-  login: (passphrase: string) => Promise<boolean>;
+  login: (passphrase: string) => Promise<void>;
   logout: () => void;
   loadEntry: (id: string) => Promise<JournalEntry | undefined>;
   upsertEntry: (entry: JournalEntry) => Promise<void>;
@@ -57,14 +57,14 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     () => ({
       authenticated,
       entries,
+      // Rejects with the backend's own message rather than returning a status:
+      // every failure used to arrive at `LoginPage` as `false` and be rendered
+      // as "Incorrect passphrase.", including a missing key file, a damaged
+      // one, or a full disk. Every method on this context signals failure the
+      // same way, so no caller has to remember which one returns what.
       login: async (passphrase) => {
-        try {
-          await unlockVault(passphrase);
-          setAuthenticated(true);
-          return true;
-        } catch {
-          return false;
-        }
+        await unlockVault(passphrase);
+        setAuthenticated(true);
       },
       logout: () => {
         setAuthenticated(false);

@@ -21,7 +21,10 @@ pub enum VaultError {
     Store(#[from] StoreError),
     #[error("failed to (de)serialize entry: {0}")]
     Serde(#[from] serde_json::Error),
-    #[error("vault error: {0}")]
+    /// Transparent on purpose: `journal-key`'s `#[error]` strings are already
+    /// written for the user (P1-2), and a "vault error: " label in front of
+    /// one would read as a developer's note wrapping a sentence.
+    #[error(transparent)]
     Key(#[from] KeyError),
 }
 
@@ -430,6 +433,29 @@ mod tests {
         assert!(Keyring::exists(&*store).unwrap());
 
         discard(&store);
+    }
+
+    /// P1-2: `src-tauri` renders a command's error with `to_string()` and the
+    /// frontend shows that string verbatim, so these are user-facing copy and
+    /// not developer notes. Two properties: the passphrase failure reads like
+    /// copy, and `journal-key`'s own wording reaches the user unprefixed —
+    /// wrapping it in "vault error: …" would put a developer's label in front
+    /// of a sentence written for the user.
+    #[test]
+    fn error_messages_are_user_facing() {
+        assert_eq!(
+            VaultError::from(KeyError::WrongPassphrase).to_string(),
+            "Incorrect passphrase."
+        );
+
+        for err in [KeyError::MissingKeyFile, KeyError::CorruptKeyFile] {
+            let copy = err.to_string();
+            assert!(
+                copy.starts_with(|c: char| c.is_uppercase()),
+                "{copy:?} is shown to the user as written"
+            );
+            assert_eq!(VaultError::from(err).to_string(), copy);
+        }
     }
 
     #[test]
