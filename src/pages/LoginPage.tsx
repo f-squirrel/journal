@@ -5,10 +5,20 @@ import AutoStoriesIcon from "@mui/icons-material/AutoStories";
 import { useAppState } from "../context/AppStateContext";
 import { hasVault } from "../api/entries";
 
+/// The shortest passphrase the create-vault form accepts, stated to the user
+/// in the field's helper text (and asserted against that rendered text by
+/// `e2e/create-vault.spec.ts`, so the number lives here only).
+///
+/// It guards the sealed key file, which since ADR 0007 holds the only copy of
+/// the key every entry is encrypted to: a passphrase short enough to brute
+/// force is the whole journal.
+const MIN_PASSPHRASE_LENGTH = 12;
+
 export default function LoginPage() {
   const { login } = useAppState();
   const navigate = useNavigate();
   const [password, setPassword] = useState("");
+  const [confirmation, setConfirmation] = useState("");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   // null while unknown, which renders the "returning user" copy.
@@ -28,6 +38,21 @@ export default function LoginPage() {
     if (!password) {
       setError("Enter your passphrase to continue.");
       return;
+    }
+
+    // Creating a vault is the one irreversible step this form takes: a typo
+    // becomes the real passphrase, and by the warning below there is nothing
+    // to recover it with. Returning users need neither check — they already
+    // have a passphrase, and its length is not theirs to change here.
+    if (isNewVault) {
+      if (password.length < MIN_PASSPHRASE_LENGTH) {
+        setError(`Use a passphrase of at least ${MIN_PASSPHRASE_LENGTH} characters.`);
+        return;
+      }
+      if (password !== confirmation) {
+        setError("The two passphrases don't match.");
+        return;
+      }
     }
 
     setError("");
@@ -85,12 +110,24 @@ export default function LoginPage() {
               value={password}
               onChange={(event) => setPassword(event.target.value)}
               autoComplete={isNewVault ? "new-password" : "current-password"}
+              helperText={isNewVault ? `Use at least ${MIN_PASSPHRASE_LENGTH} characters.` : undefined}
               fullWidth
             />
             {isNewVault && (
+              <TextField
+                label="Confirm passphrase"
+                type="password"
+                value={confirmation}
+                onChange={(event) => setConfirmation(event.target.value)}
+                autoComplete="new-password"
+                fullWidth
+              />
+            )}
+            {isNewVault && (
               <Alert severity="warning">
-                There's no way to recover this passphrase or your entries if you forget it.
-                Make sure to keep it somewhere safe.
+                There's no way to recover this passphrase or your entries if you forget it:
+                it unlocks the key file your entries are encrypted to, and that key exists
+                nowhere else. Keep it somewhere safe.
               </Alert>
             )}
             {error && <Alert severity="error">{error}</Alert>}
