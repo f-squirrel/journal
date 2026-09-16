@@ -161,6 +161,15 @@ field-name mismatches — a class of bug neither the Playwright suite nor
   `src-tauri` exposes `has_vault`/`unlock`/`lock`, and the entry CRUD
   commands fail with `"vault is locked"` until `unlock` succeeds. The
   `unlock` command calls `Vault::open`.
+  Every command is an `async fn` that runs its storage work through the
+  `blocking` helper (`tauri::async_runtime::spawn_blocking`): a sync
+  `#[tauri::command]` runs on the main thread and freezes the webview,
+  and `#[tauri::command(async)]` on a sync fn just blocks a tokio worker
+  instead. The async boundary stays at this layer — `journal-vault` and
+  the crates below it are synchronous on purpose. `VaultState` keeps the
+  store outside its mutex and `Mutex<Option<Arc<Vault>>>` inside it, so a
+  command clones the `Arc` and drops the guard before doing any I/O, and
+  a panic that poisons the mutex does not wedge the session.
   `Keyring::create`/`Keyring::unlock` are public but `Vault::open` is
   their only caller — keep it that way, since a fresh key written over
   existing entries orphans all of them. `Keyring::exists` is public only

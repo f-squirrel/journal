@@ -1,5 +1,5 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use journal_entry::{Entry, Header, Id};
 use journal_fs_store::FsStore;
@@ -16,65 +16,108 @@ use tauri::{Manager, Runtime, State};
 /// The store outlives the lock state because `has_vault` has to answer before
 /// there is any passphrase to open one with. It is the only copy of "where the
 /// journal is" in the app — the layers below take it as given (ADR 0009).
+///
+/// Only the lock state is behind a mutex: the store never changes after setup,
+/// so `has_vault` needs no lock at all. The `Vault` is an `Arc` so a command
+/// can take a handle to it and drop the guard *before* doing any I/O — a slow
+/// `save_entry` must not hold up `lock` (i.e. logout).
 struct VaultState {
     store: Arc<dyn BlobStore>,
-    vault: Option<Vault>,
+    vault: Mutex<Option<Arc<Vault>>>,
 }
-
-type VaultStateMutex = Mutex<VaultState>;
 
 const LOCKED_ERROR: &str = "vault is locked";
 
-#[tauri::command]
-fn has_vault(state: State<VaultStateMutex>) -> Result<bool, String> {
-    let state = state.lock().map_err(|e| e.to_string())?;
-    Keyring::exists(&*state.store).map_err(|e| e.to_string())
+/// The lock state, recovering the guard from poisoning rather than
+/// propagating it.
+///
+/// A panic while this was held used to wedge the app: every later command saw
+/// a `PoisonError` and refused, for the life of the process, to touch a vault
+/// it still had the key to. What the mutex guards is one `Option` — there is
+/// no half-written invariant a panic could leave behind — so the guard is
+/// worth more than the poison flag.
+fn lock_state(state: &VaultState) -> MutexGuard<'_, Option<Arc<Vault>>> {
+    state.vault.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// A handle to the unlocked vault, or the locked error.
+///
+/// Every CRUD command goes through here, and none of them holds the guard: it
+/// is dropped with the temporary this returns from, so the crypto that follows
+/// runs with the mutex free.
+fn vault(state: &VaultState) -> Result<Arc<Vault>, String> {
+    lock_state(state)
+        .clone()
+        .ok_or_else(|| LOCKED_ERROR.to_string())
+}
+
+/// Runs `work` on Tauri's blocking pool, flattening the join error and the
+/// work's own error into the one string the bridge can carry.
+///
+/// Every command's body is a call to this. A non-`async` `#[tauri::command]`
+/// runs on the main thread and freezes the webview for its duration; the
+/// `(async)` attribute on a sync function moves it onto a tokio *worker*,
+/// which it then blocks. Blocking work belongs on the blocking pool — which
+/// is also why `journal-vault` and the crates below it stay synchronous: the
+/// async boundary belongs here, at the command layer.
+async fn blocking<T, E>(work: impl FnOnce() -> Result<T, E> + Send + 'static) -> Result<T, String>
+where
+    T: Send + 'static,
+    E: std::fmt::Display + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(work)
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-fn unlock(state: State<VaultStateMutex>, passphrase: String) -> Result<(), String> {
+async fn has_vault(state: State<'_, VaultState>) -> Result<bool, String> {
+    let store = state.store.clone();
+    blocking(move || Keyring::exists(&*store)).await
+}
+
+#[tauri::command]
+async fn unlock(state: State<'_, VaultState>, passphrase: String) -> Result<(), String> {
+    let store = state.store.clone();
     let passphrase = SecretString::from(passphrase);
-    let mut state = state.lock().map_err(|e| e.to_string())?;
 
-    let vault = Vault::open(state.store.clone(), &passphrase).map_err(|e| e.to_string())?;
+    // The one command that is actually slow (~1s of scrypt). Opened without
+    // the lock held, then stored.
+    let opened = blocking(move || Vault::open(store, &passphrase)).await?;
 
-    state.vault = Some(vault);
+    *lock_state(&state) = Some(Arc::new(opened));
     Ok(())
 }
 
 #[tauri::command]
-fn lock(state: State<VaultStateMutex>) -> Result<(), String> {
-    let mut state = state.lock().map_err(|e| e.to_string())?;
-    state.vault = None;
+async fn lock(state: State<'_, VaultState>) -> Result<(), String> {
+    *lock_state(&state) = None;
     Ok(())
 }
 
 #[tauri::command]
-fn list_entries(state: State<VaultStateMutex>) -> Result<Vec<Header>, String> {
-    let state = state.lock().map_err(|e| e.to_string())?;
-    let vault = state.vault.as_ref().ok_or(LOCKED_ERROR)?;
-    vault.list_entries().map_err(|e| e.to_string())
+async fn list_entries(state: State<'_, VaultState>) -> Result<Vec<Header>, String> {
+    let vault = vault(&state)?;
+    blocking(move || vault.list_entries()).await
 }
 
 #[tauri::command]
-fn get_entry(state: State<VaultStateMutex>, id: Id) -> Result<Option<Entry>, String> {
-    let state = state.lock().map_err(|e| e.to_string())?;
-    let vault = state.vault.as_ref().ok_or(LOCKED_ERROR)?;
-    vault.get_entry(&id).map_err(|e| e.to_string())
+async fn get_entry(state: State<'_, VaultState>, id: Id) -> Result<Option<Entry>, String> {
+    let vault = vault(&state)?;
+    blocking(move || vault.get_entry(&id)).await
 }
 
 #[tauri::command]
-fn save_entry(state: State<VaultStateMutex>, entry: Entry) -> Result<(), String> {
-    let state = state.lock().map_err(|e| e.to_string())?;
-    let vault = state.vault.as_ref().ok_or(LOCKED_ERROR)?;
-    vault.save_entry(&entry).map_err(|e| e.to_string())
+async fn save_entry(state: State<'_, VaultState>, entry: Entry) -> Result<(), String> {
+    let vault = vault(&state)?;
+    blocking(move || vault.save_entry(&entry)).await
 }
 
 #[tauri::command]
-fn delete_entry(state: State<VaultStateMutex>, id: Id) -> Result<(), String> {
-    let state = state.lock().map_err(|e| e.to_string())?;
-    let vault = state.vault.as_ref().ok_or(LOCKED_ERROR)?;
-    vault.delete_entry(&id).map_err(|e| e.to_string())
+async fn delete_entry(state: State<'_, VaultState>, id: Id) -> Result<(), String> {
+    let vault = vault(&state)?;
+    blocking(move || vault.delete_entry(&id)).await
 }
 
 /// The app's log sink. Without one installed, `log::warn!` anywhere in the
@@ -110,10 +153,10 @@ pub fn run() {
         ])
         .setup(|app| {
             let entries_dir = app.path().app_data_dir()?.join("entries");
-            app.manage(Mutex::new(VaultState {
+            app.manage(VaultState {
                 store: Arc::new(FsStore::new(entries_dir)),
-                vault: None,
-            }));
+                vault: Mutex::new(None),
+            });
 
             if let Some(window) = app.get_webview_window("main") {
                 window.maximize()?;
@@ -128,6 +171,27 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::panic::AssertUnwindSafe;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tauri::utils::acl::ExecutionContext;
+
+    /// A state whose vault is unlocked, over a store in a directory no other
+    /// test in this process will pick. Returned alongside so the caller can
+    /// remove it — opening a vault writes the key blob.
+    fn unlocked_state() -> (VaultState, PathBuf) {
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let dir = std::env::temp_dir().join(format!("journal-cmd-test-{}-{n}", std::process::id()));
+        let store: Arc<dyn BlobStore> = Arc::new(FsStore::new(dir.clone()));
+        let vault = Vault::open(store.clone(), &SecretString::from("passphrase".to_string()))
+            .expect("a fresh store opens as a new vault");
+        let state = VaultState {
+            store,
+            vault: Mutex::new(Some(Arc::new(vault))),
+        };
+        (state, dir)
+    }
 
     /// The defect P0-2 names: with no logger installed `log::max_level()` is
     /// `Off`, which is exactly the switch that makes `log::warn!` compile down
@@ -143,5 +207,83 @@ mod tests {
             .expect("mock app builds");
 
         assert_ne!(log::max_level(), log::LevelFilter::Off);
+    }
+
+    /// The locked error crosses the bridge verbatim: `src/api/entries.ts`
+    /// shows whatever string a command rejects with, so a command called
+    /// before `unlock` has to say so in words the user can act on — and over
+    /// the real IPC wire, which is the half `Vault`'s own tests cannot see.
+    #[test]
+    fn commands_before_unlock_report_the_vault_as_locked() {
+        // A mock context carries no ACL, and app commands are ACL-gated like
+        // any other: without this the command is rejected before it runs and
+        // the test proves nothing about the vault. `tauri-build` generates
+        // the equivalent allowance for the real binary.
+        let mut context = tauri::test::mock_context(tauri::test::noop_assets());
+        context
+            .runtime_authority_mut()
+            .__allow_command("list_entries".into(), ExecutionContext::Local);
+
+        let app = tauri::test::mock_builder()
+            .invoke_handler(tauri::generate_handler![list_entries])
+            .build(context)
+            .expect("mock app builds");
+        app.manage(VaultState {
+            store: Arc::new(FsStore::new(
+                std::env::temp_dir().join("journal-locked-test"),
+            )),
+            vault: Mutex::new(None),
+        });
+        let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("mock webview builds");
+
+        let response = tauri::test::get_ipc_response(
+            &webview,
+            tauri::webview::InvokeRequest {
+                cmd: "list_entries".into(),
+                callback: tauri::ipc::CallbackFn(0),
+                error: tauri::ipc::CallbackFn(1),
+                // The local origin, which is what the ACL allowance above
+                // matches; it is spelled differently per platform.
+                url: if cfg!(any(windows, target_os = "android")) {
+                    "http://tauri.localhost"
+                } else {
+                    "tauri://localhost"
+                }
+                .parse()
+                .unwrap(),
+                body: tauri::ipc::InvokeBody::default(),
+                headers: Default::default(),
+                invoke_key: tauri::test::INVOKE_KEY.to_string(),
+            },
+        );
+
+        assert_eq!(
+            response.expect_err("a locked vault rejects"),
+            serde_json::json!(LOCKED_ERROR)
+        );
+    }
+
+    /// A panic while the lock state is held used to wedge the app for the rest
+    /// of the process: every later command returned the `PoisonError` string
+    /// instead of reading the journal it still had the key to. Recovering the
+    /// guard keeps one panic from costing a session.
+    ///
+    /// Only reproducible under unwinding — the release profile aborts — which
+    /// is why this is a `cargo test` guard and not a claim about production.
+    #[test]
+    fn mutex_poisoning_does_not_wedge_the_vault() {
+        let (state, dir) = unlocked_state();
+
+        let panicked = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            let _guard = state.vault.lock().expect("not poisoned yet");
+            panic!("boom");
+        }));
+
+        assert!(panicked.is_err());
+        assert!(vault(&state).is_ok(), "every later command still works");
+
+        std::fs::remove_dir_all(dir).ok();
     }
 }
