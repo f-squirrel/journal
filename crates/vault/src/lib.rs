@@ -337,6 +337,53 @@ mod tests {
         discard(&store);
     }
 
+    /// P2-2: a single unreadable entry must not fail the whole listing.
+    ///
+    /// A *directory* named like an entry is the reachable case — a sync client
+    /// or a stray `mkdir` is enough — and reading one yields an I/O error
+    /// rather than the decrypt failure the test above covers.
+    #[test]
+    fn list_entries_survives_an_unreadable_entry() {
+        let store = temp_store();
+        let vault = fake_vault(store.clone());
+
+        vault.save_entry(&sample(Id::new())).unwrap();
+        fs::create_dir_all(store.dir().join(blob_name(&Id::new()).as_str())).unwrap();
+
+        let headers = vault.list_entries().unwrap();
+        assert_eq!(headers.len(), 1);
+        assert_eq!(headers[0].title, "Test entry");
+
+        discard(&store);
+    }
+
+    /// The other half of P2-2: a real file the process may not read.
+    #[cfg(unix)]
+    #[test]
+    fn list_entries_survives_an_entry_with_no_read_permission() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let store = temp_store();
+        let vault = fake_vault(store.clone());
+
+        vault.save_entry(&sample(Id::new())).unwrap();
+        let unreadable = store.dir().join(blob_name(&Id::new()).as_str());
+        fs::write(&unreadable, b"whatever").unwrap();
+        fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o000)).unwrap();
+        // Running as root, the mode above is not enforced and the read would
+        // succeed — which would pass this test for the wrong reason.
+        if fs::read(&unreadable).is_ok() {
+            discard(&store);
+            return;
+        }
+
+        let headers = vault.list_entries().unwrap();
+        assert_eq!(headers.len(), 1);
+        assert_eq!(headers[0].title, "Test entry");
+
+        discard(&store);
+    }
+
     #[test]
     fn list_entries_ignores_blobs_that_are_not_entries() {
         // The vault's own key blob shares the store with the entries, so a
