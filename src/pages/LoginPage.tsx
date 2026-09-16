@@ -8,7 +8,6 @@ import { hasVault } from "../api/entries";
 export default function LoginPage() {
   const { login } = useAppState();
   const navigate = useNavigate();
-  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -26,14 +25,6 @@ export default function LoginPage() {
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
 
-    if (!email.trim()) {
-      setError("Enter your email to continue.");
-      return;
-    }
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
-      setError("Enter a valid email address.");
-      return;
-    }
     if (!password) {
       setError("Enter your passphrase to continue.");
       return;
@@ -83,15 +74,6 @@ export default function LoginPage() {
         </Typography>
         <Box component="form" onSubmit={handleSubmit} noValidate>
           <Stack spacing={2} textAlign="left">
-            <TextField
-              label="Email"
-              type="email"
-              value={email}
-              onChange={(event) => setEmail(event.target.value)}
-              placeholder="you@example.com"
-              autoComplete="email"
-              fullWidth
-            />
             <TextField
               label="Passphrase"
               type="password"

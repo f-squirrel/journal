@@ -7,7 +7,6 @@ import { test, expect, type Page } from "@playwright/test";
 
 async function login(page: Page) {
   await page.goto("/");
-  await page.getByLabel("Email").fill("test@example.com");
   await page.getByLabel("Passphrase").fill("password123");
   await page.getByRole("button", { name: "Sign in" }).click();
   await expect(page.getByRole("heading", { name: "Entries" })).toBeVisible();
