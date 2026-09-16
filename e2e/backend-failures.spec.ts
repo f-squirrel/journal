@@ -67,3 +67,35 @@ test("an unlock failure shows the backend's own message", async ({ page }) => {
   // button stays disabled forever and the user is stranded on this screen.
   await expect(page.getByRole("button", { name: "Sign in" })).toBeEnabled();
 });
+
+// `?slow=list` holds `list_entries` for 1200 ms (SLOW_MS in `src/api/entries.ts`),
+// which is what a real unlock-and-list looks like now that commands run off
+// Tauri's main thread. The constant is well clear of Playwright's action time
+// on purpose; don't tighten it.
+
+test("the entry list renders nothing until the backend answers", async ({ page }) => {
+  await login(page, "?slow=list");
+
+  // Fabricated rows inside a real journal: `entries` must start empty rather
+  // than from anything the frontend made up.
+  await expect(page.getByText("First day back")).toHaveCount(0);
+  await expect(page.getByText("First day back")).toBeVisible();
+});
+
+test("a list in flight at logout cannot repopulate the next session", async ({ page }) => {
+  await login(page, "?slow=list");
+
+  // Log out with the listing still in flight, then sit out the delay on the
+  // login screen so the stale promise resolves while logged out.
+  await page.getByRole("button", { name: "Log out" }).click();
+  await expect(page.getByRole("button", { name: "Sign in" })).toBeVisible();
+  await page.waitForTimeout(2000);
+  await expect(page.getByText("First day back")).toHaveCount(0);
+
+  await page.getByLabel("Passphrase").fill("password123");
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await expect(page.getByRole("heading", { name: "Entries" })).toBeVisible();
+  // Without the cancellation guard the previous session's titles are already
+  // back in state, so they render before this listing has answered.
+  await expect(page.getByText("First day back")).toHaveCount(0);
+});

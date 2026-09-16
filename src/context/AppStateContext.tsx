@@ -39,13 +39,25 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!authenticated) return;
+    // Commands run off the main thread, so a `list_entries` can still be in
+    // flight when the user logs out. Without this guard its result lands after
+    // `logout`'s `setEntries([])` and puts the previous session's decrypted
+    // titles back — on the login screen, and again on the next unlock.
+    let cancelled = false;
     listEntries()
-      .then((loaded) => setEntries(loaded))
+      .then((loaded) => {
+        if (cancelled) return;
+        setEntries(loaded);
+      })
       .catch((err) => {
+        if (cancelled) return;
         // No surface to show this on yet; without the log it would be an
         // unhandled rejection, which is how the failures P0-1 is about hid.
         console.error("Failed to list entries:", err);
       });
+    return () => {
+      cancelled = true;
+    };
   }, [authenticated]);
 
   // Stable identity: both EditorPage and PreviewPage key a `useEffect` on

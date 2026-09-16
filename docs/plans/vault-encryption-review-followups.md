@@ -19,7 +19,7 @@ index.
 | P2-1 mutex poisoning | Done — with P1-1 |
 | P2-2 `fs::read` aborts the listing | Done — fixed by the ADR 0009 split; guard tests added |
 | P2-3 corrupt key file vs wrong passphrase | Done — only `DecryptionFailed` is a wrong passphrase |
-| P2-4 `logout` leaves plaintext / races the backend | First half done with P0-1; race guard open |
+| P2-4 `logout` leaves plaintext / races the backend | Done — `setEntries([])` with P0-1, cancellation guard + two e2e cases |
 | P2-5 `setSubmitting(false)` not in a `finally` | Done — with P1-2 |
 
 Landed alongside these, outside the plan: the fault-injection hook and
@@ -1272,10 +1272,15 @@ narrowing the match could not have silently broken the common case.
 > **First half landed 2026-09-09** with P0-1 step 1, as this item
 > predicted: `entries` now initialises to `[]`, `offlineEntries` is gone
 > (the seed lives in `src/api/entries.ts`), and `logout` calls
-> `setEntries([])` before `lockVault()`. **Outstanding:** the
+> `setEntries([])` before `lockVault()`. **Second half landed 2026-09-16**,
+> now that P1-1 has put commands off the main thread: the
 > `let cancelled = false` guard on the `list_entries` effect and both
-> **Prove it** e2e cases — neither is reachable until P1-1 puts commands
-> off the main thread.
+> **Prove it** e2e cases, written as prescribed. Test 2 was watched fail
+> with the guard removed — on its *last* assertion, not the one taken
+> during logout: the login screen does not mount `EntryListPage`, so the
+> stale titles only become visible on the next unlock. The Log out
+> `IconButton` needed no `aria-label`; MUI's `Tooltip` already supplies
+> one from its `title`.
 
 `src/context/AppStateContext.tsx:81`.
 
@@ -1418,8 +1423,9 @@ test exists and why.
 7. ~~**P0-1 step 2** (propagation through
    `upsertEntry`/`removeEntry`/`EditorPage`/`PreviewPage`)~~ — **done
    2026-09-09**, out of sequence, since splitting it from step 1 would have
-   left the fallback unable to fail. P2-4's logout-race guard is **not**
-   done: it needs P1-1's off-main-thread commands to be reachable.
+   left the fallback unable to fail. P2-4's logout-race guard landed
+   separately on 2026-09-16, once P1-1's off-main-thread commands made it
+   reachable.
 8. **P1-3** (confirm field, minimum length, controllable fallback vault
    state and its e2e case, and the `email` decision), absorbing P2-5's
    `finally`.
