@@ -14,7 +14,11 @@ use uuid::Uuid;
 /// on rather than silenced with ts-rs's `no-serde-warnings`, which would
 /// also hide a genuinely dropped `rename`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "../../../src/bindings/"))]
+#[cfg_attr(
+    feature = "ts",
+    derive(ts_rs::TS),
+    ts(export, export_to = "../../../src/bindings/")
+)]
 #[serde(transparent)]
 pub struct Id(Uuid);
 
@@ -45,7 +49,11 @@ impl FromStr for Id {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "../../../src/bindings/"))]
+#[cfg_attr(
+    feature = "ts",
+    derive(ts_rs::TS),
+    ts(export, export_to = "../../../src/bindings/")
+)]
 #[serde(rename_all = "snake_case")]
 pub struct Header {
     pub id: Id,
@@ -54,7 +62,11 @@ pub struct Header {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "../../../src/bindings/"))]
+#[cfg_attr(
+    feature = "ts",
+    derive(ts_rs::TS),
+    ts(export, export_to = "../../../src/bindings/")
+)]
 pub struct Entry {
     #[serde(flatten)]
     pub header: Header,
