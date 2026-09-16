@@ -65,7 +65,7 @@ impl Identity {
     /// passphrase is used at all.
     pub(crate) fn open(sealed: &[u8], passphrase: &SecretString) -> Result<Self, KeyError> {
         let mut serialized =
-            decrypt_with_passphrase(passphrase, sealed).map_err(|_| KeyError::WrongPassphrase)?;
+            decrypt_with_passphrase(passphrase, sealed).map_err(unsealing_failure)?;
         let identity = std::str::from_utf8(&serialized)
             .ok()
             .and_then(|s| age::x25519::Identity::from_str(s).ok());
@@ -122,10 +122,32 @@ fn encrypt_with_passphrase(
 fn decrypt_with_passphrase(
     passphrase: &SecretString,
     ciphertext: &[u8],
-) -> Result<Vec<u8>, KeyError> {
+) -> Result<Vec<u8>, age::DecryptError> {
     let mut identity = age::scrypt::Identity::new(passphrase.clone());
     identity.set_max_work_factor(MAX_WORK_FACTOR);
-    Ok(age::decrypt(&identity, ciphertext)?)
+    age::decrypt(&identity, ciphertext)
+}
+
+/// Whether a failure to unseal the key blob is the passphrase's fault.
+///
+/// Exactly one variant says it is: `age` reports a passphrase that derived the
+/// wrong key as `DecryptionFailed`. Every other variant is a statement about
+/// the *blob* — truncated or empty (`InvalidHeader`), not an age file
+/// (`UnknownFormat`), damaged in transit (`InvalidMac`), or sealed to something
+/// other than a passphrase (`NoMatchingKeys`, which is what an entry blob
+/// written over the key looks like). Reporting any of those as a wrong
+/// passphrase sends the user round a loop no correct passphrase can exit, which
+/// is the whole of P2-3.
+///
+/// `ExcessiveWork` lands here too, and is the one approximation: the key blob
+/// demands more scrypt than [`MAX_WORK_FACTOR`] allows, so it was not written
+/// by this design at all (the factor is pinned, see [`WORK_FACTOR`]) and this
+/// build cannot open it — near enough to damaged, and nowhere near a typo.
+fn unsealing_failure(e: age::DecryptError) -> KeyError {
+    match e {
+        age::DecryptError::DecryptionFailed => KeyError::WrongPassphrase,
+        _ => KeyError::CorruptKeyFile,
+    }
 }
 
 #[cfg(test)]
@@ -188,6 +210,40 @@ mod tests {
             panic!("the wrong passphrase unsealed a key");
         };
         assert!(matches!(err, KeyError::WrongPassphrase), "got {err:?}");
+    }
+
+    #[test]
+    fn a_truncated_key_file_is_not_reported_as_a_wrong_passphrase() {
+        // An interrupted sync, or a crash mid-write: the bytes are not an age
+        // file at all, and no passphrase will ever open them.
+        let mut sealed = Identity::generate().seal(&passphrase("hunter2")).unwrap();
+        sealed.truncate(16);
+
+        let Err(err) = Identity::open(&sealed, &passphrase("hunter2")) else {
+            panic!("a truncated key file unsealed");
+        };
+        assert!(!matches!(err, KeyError::WrongPassphrase), "got {err:?}");
+    }
+
+    #[test]
+    fn a_zero_length_key_file_is_not_reported_as_a_wrong_passphrase() {
+        let Err(err) = Identity::open(b"", &passphrase("hunter2")) else {
+            panic!("an empty key file unsealed");
+        };
+        assert!(!matches!(err, KeyError::WrongPassphrase), "got {err:?}");
+    }
+
+    #[test]
+    fn a_key_file_sealed_to_something_other_than_a_passphrase_is_not_a_wrong_passphrase() {
+        // A well-formed age file with no scrypt stanza — an entry blob written
+        // where the key belongs, say. It is readable age, just not by any
+        // passphrase.
+        let sealed = Identity::generate().encrypt(b"an entry, not a key").unwrap();
+
+        let Err(err) = Identity::open(&sealed, &passphrase("hunter2")) else {
+            panic!("a key file sealed to a keypair unsealed under a passphrase");
+        };
+        assert!(!matches!(err, KeyError::WrongPassphrase), "got {err:?}");
     }
 
     #[test]

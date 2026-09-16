@@ -18,7 +18,7 @@ index.
 | P1-4 non-atomic `save_entry` | Done — `FsStore::put` writes and renames |
 | P2-1 mutex poisoning | Done — with P1-1 |
 | P2-2 `fs::read` aborts the listing | Done — fixed by the ADR 0009 split; guard tests added |
-| P2-3 corrupt key file vs wrong passphrase | Open |
+| P2-3 corrupt key file vs wrong passphrase | Done — only `DecryptionFailed` is a wrong passphrase |
 | P2-4 `logout` leaves plaintext / races the backend | First half done with P0-1; race guard open |
 | P2-5 `setSubmitting(false)` not in a `finally` | Done — with P1-2 |
 
@@ -829,7 +829,7 @@ edited.
 on a new `VaultError::CorruptKeyFile` rather than being called a wrong
 passphrase — P0-4 needed *some* error for it. The rest of P2-3 (matching
 on `age::DecryptError` variants so a truncated or zero-length key file is
-also distinguished) is untouched and still open.
+also distinguished) followed on 2026-09-16.
 
 ---
 
@@ -1215,52 +1215,57 @@ never reported as one. Only directory-level errors (`read_dir` and the
 
 ### P2-3. A corrupt key file is indistinguishable from a wrong passphrase
 
-> **Partly landed 2026-09-09** with P0-4, which needed an error for the
-> case it introduced: a key file that decrypts but does not parse as an
-> `AGE-SECRET-KEY-1…` string is `VaultError::CorruptKeyFile`, not
-> `WrongPassphrase`, covered by the third test below
-> (`a_key_file_that_opens_but_does_not_parse_is_not_a_wrong_passphrase`),
-> landed ahead of the first two. The
-> `age::DecryptError` variant matching is **still open**, so a truncated
-> or zero-length key file is still reported as a wrong passphrase.
+> **Done 2026-09-16.** Landed in two halves: the parse failure with P0-4 on
+> 2026-09-09, and the `age::DecryptError` variant matching — the half this
+> section was written for — on 2026-09-16, in `crates/key` rather than
+> `crates/vault`, which is where ADR 0009 and 0010 moved the key handling.
 
-`crates/vault/src/lib.rs`, `unlock_vault`.
+`crates/key/src/identity.rs`, `Identity::open`.
 
-`unlock_vault` maps *every* decrypt error to `WrongPassphrase`, including
-`age::DecryptError::InvalidHeader` from a truncated or zero-length file
-(e.g. a crash between `create_dir_all` and `fs::write` in `create_vault`,
-or an interrupted sync). The user is then told their passphrase is wrong on
-every attempt, with no hint that the file itself is damaged.
+`Identity::open` mapped *every* decrypt error to `WrongPassphrase`
+(`.map_err(|_| KeyError::WrongPassphrase)`), including
+`age::DecryptError::InvalidHeader` from a truncated or zero-length blob
+(a crash mid-write, or an interrupted sync). The user was then told their
+passphrase was wrong on every attempt, with no hint that the blob itself
+was damaged.
 
-**Fix.** Match on the `age::DecryptError` variant: map only
-`NoMatchingKeys` and `Decryption` to `WrongPassphrase`, and let structural
-errors surface as `VaultError::Decrypt(_)` (or a new
-`VaultError::CorruptKeyFile`) so P1-2 shows a distinct message. Under P0-4
-this is also where a key file that decrypts but does not parse as an
-`AGE-SECRET-KEY-1…` string must land — same class of problem, same message.
-Add a unit test that truncates the key file to a few bytes and asserts the
-error is *not* `WrongPassphrase`.
+**Fixed** by a named `unsealing_failure` mapping beside the two
+passphrase helpers. Only `DecryptionFailed` — the variant `age` reports
+when the passphrase derived the wrong key — is `WrongPassphrase`;
+everything else is `CorruptKeyFile`, whose copy already says "restore it
+from a backup". That is one variant narrower than this section originally
+proposed: `NoMatchingKeys` is *not* a wrong passphrase, because for an
+scrypt identity it means the blob carries no passphrase stanza at all —
+an entry blob written over the key, say. `ExcessiveWork` lands on
+`CorruptKeyFile` too, and is the one approximation; the comment on the
+function says why.
 
-**Prove it.** Two tests in `crates/vault`:
+`decrypt_with_passphrase` now returns `age::DecryptError` rather than
+swallowing it into `KeyError`, so the mapping happens in exactly one
+place.
 
-1. `a_truncated_key_file_is_not_reported_as_a_wrong_passphrase` — create
-   the vault, truncate the key file to a few bytes
-   (`fs::write(&path, b"age")`), unlock with the **correct** passphrase,
-   and assert the error is *not* `VaultError::WrongPassphrase`. Red today:
-   `unlock_vault` maps every `DecryptError`, `InvalidHeader` included,
-   onto `WrongPassphrase`.
+**Proved by** four tests, all red with `got WrongPassphrase` before the
+change and green after, unedited:
+
+1. `a_truncated_key_file_is_not_reported_as_a_wrong_passphrase`
+   (`identity.rs`) — seal a key, `truncate(16)`, unlock with the
+   **correct** passphrase.
 2. `a_zero_length_key_file_is_not_reported_as_a_wrong_passphrase` — the
-   same with `fs::write(&path, b"")`, which is the crash-between-
-   `create_dir_all`-and-`write` case.
+   crash-between-create-and-write case.
+3. `a_key_file_sealed_to_something_other_than_a_passphrase_is_not_a_wrong_passphrase`
+   — well-formed age with no scrypt stanza; this is the `NoMatchingKeys`
+   case above.
+4. `a_damaged_key_blob_is_not_reported_as_a_wrong_passphrase`
+   (`keyring.rs`) — the same through `Keyring::unlock` and a real store,
+   which is the path the user actually meets.
 
-Assert the negative (`!matches!(err, VaultError::WrongPassphrase)`) rather
-than a specific variant, so the test survives whichever of `Decrypt(_)` or
-a new `CorruptKeyFile` you land.
-
-After P0-4, add a third: seal a value that is *not* an
-`AGE-SECRET-KEY-1…` string under the correct passphrase, write it as the
-key file, and assert the same. It decrypts perfectly and still must not be
-called a wrong passphrase.
+Each asserts the negative (`!matches!(err, KeyError::WrongPassphrase)`)
+except the last, which can name `CorruptKeyFile` outright now that the
+mapping exists. The third test from P0-4
+(`a_key_that_opens_but_does_not_parse_is_not_a_wrong_passphrase`) and both
+pre-existing wrong-passphrase tests stayed green throughout — the latter
+two are what pin `DecryptionFailed` as the real passphrase failure, so
+narrowing the match could not have silently broken the common case.
 
 ### P2-4. `logout` leaves plaintext in the renderer, and now races the backend
 
@@ -1405,10 +1410,11 @@ test exists and why.
 5. **P1-1 + P1-4** (`Mutex<Option<Arc<Storage>>>`, the shared `storage`
    helper, `async fn` + `spawn_blocking`, atomic entry writes). Absorbs
    P2-1. No UI changes.
-6. **P0-3 + P2-3 + P1-2** (vault error surface: `open_or_create`,
+6. ~~**P0-3 + P2-3 + P1-2**~~ (vault error surface: `open_or_create`,
    corrupt-vs-wrong-passphrase, user-facing `#[error]` strings, and `login`
    rejecting instead of returning `false`) — these three share one surface
-   and are awkward to split.
+   and are awkward to split. **Done**, though split after all: P0-3 and
+   P1-2 landed 2026-09-09, and P2-3's variant matching on 2026-09-16.
 7. ~~**P0-1 step 2** (propagation through
    `upsertEntry`/`removeEntry`/`EditorPage`/`PreviewPage`)~~ — **done
    2026-09-09**, out of sequence, since splitting it from step 1 would have

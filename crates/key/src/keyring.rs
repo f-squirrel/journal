@@ -157,6 +157,20 @@ mod tests {
     }
 
     #[test]
+    fn a_damaged_key_blob_is_not_reported_as_a_wrong_passphrase() {
+        // The whole path, as the user meets it: the blob in the store is
+        // unreadable, and `unlock` must say so rather than blame a passphrase
+        // that is in fact correct (P2-3).
+        let store = temp_store();
+        Keyring::create(&store, &passphrase("hunter2")).unwrap();
+        store.put(&key_blob(), b"").unwrap();
+
+        let err = Keyring::unlock(&store, &passphrase("hunter2")).unwrap_err();
+        assert!(matches!(err, KeyError::CorruptKeyFile), "got {err:?}");
+        discard(store);
+    }
+
+    #[test]
     fn no_vault_exists_in_an_untouched_store() {
         assert!(!Keyring::exists(&temp_store()).unwrap());
     }
