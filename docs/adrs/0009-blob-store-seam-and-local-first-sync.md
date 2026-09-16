@@ -8,6 +8,12 @@ Amends [0007](0007-cached-x25519-vault-key.md): the sealed key file becomes a
 blob in the store rather than a path at the vault root. The cached-key scheme
 0007 decided is unchanged.
 
+Amended by [0010](0010-name-crates-after-what-they-hold.md): the two upper
+crates here are now named `journal-vault` (what this ADR calls
+`journal-storage`) and `journal-key` (what it calls `journal-vault`), with
+`Storage` renamed `Vault` and `Vault` renamed `Keyring`. The layering and its
+dependency direction are unchanged.
+
 ## Decision
 
 Split persistence into three layers, each owning exactly one fact, and add two
