@@ -2,13 +2,13 @@ use thiserror::Error;
 
 use journal_store::StoreError;
 
-/// Every way opening or using a vault can fail.
+/// Every way opening or using the vault's key can fail.
 ///
 /// The `#[error]` strings are user-facing: `src-tauri` renders commands'
 /// errors with `to_string()` and the frontend shows them verbatim, so a
 /// variant added here is copy, not just a discriminant.
 #[derive(Debug, Error)]
-pub enum VaultError {
+pub enum KeyError {
     #[error("storage error: {0}")]
     Store(#[from] StoreError),
     #[error("failed to encrypt vault data: {0}")]
@@ -29,15 +29,15 @@ pub enum VaultError {
     )]
     MissingKeyFile,
     /// Asked to unlock a vault that was never created. Reachable only by
-    /// calling [`Vault::unlock`](crate::Vault::unlock) without checking
-    /// [`Vault::exists`](crate::Vault::exists) first, which
-    /// `Storage::open` does — so this is a wiring bug surfacing as an error
-    /// rather than as a fresh vault written over nothing.
+    /// calling [`Keyring::unlock`](crate::Keyring::unlock) without checking
+    /// [`Keyring::exists`](crate::Keyring::exists) first, which `Vault::open`
+    /// does — so this is a wiring bug surfacing as an error rather than as a
+    /// fresh key written over nothing.
     #[error("there is no vault here yet")]
     NoVault,
 }
 
-impl VaultError {
+impl KeyError {
     /// The error a [`Cipher`](crate::Cipher) reports for bytes it did not
     /// produce.
     ///

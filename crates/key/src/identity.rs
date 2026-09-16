@@ -4,7 +4,7 @@ use journal_store::BlobName;
 use secrecy::zeroize::Zeroize;
 use secrecy::{ExposeSecret, SecretString};
 
-use crate::VaultError;
+use crate::KeyError;
 
 /// The name of the blob a vault's sealed key lives in.
 ///
@@ -63,36 +63,36 @@ impl Identity {
     ///
     /// The one scrypt operation in the whole design, and the only place the
     /// passphrase is used at all.
-    pub(crate) fn open(sealed: &[u8], passphrase: &SecretString) -> Result<Self, VaultError> {
+    pub(crate) fn open(sealed: &[u8], passphrase: &SecretString) -> Result<Self, KeyError> {
         let mut serialized =
-            decrypt_with_passphrase(passphrase, sealed).map_err(|_| VaultError::WrongPassphrase)?;
+            decrypt_with_passphrase(passphrase, sealed).map_err(|_| KeyError::WrongPassphrase)?;
         let identity = std::str::from_utf8(&serialized)
             .ok()
             .and_then(|s| age::x25519::Identity::from_str(s).ok());
         serialized.zeroize();
         // A key that unseals but does not parse is damaged, not a typo'd
         // passphrase: the passphrase demonstrably worked to get this far.
-        Ok(Self::from_age(identity.ok_or(VaultError::CorruptKeyFile)?))
+        Ok(Self::from_age(identity.ok_or(KeyError::CorruptKeyFile)?))
     }
 
     /// Seals this key under `passphrase`, ready to be stored.
-    pub(crate) fn seal(&self, passphrase: &SecretString) -> Result<Vec<u8>, VaultError> {
+    pub(crate) fn seal(&self, passphrase: &SecretString) -> Result<Vec<u8>, KeyError> {
         let serialized = self.identity.to_string();
         encrypt_with_passphrase(passphrase, serialized.expose_secret().as_bytes())
     }
 
     /// Encrypts `plaintext` to this key. Sub-millisecond: no key derivation,
     /// and nothing in the output for a reader to disagree about.
-    pub(crate) fn encrypt(&self, plaintext: &[u8]) -> Result<Vec<u8>, VaultError> {
+    pub(crate) fn encrypt(&self, plaintext: &[u8]) -> Result<Vec<u8>, KeyError> {
         Ok(age::encrypt(&self.recipient, plaintext)?)
     }
 
-    pub(crate) fn decrypt(&self, ciphertext: &[u8]) -> Result<Vec<u8>, VaultError> {
+    pub(crate) fn decrypt(&self, ciphertext: &[u8]) -> Result<Vec<u8>, KeyError> {
         Ok(age::decrypt(&self.identity, ciphertext)?)
     }
 
     /// The public half, in its `age1…` form. The only part of a key that is
-    /// safe to print, which is what [`Vault`](crate::Vault)'s `Debug` shows.
+    /// safe to print, which is what [`Keyring`](crate::Keyring)'s `Debug` shows.
     pub(crate) fn public(&self) -> String {
         self.recipient.to_string()
     }
@@ -111,7 +111,7 @@ impl Identity {
 fn encrypt_with_passphrase(
     passphrase: &SecretString,
     plaintext: &[u8],
-) -> Result<Vec<u8>, VaultError> {
+) -> Result<Vec<u8>, KeyError> {
     let mut recipient = age::scrypt::Recipient::new(passphrase.clone());
     recipient.set_work_factor(WORK_FACTOR);
     Ok(age::encrypt(&recipient, plaintext)?)
@@ -122,7 +122,7 @@ fn encrypt_with_passphrase(
 fn decrypt_with_passphrase(
     passphrase: &SecretString,
     ciphertext: &[u8],
-) -> Result<Vec<u8>, VaultError> {
+) -> Result<Vec<u8>, KeyError> {
     let mut identity = age::scrypt::Identity::new(passphrase.clone());
     identity.set_max_work_factor(MAX_WORK_FACTOR);
     Ok(age::decrypt(&identity, ciphertext)?)
@@ -187,7 +187,7 @@ mod tests {
         let Err(err) = Identity::open(&sealed, &passphrase("typo")) else {
             panic!("the wrong passphrase unsealed a key");
         };
-        assert!(matches!(err, VaultError::WrongPassphrase), "got {err:?}");
+        assert!(matches!(err, KeyError::WrongPassphrase), "got {err:?}");
     }
 
     #[test]
@@ -200,6 +200,6 @@ mod tests {
         let Err(err) = Identity::open(&sealed, &passphrase("hunter2")) else {
             panic!("a sealed value that is not a key must not open a vault");
         };
-        assert!(matches!(err, VaultError::CorruptKeyFile), "got {err:?}");
+        assert!(matches!(err, KeyError::CorruptKeyFile), "got {err:?}");
     }
 }

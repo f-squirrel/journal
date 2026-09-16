@@ -4,9 +4,16 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-age = { workspace = true }
+chrono = { workspace = true }
+journal-entry = { path = "../entry" }
 journal-store = { path = "../store" }
+journal-key = { path = "../key" }
+log = { workspace = true }
 secrecy = { workspace = true }
+# For the `DeserializeOwned` bound on `Vault::read`; the entry types
+# themselves derive their impls in `journal-entry`.
+serde = { workspace = true }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]

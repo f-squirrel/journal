@@ -26,10 +26,10 @@ secrecy = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 journal-entry = { path = "../crates/entry" }
-journal-storage = { path = "../crates/storage" }
+journal-vault = { path = "../crates/vault" }
 journal-store = { path = "../crates/store" }
 journal-fs-store = { path = "../crates/fs-store" }
-journal-vault = { path = "../crates/vault" }
+journal-key = { path = "../crates/key" }
 
 [dev-dependencies]
 # `tauri::test` runs the real builder over a mock runtime, so the logging

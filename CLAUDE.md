@@ -14,7 +14,7 @@ no external users, and no stability guarantees. Storage formats, crate
 boundaries, command signatures, types, and UI are all open to change when a
 better design shows up; prefer changing the design over layering compatibility
 shims on top of it. Backward compatibility and data migrations are not required
-by default (see the deliberate no-migration decision under `crates/vault`
+by default (see the deliberate no-migration decision under `crates/key`
 below) — if a change would drop existing local data, say so and confirm with
 the user rather than assuming a migration must be written.
 
@@ -48,7 +48,7 @@ the user rather than assuming a migration must be written.
   hook the suite uses to make that fallback fail on demand.
 
 There is no linter configured yet, and no unit tests for the frontend (Rust
-crates have `cargo test` unit tests, e.g. `crates/storage`; `src-tauri`'s
+crates have `cargo test` unit tests, e.g. `crates/vault`; `src-tauri`'s
 run over `tauri::test`'s mock runtime, from its `tauri = { features =
 ["test"] }` dev-dependency). `tsc` (via
 `npm run build`) is the current form of static checking, alongside the
@@ -109,7 +109,7 @@ field-name mismatches — a class of bug neither the Playwright suite nor
   Tauri glue that wires up commands and manages app state (`src/lib.rs`).
   `crates/entry` (`journal-entry`) defines the `Entry` type — an
   `id`/`title`/`updated_at` `Header` (flattened when serialized) plus
-  `markdown` — used by `journal-storage` and the Tauri commands.
+  `markdown` — used by `journal-vault` and the Tauri commands.
   Rust names the wire format and the generated TypeScript follows, so
   these types stay `snake_case` on both sides (`updated_at`, not
   `updatedAt`) — do not add camelCase renames to make the frontend read
@@ -125,42 +125,46 @@ field-name mismatches — a class of bug neither the Playwright suite nor
   `src-tauri` names a concrete store, and the crates between reach for
   `journal-fs-store` as a dev-dependency for their tests. See ADR 0009
   for the three-layer split and the local-first sync plan.
-  `crates/storage` (`journal-storage`) is the layer that knows what an
-  entry *is*: `{id}.json` blob naming, serde, and the header sort. One
-  encrypted blob per entry (see ADR 0003), exposed via the `list_entries`
+  `crates/vault` (`journal-vault`) is the layer that knows what an
+  entry *is*, and is what the rest of the app means by "the vault":
+  `{id}.json` blob naming, serde, and the header sort. One encrypted
+  blob per entry (see ADR 0003), exposed via the `list_entries`
   (returns headers only)/`get_entry`/`save_entry`/`delete_entry`
-  commands. `Storage::open(store, passphrase)` owns the create-or-open
+  commands. `Vault::open(store, passphrase)` owns the create-or-open
   decision — creating a vault only when the store holds neither a key
   blob nor an entry blob, and refusing with `MissingKeyFile` when the key
   is gone but entries remain, so a lost key cannot silently orphan a
-  journal. That decision lives here, not in `journal-vault`, because only
+  journal. That decision lives here, not in `journal-key`, because only
   this layer knows what an entry blob is named; keep it that way rather
-  than branching on `Vault::exists` in a command. Sync is not wired up
+  than branching on `Keyring::exists` in a command. Sync is not wired up
   yet.
-  `crates/vault` (`journal-vault`) encrypts every entry blob at rest with
-  `age`, under an X25519 keypair the vault owns (see ADR 0007, which
-  supersedes 0006, amended by 0009, which moved the key into the store).
-  Four modules: `vault.rs` (`Vault` — the key and nothing else; it owns
-  no directory), `cipher.rs` (`Cipher` — the two-method trait `Storage`
-  depends on, so it never sees key handling and its tests can stand in a
-  fake), `identity.rs` (`Identity` — the keypair, and everything about
-  how it is sealed to and opened from bytes), `error.rs` (`VaultError`,
-  whose `#[error]` strings are user-facing copy).
+  `crates/key` (`journal-key`) encrypts every entry blob at rest with
+  `age`, under an X25519 keypair (see ADR 0007, which supersedes 0006,
+  amended by 0009, which moved the key into the store, and 0010, which
+  renamed these two crates). It holds the key and nothing else — the
+  word "vault" belongs one crate up, on the type that actually holds a
+  user's entries. Four modules: `keyring.rs` (`Keyring` — the key and
+  the sealed blob it lives in; it owns no directory), `cipher.rs`
+  (`Cipher` — the two-method trait `Vault` depends on, so it never sees
+  key handling and its tests can stand in a fake), `identity.rs`
+  (`Identity` — the keypair, and everything about how it is sealed to and
+  opened from bytes), `error.rs` (`KeyError`, whose `#[error]` strings
+  are user-facing copy).
   The passphrase protects **only** the sealed key — a `.vault-key` blob
   in the same store as the entries, so a store synced to another device
   carries the key with it — and is used for exactly one scrypt operation,
   at unlock; entries are encrypted to the keypair and cost
   sub-milliseconds. The passphrase itself is never written to disk nor
-  kept on the `Vault`. The key blob also *is* the canary: a wrong
+  kept on the `Keyring`. The key blob also *is* the canary: a wrong
   passphrase is a failure to open it, which is how the app tells "wrong
   passphrase" from "first run".
   `src-tauri` exposes `has_vault`/`unlock`/`lock`, and the entry CRUD
   commands fail with `"vault is locked"` until `unlock` succeeds. The
-  `unlock` command calls `Storage::open`. `Vault::create`/`Vault::unlock`
-  are public but `Storage::open` is their only caller — keep it that way,
-  since a fresh key written over existing entries orphans all of them.
-  `Vault::exists` is public only so `has_vault` (and thus `LoginPage`)
-  can pick its copy.
+  `unlock` command calls `Vault::open`.
+  `Keyring::create`/`Keyring::unlock` are public but `Vault::open` is
+  their only caller — keep it that way, since a fresh key written over
+  existing entries orphans all of them. `Keyring::exists` is public only
+  so `has_vault` (and thus `LoginPage`) can pick its copy.
   - The key file's scrypt work factor is **pinned** (`WORK_FACTOR` in
     `identity.rs`) rather than benchmarked, and capped on read
     (`MAX_WORK_FACTOR`). `age` otherwise picks the factor by

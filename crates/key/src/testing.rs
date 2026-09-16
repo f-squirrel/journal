@@ -10,9 +10,7 @@ use secrecy::SecretString;
 pub(crate) fn temp_store() -> FsStore {
     static COUNTER: AtomicUsize = AtomicUsize::new(0);
     let n = COUNTER.fetch_add(1, Ordering::SeqCst);
-    FsStore::new(
-        std::env::temp_dir().join(format!("journal-vault-test-{}-{n}", std::process::id())),
-    )
+    FsStore::new(std::env::temp_dir().join(format!("journal-key-test-{}-{n}", std::process::id())))
 }
 
 pub(crate) fn passphrase(s: &str) -> SecretString {

@@ -2476,7 +2476,7 @@ version = "0.1.0"
 dependencies = [
  "journal-entry",
  "journal-fs-store",
- "journal-storage",
+ "journal-key",
  "journal-store",
  "journal-vault",
  "log",
@@ -2508,18 +2508,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "journal-storage"
+name = "journal-key"
 version = "0.1.0"
 dependencies = [
- "chrono",
- "journal-entry",
+ "age",
  "journal-fs-store",
  "journal-store",
- "journal-vault",
- "log",
  "secrecy",
- "serde",
- "serde_json",
  "thiserror 2.0.20",
 ]
 
@@ -2534,10 +2529,15 @@ dependencies = [
 name = "journal-vault"
 version = "0.1.0"
 dependencies = [
- "age",
+ "chrono",
+ "journal-entry",
  "journal-fs-store",
+ "journal-key",
  "journal-store",
+ "log",
  "secrecy",
+ "serde",
+ "serde_json",
  "thiserror 2.0.20",
 ]
 
