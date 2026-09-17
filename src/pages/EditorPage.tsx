@@ -7,6 +7,7 @@ import AppShell from "../components/AppShell";
 import { useAppState } from "../context/AppStateContext";
 import type { JournalEntry } from "../types";
 import { errorMessage } from "../utils/errors";
+import { newEntryId } from "../utils/id";
 
 export default function EditorPage() {
   const { id } = useParams<{ id: string }>();
@@ -76,10 +77,13 @@ export default function EditorPage() {
   }
 
   async function handleSave() {
-    const entryId = existing?.id ?? crypto.randomUUID();
     setSaving(true);
     setSaveError("");
+    // Inside the `try`: generating the id can throw, and a throw out here
+    // would be an unhandled rejection with a Save button that does nothing.
+    let entryId: string;
     try {
+      entryId = existing?.id ?? newEntryId();
       await upsertEntry({
         id: entryId,
         title: title.trim() || "Untitled entry",

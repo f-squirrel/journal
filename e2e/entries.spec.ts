@@ -53,3 +53,18 @@ test("deleting an entry removes it from the list", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Entries" })).toBeVisible();
   await expect(page.getByText("Project ideas")).toHaveCount(0);
 });
+
+test("a new entry saves where crypto.randomUUID is unavailable", async ({ page }) => {
+  // The iOS/macOS Tauri origin (`tauri://localhost`) is not a secure context,
+  // so this secure-context-only API is missing there.
+  await page.addInitScript(() => {
+    // @ts-expect-error deleting a DOM API on purpose
+    delete Object.getPrototypeOf(window.crypto).randomUUID;
+  });
+  await login(page);
+  await page.getByRole("button", { name: "New entry" }).first().click();
+  await page.getByPlaceholder("Entry title").fill("No randomUUID here");
+  await page.getByPlaceholder("Write in Markdown...").fill("# Still saves");
+  await page.getByRole("button", { name: "Save" }).click();
+  await expect(page.getByRole("heading", { name: "No randomUUID here" })).toBeVisible();
+});
