@@ -1,11 +1,10 @@
 import type { ReactElement } from "react";
-import { Badge, Box, IconButton, Stack, Tooltip } from "@mui/material";
+import { Box, IconButton, Stack, Tooltip } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
 import BookIcon from "@mui/icons-material/AutoStories";
 import DarkModeIcon from "@mui/icons-material/DarkMode";
 import LightModeIcon from "@mui/icons-material/LightMode";
 import LogoutIcon from "@mui/icons-material/Logout";
-import NotesIcon from "@mui/icons-material/Notes";
 import { useNavigate } from "react-router-dom";
 import { useAppState } from "../context/AppStateContext";
 import { useColorMode } from "../context/ColorModeContext";
@@ -19,13 +18,11 @@ function RailButton({
   label,
   icon,
   onClick,
-  selected,
   filled,
 }: {
   label: string;
   icon: ReactElement;
   onClick: () => void;
-  selected?: boolean;
   filled?: boolean;
 }) {
   return (
@@ -36,12 +33,7 @@ function RailButton({
         sx={{
           borderRadius: 2,
           color: filled ? "tonal.onPrimaryContainer" : "text.secondary",
-          bgcolor: filled
-            ? "tonal.primaryContainer"
-            : selected
-              ? "action.selected"
-              : "transparent",
-          ...(selected && !filled && { color: "text.primary" }),
+          bgcolor: filled ? "tonal.primaryContainer" : "transparent",
           "&:hover": {
             bgcolor: filled ? "tonal.primaryContainer" : "action.hover",
             ...(filled && { filter: "brightness(0.96)" }),
@@ -59,7 +51,7 @@ function RailButton({
 /// names itself in a tooltip on hover. It lists no Calendar/Media/Map rows,
 /// because there is nothing behind them yet.
 export default function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
-  const { entries, logout } = useAppState();
+  const { logout } = useAppState();
   const { mode, toggleMode } = useColorMode();
   const navigate = useNavigate();
   const newEntry = useNewEntry();
@@ -99,24 +91,6 @@ export default function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
           icon={<AddIcon fontSize="small" />}
           onClick={() => {
             newEntry();
-            onNavigate?.();
-          }}
-        />
-        <RailButton
-          label="All entries"
-          selected
-          icon={
-            <Badge
-              badgeContent={entries.length}
-              color="primary"
-              max={99}
-              sx={{ "& .MuiBadge-badge": { fontSize: 10, height: 16, minWidth: 16 } }}
-            >
-              <NotesIcon fontSize="small" />
-            </Badge>
-          }
-          onClick={() => {
-            navigate("/entries");
             onNavigate?.();
           }}
         />

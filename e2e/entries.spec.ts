@@ -98,7 +98,7 @@ test("an untouched draft is never written", async ({ page }) => {
   await login(page);
   await page.getByRole("button", { name: "New entry" }).first().click();
   // Straight back out without typing: the journal must not grow a blank row.
-  await page.getByRole("button", { name: "All entries" }).click();
+  await page.getByText("Project ideas").click();
   await expect(page.getByTestId("entry-row")).toHaveCount(2);
 });
 
