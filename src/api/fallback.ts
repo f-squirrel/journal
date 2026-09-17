@@ -1,4 +1,5 @@
 import type { EntryHeader, JournalEntry } from "../types";
+import { byUpdatedAt } from "../utils/date";
 
 // The browser fallback: an in-memory vault for `npm run dev` and the
 // Playwright suite, where there is no Rust backend to talk to.
@@ -100,7 +101,10 @@ export function lockVault(): Promise<void> {
 }
 
 export function listEntries(): Promise<EntryHeader[]> {
-  return run("list", () => [...fallbackEntries.values()].map(toHeader));
+  // Sorted because `Vault::list_entries` sorts. The Playwright suite only ever
+  // sees this fallback, so a fallback that returned `Map` insertion order
+  // would let an ordering bug in the app test green.
+  return run("list", () => [...fallbackEntries.values()].map(toHeader).sort(byUpdatedAt));
 }
 
 export function getEntry(id: string): Promise<JournalEntry | null> {

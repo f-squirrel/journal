@@ -64,7 +64,7 @@ export default function EntryListPage() {
                 elevation={0}
                 sx={{ transition: "background-color 0.15s ease", "&:hover": { bgcolor: "tonal.surfaceContainer" } }}
               >
-                <CardActionArea onClick={() => navigate(`/entries/${entry.id}`)}>
+                <CardActionArea data-testid="entry-row" onClick={() => navigate(`/entries/${entry.id}`)}>
                   <CardContent sx={{ py: 2, px: 2.5 }}>
                     <Stack direction="row" justifyContent="space-between" alignItems="flex-start" spacing={2}>
                       <Box sx={{ minWidth: 0 }}>
