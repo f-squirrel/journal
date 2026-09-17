@@ -238,7 +238,9 @@ mod tests {
         // A well-formed age file with no scrypt stanza — an entry blob written
         // where the key belongs, say. It is readable age, just not by any
         // passphrase.
-        let sealed = Identity::generate().encrypt(b"an entry, not a key").unwrap();
+        let sealed = Identity::generate()
+            .encrypt(b"an entry, not a key")
+            .unwrap();
 
         let Err(err) = Identity::open(&sealed, &passphrase("hunter2")) else {
             panic!("a key file sealed to a keypair unsealed under a passphrase");
