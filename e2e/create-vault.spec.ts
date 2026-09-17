@@ -57,3 +57,46 @@ test("a matching pair creates the vault", async ({ page }) => {
 
   await expect(page.getByRole("heading", { name: "Entries" })).toBeVisible();
 });
+
+// The two cases below are about the window *before* `has_vault` answers, when
+// the page does not yet know which of the two forms it is. `?slow=has` and
+// `?fail=has` drive the fallback's `hasVault` (see R0-1): a form that is live
+// during that window takes the sign-in path, skipping the confirmation and the
+// minimum-length check, and creates a vault sealed with whatever was typed.
+
+test("the form cannot be submitted before the vault check answers", async ({ page }) => {
+  await page.goto("/?vault=new&slow=has");
+
+  await page.getByLabel("Passphrase", { exact: true }).fill("x");
+
+  // Named rather than bare: a failed check renders a second button ("Try
+  // again") beside the submit one, and past the login screen there are several.
+  await expect(page.getByRole("button", { name: "Checking" })).toBeDisabled();
+  await expect(page.getByRole("heading", { name: "Entries" })).toHaveCount(0);
+});
+
+test("a failed vault check does not create a vault", async ({ page }) => {
+  await page.goto("/?vault=new&fail=has");
+
+  // A rejection leaves the answer unknown until the retry succeeds, so the
+  // guards must stay on: pressing Enter is how a password manager submits.
+  await page.getByLabel("Passphrase", { exact: true }).fill("x");
+  await page.getByLabel("Passphrase", { exact: true }).press("Enter");
+
+  await expect(page.getByRole("heading", { name: "Entries" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Checking" })).toBeDisabled();
+});
+
+test("an unanswered vault check blocks a programmatic submit", async ({ page }) => {
+  await page.goto("/?vault=new&fail=has");
+
+  // `requestSubmit()` ignores the disabled submit button, which is how an
+  // engine that treats a disabled default button as absent behaves on Enter.
+  await page.getByLabel("Passphrase", { exact: true }).fill("x".repeat(20));
+  await page.evaluate(() => document.querySelector("form")?.requestSubmit());
+
+  await expect(page.getByRole("heading", { name: "Entries" })).toHaveCount(0);
+  // Not just "no vault": the confirm field was never rendered, so without the
+  // guard a returning user is told their passphrases don't match.
+  await expect(page.getByText("The two passphrases don't match.")).toHaveCount(0);
+});

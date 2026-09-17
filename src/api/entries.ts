@@ -36,7 +36,7 @@ function toHeader(entry: JournalEntry): EntryHeader {
 // `invoke` bridge, so backend failures have to be injectable from the URL:
 //
 //   ?vault=new          hasVault() resolves false, giving the create-vault UI
-//   ?fail=<ops>         comma-separated: unlock, list, get, save, delete
+//   ?fail=<ops>         comma-separated: has, unlock, list, get, save, delete
 //   ?failMessage=<text> the rejection message (default "Injected fault.")
 //   ?slow=<ops>         the named ops resolve after SLOW_MS
 //
@@ -45,7 +45,7 @@ function toHeader(entry: JournalEntry): EntryHeader {
 // module load and only when there is no Tauri backend, so a shipped build
 // cannot be steered by a URL.
 
-type Op = "unlock" | "list" | "get" | "save" | "delete";
+type Op = "has" | "unlock" | "list" | "get" | "save" | "delete";
 
 const SLOW_MS = 1200;
 
@@ -89,7 +89,7 @@ async function fallback<T>(op: Op, run: () => T): Promise<T> {
 // --- commands --------------------------------------------------------------
 
 export function hasVault(): Promise<boolean> {
-  if (!backend) return Promise.resolve(!faults.newVault);
+  if (!backend) return fallback("has", () => !faults.newVault);
   return invoke("has_vault");
 }
 

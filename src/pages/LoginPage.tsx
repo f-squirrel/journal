@@ -1,6 +1,16 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
-import { Alert, Avatar, Box, Button, Paper, Stack, TextField, Typography } from "@mui/material";
+import {
+  Alert,
+  Avatar,
+  Box,
+  Button,
+  CircularProgress,
+  Paper,
+  Stack,
+  TextField,
+  Typography,
+} from "@mui/material";
 import AutoStoriesIcon from "@mui/icons-material/AutoStories";
 import { useAppState } from "../context/AppStateContext";
 import { hasVault } from "../api/entries";
@@ -21,19 +31,59 @@ export default function LoginPage() {
   const [confirmation, setConfirmation] = useState("");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  // null while unknown, which renders the "returning user" copy.
+  // null until `has_vault` answers, and for as long as it keeps rejecting:
+  // "unknown", never "returning user".
   const [vaultExists, setVaultExists] = useState<boolean | null>(null);
+  // Bumped by "Try again". Without a way to re-run the check, one rejection
+  // leaves `vaultExists` null — and the form disabled — for the life of the
+  // page, with a restart as the only way back into the app.
+  const [checkAttempt, setCheckAttempt] = useState(0);
+  const [checkFailed, setCheckFailed] = useState(false);
 
   useEffect(() => {
+    let cancelled = false;
     hasVault()
-      .then(setVaultExists)
-      .catch((err) => console.error("Failed to check for a vault:", err));
-  }, []);
+      .then((exists) => {
+        if (cancelled) return;
+        setCheckFailed(false);
+        setError("");
+        setVaultExists(exists);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        console.error("Failed to check for a vault:", err);
+        // Told, not just logged: a user who cannot be told whether a vault
+        // exists is handed a form that stays disabled, and needs to know why.
+        setCheckFailed(true);
+        setError("Couldn't check for an existing journal.");
+      });
+    // Cancelled like `AppStateContext`'s loads: with a retry the effect can
+    // re-run, and a slow first attempt must not land after a second one.
+    return () => {
+      cancelled = true;
+    };
+  }, [checkAttempt]);
 
-  const isNewVault = vaultExists === false;
+  // What `handleSubmit` enforces: strict unless we know a vault exists, so a
+  // `hasVault()` rejection fails safe — creating one is the irreversible
+  // branch, and it must not be taken with the checks off.
+  const isNewVault = vaultExists !== true;
+  // What the form *shows*: neither branch until we actually know. Letting
+  // `isNewVault` drive the rendering would flash the confirm field, the
+  // warning and "Create vault" on every launch until `has_vault` answers,
+  // which trains a returning user to ignore the one warning that matters.
+  const pending = vaultExists === null;
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
+
+    // Not redundant with the disabled button: `form.requestSubmit()` ignores
+    // that attribute, as does any engine that treats a disabled default button
+    // as absent and falls back to implicit submission. The invariant belongs
+    // in the handler, not in a rendered attribute.
+    if (pending) {
+      return;
+    }
 
     if (!password) {
       setError("Enter your passphrase to continue.");
@@ -43,7 +93,8 @@ export default function LoginPage() {
     // Creating a vault is the one irreversible step this form takes: a typo
     // becomes the real passphrase, and by the warning below there is nothing
     // to recover it with. Returning users need neither check — they already
-    // have a passphrase, and its length is not theirs to change here.
+    // have a passphrase, and its length is not theirs to change here. Only a
+    // *known* existing vault skips them, so an unanswered check is strict.
     if (isNewVault) {
       if (password.length < MIN_PASSPHRASE_LENGTH) {
         setError(`Use a passphrase of at least ${MIN_PASSPHRASE_LENGTH} characters.`);
@@ -100,7 +151,11 @@ export default function LoginPage() {
           Journal
         </Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-          {isNewVault ? "Create a passphrase to secure your journal" : "Sign in to continue"}
+          {pending
+            ? "Checking your journal…"
+            : isNewVault
+              ? "Create a passphrase to secure your journal"
+              : "Sign in to continue"}
         </Typography>
         <Box component="form" onSubmit={handleSubmit} noValidate>
           <Stack spacing={2} textAlign="left">
@@ -109,11 +164,13 @@ export default function LoginPage() {
               type="password"
               value={password}
               onChange={(event) => setPassword(event.target.value)}
-              autoComplete={isNewVault ? "new-password" : "current-password"}
-              helperText={isNewVault ? `Use at least ${MIN_PASSPHRASE_LENGTH} characters.` : undefined}
+              autoComplete={pending ? "off" : isNewVault ? "new-password" : "current-password"}
+              helperText={
+                pending || !isNewVault ? undefined : `Use at least ${MIN_PASSPHRASE_LENGTH} characters.`
+              }
               fullWidth
             />
-            {isNewVault && (
+            {!pending && isNewVault && (
               <TextField
                 label="Confirm passphrase"
                 type="password"
@@ -123,16 +180,50 @@ export default function LoginPage() {
                 fullWidth
               />
             )}
-            {isNewVault && (
+            {!pending && isNewVault && (
               <Alert severity="warning">
                 There's no way to recover this passphrase or your entries if you forget it:
                 it unlocks the key file your entries are encrypted to, and that key exists
                 nowhere else. Keep it somewhere safe.
               </Alert>
             )}
-            {error && <Alert severity="error">{error}</Alert>}
-            <Button type="submit" variant="contained" size="large" disableElevation fullWidth disabled={submitting}>
-              {isNewVault ? "Create vault" : "Sign in"}
+            {error && (
+              <Alert
+                severity="error"
+                action={
+                  checkFailed ? (
+                    // Must not be a submit button: it sits above the submit one
+                    // in the Stack, so it would become the form's default
+                    // button. MUI's ButtonBase defaults to type="button".
+                    <Button
+                      color="inherit"
+                      size="small"
+                      onClick={() => {
+                        setError("");
+                        setCheckAttempt((n) => n + 1);
+                      }}
+                    >
+                      Try again
+                    </Button>
+                  ) : undefined
+                }
+              >
+                {error}
+              </Alert>
+            )}
+            {/* Disabled while the answer is unknown, so the form cannot be
+                submitted against an unknown vault state at all. The fields
+                stay live: typing early is fine, submitting early is not. */}
+            <Button
+              type="submit"
+              variant="contained"
+              size="large"
+              disableElevation
+              fullWidth
+              disabled={submitting || pending}
+              startIcon={pending ? <CircularProgress size={16} color="inherit" /> : undefined}
+            >
+              {pending ? "Checking…" : isNewVault ? "Create vault" : "Sign in"}
             </Button>
           </Stack>
         </Box>
