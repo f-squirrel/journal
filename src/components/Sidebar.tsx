@@ -1,13 +1,5 @@
-import {
-  Box,
-  Button,
-  List,
-  ListItemButton,
-  ListItemIcon,
-  ListItemText,
-  Stack,
-  Typography,
-} from "@mui/material";
+import type { ReactElement } from "react";
+import { Badge, Box, IconButton, Stack, Tooltip } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
 import BookIcon from "@mui/icons-material/AutoStories";
 import DarkModeIcon from "@mui/icons-material/DarkMode";
@@ -20,9 +12,52 @@ import { useColorMode } from "../context/ColorModeContext";
 import { useNewEntry } from "../hooks/useNewEntry";
 import { HEADER_HEIGHT, SIDEBAR_WIDTH } from "./chrome";
 
+/// One rail button: an icon, and the label only on hover. The label is also
+/// the accessible name, so the button is still addressable by the name a user
+/// reads ("New entry", "Log out") even though nothing is drawn beside it.
+function RailButton({
+  label,
+  icon,
+  onClick,
+  selected,
+  filled,
+}: {
+  label: string;
+  icon: ReactElement;
+  onClick: () => void;
+  selected?: boolean;
+  filled?: boolean;
+}) {
+  return (
+    <Tooltip title={label} placement="right" arrow>
+      <IconButton
+        aria-label={label}
+        onClick={onClick}
+        sx={{
+          borderRadius: 2,
+          color: filled ? "tonal.onPrimaryContainer" : "text.secondary",
+          bgcolor: filled
+            ? "tonal.primaryContainer"
+            : selected
+              ? "action.selected"
+              : "transparent",
+          ...(selected && !filled && { color: "text.primary" }),
+          "&:hover": {
+            bgcolor: filled ? "tonal.primaryContainer" : "action.hover",
+            ...(filled && { filter: "brightness(0.96)" }),
+          },
+        }}
+      >
+        {icon}
+      </IconButton>
+    </Tooltip>
+  );
+}
+
 /// The leftmost column: the journal's identity, the one view there is, and the
-/// session controls. It lists no Calendar/Media/Map rows, because there is
-/// nothing behind them yet.
+/// session controls, collapsed to an icon rail one button wide — each button
+/// names itself in a tooltip on hover. It lists no Calendar/Media/Map rows,
+/// because there is nothing behind them yet.
 export default function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const { entries, logout } = useAppState();
   const { mode, toggleMode } = useColorMode();
@@ -31,6 +66,7 @@ export default function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
 
   return (
     <Stack
+      alignItems="center"
       sx={{
         width: SIDEBAR_WIDTH,
         flexShrink: 0,
@@ -41,78 +77,67 @@ export default function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
       }}
     >
       <Stack
-        direction="row"
-        spacing={1}
         alignItems="center"
+        justifyContent="center"
         sx={{
-          px: 2,
+          width: "100%",
           height: HEADER_HEIGHT,
           flexShrink: 0,
           borderBottom: 1,
           borderColor: "divider",
         }}
       >
-        <BookIcon color="primary" fontSize="small" />
-        <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
-          Journal
-        </Typography>
+        <Tooltip title="Journal" placement="right" arrow>
+          <BookIcon color="primary" fontSize="small" />
+        </Tooltip>
       </Stack>
 
-      <Button
-        variant="contained"
-        disableElevation
-        fullWidth
-        startIcon={<AddIcon />}
-        onClick={() => {
-          newEntry();
-          onNavigate?.();
-        }}
-        sx={{ mt: 1.5, mx: 1.5, mb: 2, width: "auto" }}
-      >
-        New entry
-      </Button>
-
-      <List disablePadding sx={{ flex: 1, px: 1.5 }}>
-        <ListItemButton
+      <Stack alignItems="center" spacing={0.5} sx={{ flex: 1, pt: 1.5 }}>
+        <RailButton
+          label="New entry"
+          filled
+          icon={<AddIcon fontSize="small" />}
+          onClick={() => {
+            newEntry();
+            onNavigate?.();
+          }}
+        />
+        <RailButton
+          label="All entries"
           selected
+          icon={
+            <Badge
+              badgeContent={entries.length}
+              color="primary"
+              max={99}
+              sx={{ "& .MuiBadge-badge": { fontSize: 10, height: 16, minWidth: 16 } }}
+            >
+              <NotesIcon fontSize="small" />
+            </Badge>
+          }
           onClick={() => {
             navigate("/entries");
             onNavigate?.();
           }}
-        >
-          <ListItemIcon sx={{ minWidth: 34 }}>
-            <NotesIcon fontSize="small" />
-          </ListItemIcon>
-          <ListItemText primary="All entries" primaryTypographyProps={{ fontSize: 14, fontWeight: 600 }} />
-          <Typography variant="caption" color="text.secondary">
-            {entries.length}
-          </Typography>
-        </ListItemButton>
-      </List>
+        />
+      </Stack>
 
-      <Box sx={{ borderTop: 1, borderColor: "divider", p: 1.5 }}>
-        <List disablePadding>
-          <ListItemButton onClick={toggleMode}>
-            <ListItemIcon sx={{ minWidth: 34 }}>
-              {mode === "dark" ? <LightModeIcon fontSize="small" /> : <DarkModeIcon fontSize="small" />}
-            </ListItemIcon>
-            <ListItemText
-              primary={mode === "dark" ? "Light mode" : "Dark mode"}
-              primaryTypographyProps={{ fontSize: 14 }}
-            />
-          </ListItemButton>
-          <ListItemButton
+      <Box sx={{ width: "100%", borderTop: 1, borderColor: "divider", py: 1 }}>
+        <Stack alignItems="center" spacing={0.5}>
+          <RailButton
+            label={mode === "dark" ? "Light mode" : "Dark mode"}
+            icon={mode === "dark" ? <LightModeIcon fontSize="small" /> : <DarkModeIcon fontSize="small" />}
+            onClick={toggleMode}
+          />
+          <RailButton
+            label="Log out"
+            icon={<LogoutIcon fontSize="small" />}
             onClick={() => {
               logout();
               navigate("/login");
             }}
-          >
-            <ListItemIcon sx={{ minWidth: 34 }}>
-              <LogoutIcon fontSize="small" />
-            </ListItemIcon>
-            <ListItemText primary="Log out" primaryTypographyProps={{ fontSize: 14 }} />
-          </ListItemButton>
-        </List>
+          />
+        </Stack>
       </Box>
     </Stack>
   );

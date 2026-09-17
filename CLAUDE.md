@@ -111,9 +111,14 @@ field-name mismatches — a class of bug neither the Playwright suite nor
   - The UI is one screen, in the shape of Day One's: a sidebar, the entry
     list, and the entry pane. `components/` holds the shell
     (`JournalLayout`, `Sidebar`, `EntryList`) and `pages/` the route
-    elements (`LoginPage`, `EntryPane`). Below the `md` breakpoint the
-    three columns become one — the sidebar moves into a drawer and the
-    list gives way to the pane — so check a change at phone width too.
+    elements (`LoginPage`, `EntryPane`). The sidebar is an icon rail one
+    button wide (`SIDEBAR_WIDTH` in `components/chrome.ts`): each control
+    is an `IconButton` whose label lives in a `Tooltip` on hover and in
+    `aria-label`, which is what keeps it addressable by name (the
+    Playwright suite clicks "New entry" and "Log out"). Below the `md`
+    breakpoint the three columns become one — the rail moves into a drawer
+    and the list gives way to the pane — so check a change at phone width
+    too.
     List rows carry a title and a time but no excerpt on purpose:
     `list_entries` returns headers without `markdown`, and filling
     excerpts would decrypt the whole journal to draw the list. Rows sort
