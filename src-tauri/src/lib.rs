@@ -1,4 +1,5 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use journal_entry::{Entry, Header, Id};
@@ -21,9 +22,16 @@ use tauri::{Manager, Runtime, State};
 /// so `has_vault` needs no lock at all. The `Vault` is an `Arc` so a command
 /// can take a handle to it and drop the guard *before* doing any I/O — a slow
 /// `save_entry` must not hold up `lock` (i.e. logout).
+///
+/// `generation` is what makes that safe for `unlock`, which also runs its work
+/// with the guard free: it counts every change of intent about the lock state,
+/// so an `unlock` that finishes after a `lock` can tell that it is publishing
+/// a vault nobody asked for any more. See [`begin_unlock`] and
+/// [`install_vault`].
 struct VaultState {
     store: Arc<dyn BlobStore>,
     vault: Mutex<Option<Arc<Vault>>>,
+    generation: AtomicU64,
 }
 
 const LOCKED_ERROR: &str = "vault is locked";
@@ -49,6 +57,48 @@ fn vault(state: &VaultState) -> Result<Arc<Vault>, String> {
     lock_state(state)
         .clone()
         .ok_or_else(|| LOCKED_ERROR.to_string())
+}
+
+/// Claims a generation for an `unlock` that is about to start.
+///
+/// Paired with [`install_vault`], which publishes the result only if this is
+/// still the current generation when the open finishes.
+fn begin_unlock(state: &VaultState) -> u64 {
+    state.generation.fetch_add(1, Ordering::SeqCst) + 1
+}
+
+/// Publishes a freshly opened vault, unless the intent it was opened under is
+/// stale.
+///
+/// `unlock` spends ~1s in scrypt with the guard free, and `lock` is a separate
+/// command that can land inside that window. Installing unconditionally would
+/// put the vault back *after* an explicit logout, leaving the session unlocked
+/// with the entries one command away.
+///
+/// A stale generation is an error rather than an `Ok(())`, because the
+/// frontend sets `authenticated = true` on success: reporting success over a
+/// state this call just decided to leave `None` would produce a signed-in
+/// screen where every command answers [`LOCKED_ERROR`]. Which is also the
+/// honest message — the vault is locked, because the user locked it. `Ok`
+/// therefore means, and only means, that the state now holds the vault this
+/// call opened.
+fn install_vault(state: &VaultState, generation: u64, opened: Vault) -> Result<(), String> {
+    let mut vault = lock_state(state);
+    if state.generation.load(Ordering::SeqCst) != generation {
+        return Err(LOCKED_ERROR.to_string());
+    }
+    *vault = Some(Arc::new(opened));
+    Ok(())
+}
+
+/// Clears the lock state, and invalidates any `unlock` still in flight.
+///
+/// The bump happens under the guard so that it cannot fall between an
+/// `install_vault`'s check and its write.
+fn lock_vault(state: &VaultState) {
+    let mut vault = lock_state(state);
+    state.generation.fetch_add(1, Ordering::SeqCst);
+    *vault = None;
 }
 
 /// Runs `work` on Tauri's blocking pool, flattening the join error and the
@@ -83,16 +133,17 @@ async fn unlock(state: State<'_, VaultState>, passphrase: String) -> Result<(), 
     let passphrase = SecretString::from(passphrase);
 
     // The one command that is actually slow (~1s of scrypt). Opened without
-    // the lock held, then stored.
+    // the lock held, then stored — but only if nothing changed the lock state
+    // meanwhile.
+    let generation = begin_unlock(&state);
     let opened = blocking(move || Vault::open(store, &passphrase)).await?;
 
-    *lock_state(&state) = Some(Arc::new(opened));
-    Ok(())
+    install_vault(&state, generation, opened)
 }
 
 #[tauri::command]
 async fn lock(state: State<'_, VaultState>) -> Result<(), String> {
-    *lock_state(&state) = None;
+    lock_vault(&state);
     Ok(())
 }
 
@@ -156,6 +207,7 @@ pub fn run() {
             app.manage(VaultState {
                 store: Arc::new(FsStore::new(entries_dir)),
                 vault: Mutex::new(None),
+                generation: AtomicU64::new(0),
             });
 
             if let Some(window) = app.get_webview_window("main") {
@@ -189,6 +241,7 @@ mod tests {
         let state = VaultState {
             store,
             vault: Mutex::new(Some(Arc::new(vault))),
+            generation: AtomicU64::new(0),
         };
         (state, dir)
     }
@@ -233,6 +286,7 @@ mod tests {
                 std::env::temp_dir().join("journal-locked-test"),
             )),
             vault: Mutex::new(None),
+            generation: AtomicU64::new(0),
         });
         let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
             .build()
@@ -263,6 +317,61 @@ mod tests {
             response.expect_err("a locked vault rejects"),
             serde_json::json!(LOCKED_ERROR)
         );
+    }
+
+    /// R1-2: `unlock` opens the vault with the guard free, so a `lock` — an
+    /// explicit logout — can land inside its ~1s of scrypt. Publishing the
+    /// result unconditionally would put the vault back afterwards, leaving the
+    /// session unlocked with every entry one command away.
+    ///
+    /// The interleaving itself is not deterministically reproducible, and a
+    /// sleep-based test of it would only generate flakes, so what is tested is
+    /// the mechanism that closes it: the generation an `unlock` claimed, the
+    /// real `lock` path bumping it, and the install refusing.
+    #[test]
+    fn unlock_does_not_install_a_vault_locked_during_the_open() {
+        let (state, dir) = unlocked_state();
+        let generation = begin_unlock(&state);
+        let opened = Vault::open(
+            state.store.clone(),
+            &SecretString::from("passphrase".to_string()),
+        )
+        .expect("the existing vault opens again");
+
+        // The logout that lands while the open above was running.
+        lock_vault(&state);
+
+        assert_eq!(
+            install_vault(&state, generation, opened),
+            Err(LOCKED_ERROR.to_string()),
+            "a stale unlock reported success"
+        );
+        assert!(
+            vault(&state).is_err(),
+            "the vault was published over an explicit lock"
+        );
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// The other half of the check above, so that it is a check and not a
+    /// refusal to ever unlock: an `unlock` nothing interrupted still publishes.
+    #[test]
+    fn unlock_installs_the_vault_it_opened() {
+        let (state, dir) = unlocked_state();
+        lock_vault(&state);
+
+        let generation = begin_unlock(&state);
+        let opened = Vault::open(
+            state.store.clone(),
+            &SecretString::from("passphrase".to_string()),
+        )
+        .expect("the existing vault opens again");
+
+        assert_eq!(install_vault(&state, generation, opened), Ok(()));
+        assert!(vault(&state).is_ok(), "the unlock did not take");
+
+        std::fs::remove_dir_all(dir).ok();
     }
 
     /// A panic while the lock state is held used to wedge the app for the rest
