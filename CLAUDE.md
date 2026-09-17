@@ -68,7 +68,13 @@ field-name mismatches — a class of bug neither the Playwright suite nor
   with `react-router-dom` using `HashRouter` (required for compatibility with
   Tauri's static asset serving — do not switch to `BrowserRouter`).
   - `App.tsx` defines routes and gates authenticated-only routes via a
-    `RequireAuth` wrapper that reads from `AppStateContext`.
+    `RequireAuth` wrapper that reads from `AppStateContext`. The
+    authenticated routes sit under one layout route
+    (`components/JournalLayout.tsx`), so the sidebar and entry list mount
+    once and keep their scroll position as entries are opened; `/entries`
+    renders the empty pane and `/entries/:id` the entry. There is no
+    editor route — `/entries/:id/edit` only redirects (see the UI section
+    below).
   - `context/AppStateContext.tsx` is the single source of app state right
     now: auth flag and the list of entry headers (`list_entries` returns
     `Header`, not the full entry). `loadEntry(id)` fetches a full entry via
@@ -79,10 +85,10 @@ field-name mismatches — a class of bug neither the Playwright suite nor
     roll that update back and reject if the backend refuses, letting the
     page keep the draft and show the error rather than reporting a save
     that never reached disk. `loadEntry`'s identity must stay stable
-    (`useCallback`, no deps) — both `EditorPage` and `PreviewPage` key a
-    `useEffect` on it, so rebuilding it on every `entries` change re-runs
-    those effects and wipes the editor's draft. All pages read/write
-    through `useAppState()` rather than local state or prop drilling.
+    (`useCallback`, no deps) — `EntryPane` keys a `useEffect` on it, so
+    rebuilding it on every `entries` change re-runs that effect and wipes
+    the draft. All pages read/write through `useAppState()` rather than
+    local state or prop drilling.
   - `src/api/entries.ts` is the only module that knows whether a Rust
     backend exists: inside Tauri every call goes over `invoke` and
     rejections propagate untouched; outside it (`npm run dev`, Playwright)
@@ -102,8 +108,28 @@ field-name mismatches — a class of bug neither the Playwright suite nor
     `make check-no-fallback` is what holds all of this.
   - `theme.ts` provides `getTheme(mode)`, switched between light/dark based
     on `prefers-color-scheme` in `App.tsx`.
-  - `pages/` holds one component per route (Login, EntryList, Preview,
-    Editor); `components/AppShell.tsx` is the shared page chrome.
+  - The UI is one screen, in the shape of Day One's: a sidebar, the entry
+    list, and the entry pane. `components/` holds the shell
+    (`JournalLayout`, `Sidebar`, `EntryList`) and `pages/` the route
+    elements (`LoginPage`, `EntryPane`). Below the `md` breakpoint the
+    three columns become one — the sidebar moves into a drawer and the
+    list gives way to the pane — so check a change at phone width too.
+    List rows carry a title and a time but no excerpt on purpose:
+    `list_entries` returns headers without `markdown`, and filling
+    excerpts would decrypt the whole journal to draw the list. Rows sort
+    and group by `updated_at`, the only timestamp an entry has, so an
+    edited entry moves to the top as it is typed; an entry date of its own
+    is the fix, and would be a model change.
+  - **Editing is inline and autosaved** (`hooks/useAutosave.ts`): there is
+    no Save button and no separate editor page. The hook keeps the live draft in a ref so its unmount cleanup can
+    flush what was typed — which is also what a switch to another entry is,
+    since the route element keys `EntryPane` on the id. It never writes an
+    untouched draft (so "New entry" costs nothing if abandoned), never
+    reschedules after a failed save (that would retry a broken backend
+    forever — the next keystroke or Retry does it), and `cancel()` before a
+    delete keeps a pending save from resurrecting the entry.
+    `hooks/useNewEntry.ts` generates the entry's id before navigating, so
+    the draft's URL never changes under the keyed pane.
   - `src/bindings/` is **generated** — do not edit by hand. ts-rs derives
     it from `crates/entry` (behind that crate's off-by-default `ts`
     feature, so the codegen crate stays out of the shipped binary).
@@ -114,8 +140,25 @@ field-name mismatches — a class of bug neither the Playwright suite nor
     Wire fields therefore read `snake_case` in TypeScript, which is
     deliberate — purely local names (e.g. `formatUpdatedAt`'s parameter)
     stay camelCase.
-  - Entries are markdown (`types.ts` `JournalEntry.markdown`), rendered with
-    `react-markdown` + `remark-gfm`.
+  - Entries are markdown (`types.ts` `JournalEntry.markdown`) and the pane
+    has **two explicit modes**, switched from the `⋯` menu and nowhere
+    else — no focus-driven swapping, which is what the earlier designs got
+    wrong. Read mode renders with `react-markdown` + `remark-gfm` into
+    `.markdown-body` (`index.css`; the two rules that need the palette,
+    link colour and image sizing, are `sx` on the container instead).
+    Edit mode is `components/MarkdownEditor.tsx`, a CodeMirror 6 surface
+    holding the raw markdown with its syntax styled as it is typed —
+    headings large, quotes italic, marks muted — so no serializer ever
+    rewrites what is on disk. `markdownHighlight` holds that styling, and
+    everything mode-dependent sits in a CodeMirror `Compartment` so a
+    light/dark switch reconfigures the editor rather than rebuilding it and
+    dropping the undo history. An entry opens in read mode; a new one opens
+    in edit mode, since there is nothing to render. Leaving edit mode saves
+    first (`saveNow`), so the rendered view is never ahead of the vault.
+    The mode is component state, not a route — reloading lands in read
+    mode. The editor is a contenteditable, not a textarea: Playwright
+    reaches the body as `getByTestId("entry-body")` in either mode, and the
+    editor as `.cm-content` beneath it.
 - **Backend** (`src-tauri/`): Rust, Tauri v2, part of a Cargo workspace
   rooted at the repo root (top-level `Cargo.toml`/`Cargo.lock`,
   `[workspace.dependencies]` for shared versions). New backend crates go

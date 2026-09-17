@@ -1,13 +1,12 @@
 import type { ReactNode } from "react";
 import { CssBaseline, ThemeProvider } from "@mui/material";
-import { HashRouter, Navigate, Route, Routes } from "react-router-dom";
+import { HashRouter, Navigate, Route, Routes, useParams } from "react-router-dom";
 import { getTheme } from "./theme";
 import { AppStateProvider, useAppState } from "./context/AppStateContext";
 import { ColorModeProvider, useColorMode } from "./context/ColorModeContext";
+import JournalLayout from "./components/JournalLayout";
 import LoginPage from "./pages/LoginPage";
-import EntryListPage from "./pages/EntryListPage";
-import PreviewPage from "./pages/PreviewPage";
-import EditorPage from "./pages/EditorPage";
+import EntryPaneRoute, { NoEntrySelected } from "./pages/EntryPane";
 
 function RequireAuth({ children }: { children: ReactNode }): ReactNode {
   const { authenticated } = useAppState();
@@ -19,34 +18,32 @@ function NotFoundRedirect() {
   return <Navigate to={authenticated ? "/entries" : "/login"} replace />;
 }
 
+/// Editing happens in the entry pane now, so the old editor route has no page
+/// of its own. It redirects rather than falling through to `NotFoundRedirect`,
+/// which would drop whoever followed a bookmark back at an empty list.
+function RedirectToEntry() {
+  const { id } = useParams<{ id: string }>();
+  return <Navigate to={id ? `/entries/${id}` : "/entries"} replace />;
+}
+
 function AppRoutes() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
+      {/* One layout for every authenticated route: the sidebar and the entry
+          list mount once and survive selection, so the list keeps its scroll
+          position as entries are opened. */}
       <Route
-        path="/entries"
         element={
           <RequireAuth>
-            <EntryListPage />
+            <JournalLayout />
           </RequireAuth>
         }
-      />
-      <Route
-        path="/entries/:id"
-        element={
-          <RequireAuth>
-            <PreviewPage />
-          </RequireAuth>
-        }
-      />
-      <Route
-        path="/entries/:id/edit"
-        element={
-          <RequireAuth>
-            <EditorPage />
-          </RequireAuth>
-        }
-      />
+      >
+        <Route path="/entries" element={<NoEntrySelected />} />
+        <Route path="/entries/:id" element={<EntryPaneRoute />} />
+      </Route>
+      <Route path="/entries/:id/edit" element={<RedirectToEntry />} />
       <Route path="*" element={<NotFoundRedirect />} />
     </Routes>
   );

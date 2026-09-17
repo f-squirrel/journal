@@ -4,7 +4,7 @@
 @import "@fontsource/roboto/700.css";
 
 .markdown-body {
-  line-height: 1.7;
+  line-height: 1.75;
   font-size: 1rem;
   word-wrap: break-word;
 }

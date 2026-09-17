@@ -5,43 +5,51 @@ import { test, expect, type Page } from "@playwright/test";
 // `src/api/entries.ts`). The app uses HashRouter, so the query string goes
 // before the hash.
 
+/// A new entry opens in the editor; existing ones open rendered.
+function editor(page: Page) {
+  return page.getByTestId("entry-body").locator(".cm-content");
+}
+
 async function login(page: Page, query: string) {
   await page.goto(`/${query}`);
   await page.getByLabel("Passphrase").fill("password123");
   await page.getByRole("button", { name: "Sign in" }).click();
-  await expect(page.getByRole("heading", { name: "Entries" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "All entries" })).toBeVisible();
 }
 
-test("a failed save keeps the user in the editor", async ({ page }) => {
+test("a failed save keeps the draft in the pane", async ({ page }) => {
   await login(page, "?fail=save&failMessage=Disk+is+full.");
 
   await page.getByRole("button", { name: "New entry" }).first().click();
-  await page.getByPlaceholder("Entry title").fill("E2E test entry");
-  await page.getByPlaceholder("Write in Markdown...").fill("# Hello from Playwright");
-  await page.getByRole("button", { name: "Save" }).click();
+  await page.getByPlaceholder("Title").fill("E2E test entry");
+  await editor(page).fill("# Hello from Playwright");
 
   await expect(page.getByText("Disk is full.")).toBeVisible();
-  expect(page.url()).toContain("#/entries/new/edit");
-  await expect(page.getByPlaceholder("Write in Markdown...")).toHaveValue("# Hello from Playwright");
+  // Nothing reached disk, so the optimistic row must be gone again — and the
+  // user's text must not be.
+  await expect(page.getByTestId("entry-row")).toHaveCount(2);
+  await expect(editor(page)).toContainText("# Hello from Playwright");
+  // Still the draft's own URL: the pane is keyed on it, so a redirect here
+  // would remount the pane and take the draft with it.
+  expect(page.url()).toMatch(/#\/entries\/[0-9a-f-]{36}$/);
 });
 
 test("a failed delete keeps the row and re-enables the dialog", async ({ page }) => {
   await login(page, "?fail=delete&failMessage=Disk+is+full.");
 
   await page.getByText("Project ideas").click();
-  await page.getByRole("button", { name: "Delete" }).click();
+  await page.getByRole("button", { name: "Entry actions" }).click();
+  await page.getByRole("menuitem", { name: "Delete entry" }).click();
   await page.getByRole("dialog").getByRole("button", { name: "Delete" }).click();
 
   await expect(page.getByText("Disk is full.")).toBeVisible();
   await expect(page.getByRole("dialog").getByRole("button", { name: "Cancel" })).toBeEnabled();
 
-  // The entry is still on disk, so it must still be in the list. Wait for the
-  // dialog's close transition: its backdrop swallows the click on "Back".
+  // The entry is still on disk, so it must still be in the list — which, in a
+  // three-pane layout, never left the screen.
   await page.getByRole("dialog").getByRole("button", { name: "Cancel" }).click();
   await expect(page.getByRole("dialog")).toBeHidden();
-  await page.getByRole("button", { name: "Back" }).click();
-  await expect(page.getByRole("heading", { name: "Entries" })).toBeVisible();
-  await expect(page.getByText("Project ideas")).toBeVisible();
+  await expect(page.getByTestId("entry-row").filter({ hasText: "Project ideas" })).toBeVisible();
 });
 
 test("a failed load does not render stale content", async ({ page }) => {
@@ -94,7 +102,7 @@ test("a list in flight at logout cannot repopulate the next session", async ({ p
 
   await page.getByLabel("Passphrase").fill("password123");
   await page.getByRole("button", { name: "Sign in" }).click();
-  await expect(page.getByRole("heading", { name: "Entries" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "All entries" })).toBeVisible();
   // Without the cancellation guard the previous session's titles are already
   // back in state, so they render before this listing has answered.
   await expect(page.getByText("First day back")).toHaveCount(0);

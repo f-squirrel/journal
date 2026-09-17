@@ -73,7 +73,7 @@ export function getTheme(mode: PaletteMode): Theme {
       divider: tonal.outlineVariant,
       tonal,
     },
-    shape: { borderRadius: 14 },
+    shape: { borderRadius: 10 },
     typography: {
       fontFamily: '"Roboto", "Helvetica Neue", Arial, sans-serif',
       h4: { fontWeight: 700, letterSpacing: -0.5 },
@@ -84,12 +84,9 @@ export function getTheme(mode: PaletteMode): Theme {
     components: {
       MuiCssBaseline: {
         styleOverrides: {
-          body: {
-            backgroundImage: isLight
-              ? "radial-gradient(circle at 12% -10%, rgba(47, 111, 78, 0.10), transparent 42%)"
-              : "radial-gradient(circle at 12% -10%, rgba(143, 217, 175, 0.08), transparent 42%)",
-            backgroundAttachment: "fixed",
-          },
+          // The shell fills the viewport and scrolls its columns separately,
+          // so the chain down to #root has to have a height to fill.
+          "html, body, #root": { height: "100%" },
         },
       },
       MuiAppBar: {
@@ -135,7 +132,7 @@ export function getTheme(mode: PaletteMode): Theme {
       },
       MuiListItemButton: {
         styleOverrides: {
-          root: { borderRadius: 12 },
+          root: { borderRadius: 8 },
         },
       },
       MuiChip: {

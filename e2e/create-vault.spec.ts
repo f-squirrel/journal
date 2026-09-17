@@ -32,7 +32,7 @@ test("a mismatched confirmation blocks submit", async ({ page }) => {
   await page.getByRole("button", { name: "Create vault" }).click();
 
   await expect(page.getByText("The two passphrases don't match.")).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Entries" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "All entries" })).toHaveCount(0);
 });
 
 test("a too-short passphrase blocks submit", async ({ page }) => {
@@ -44,7 +44,7 @@ test("a too-short passphrase blocks submit", async ({ page }) => {
   await page.getByRole("button", { name: "Create vault" }).click();
 
   await expect(page.getByRole("alert").filter({ hasText: /at least \d+ characters/i })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Entries" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "All entries" })).toHaveCount(0);
 });
 
 test("a matching pair creates the vault", async ({ page }) => {
@@ -55,7 +55,7 @@ test("a matching pair creates the vault", async ({ page }) => {
   await page.getByLabel("Confirm passphrase").fill(long);
   await page.getByRole("button", { name: "Create vault" }).click();
 
-  await expect(page.getByRole("heading", { name: "Entries" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "All entries" })).toBeVisible();
 });
 
 // The two cases below are about the window *before* `has_vault` answers, when
@@ -72,7 +72,7 @@ test("the form cannot be submitted before the vault check answers", async ({ pag
   // Named rather than bare: a failed check renders a second button ("Try
   // again") beside the submit one, and past the login screen there are several.
   await expect(page.getByRole("button", { name: "Checking" })).toBeDisabled();
-  await expect(page.getByRole("heading", { name: "Entries" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "All entries" })).toHaveCount(0);
 });
 
 test("a failed vault check does not create a vault", async ({ page }) => {
@@ -83,7 +83,7 @@ test("a failed vault check does not create a vault", async ({ page }) => {
   await page.getByLabel("Passphrase", { exact: true }).fill("x");
   await page.getByLabel("Passphrase", { exact: true }).press("Enter");
 
-  await expect(page.getByRole("heading", { name: "Entries" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "All entries" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Checking" })).toBeDisabled();
 });
 
@@ -95,7 +95,7 @@ test("an unanswered vault check blocks a programmatic submit", async ({ page }) 
   await page.getByLabel("Passphrase", { exact: true }).fill("x".repeat(20));
   await page.evaluate(() => document.querySelector("form")?.requestSubmit());
 
-  await expect(page.getByRole("heading", { name: "Entries" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "All entries" })).toHaveCount(0);
   // Not just "no vault": the confirm field was never rendered, so without the
   // guard a returning user is told their passphrases don't match.
   await expect(page.getByText("The two passphrases don't match.")).toHaveCount(0);
