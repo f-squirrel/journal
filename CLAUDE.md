@@ -46,6 +46,9 @@ the user rather than assuming a migration must be written.
   browser fallback (seeded in-memory data), not the Rust backend — see
   `src/api/entries.ts` below, which also carries the URL fault-injection
   hook the suite uses to make that fallback fail on demand.
+- `make check-no-fallback` — build the frontend and fail if the browser
+  fallback (seed entries or the fault hook) reached the production bundle.
+  Runs in CI next to `npm run build`; see `src/api/fallback.ts` below.
 - `make rust-test` — `cargo test` over the whole workspace.
 - `make test` — the whole suite: `rust-test` then `test-e2e`, in that order.
 
@@ -83,11 +86,20 @@ field-name mismatches — a class of bug neither the Playwright suite nor
   - `src/api/entries.ts` is the only module that knows whether a Rust
     backend exists: inside Tauri every call goes over `invoke` and
     rejections propagate untouched; outside it (`npm run dev`, Playwright)
-    it serves a seeded in-memory vault. On that fallback path only — so a
-    shipped build cannot be steered by a URL — it parses a fault-injection
-    hook once at module load: `?fail=<ops>`, `?failMessage=<text>`,
+    a **development** build serves the seeded in-memory vault in
+    `src/api/fallback.ts`. That module also carries the fault-injection
+    hook it parses once at load: `?fail=<ops>`, `?failMessage=<text>`,
     `?slow=<ops>` and `?vault=new`. The app uses `HashRouter`, so the query
     string goes *before* the hash (`/?fail=save`, not `/#/?fail=save`).
+    `entries.ts` reaches it through a dynamic `import()` that must stay
+    textually inside an `import.meta.env.DEV` branch — the constant is
+    replaced with `false` in a production build, so the branch is dead code
+    and the whole chunk is dropped. A production build with no Tauri
+    backend throws instead of fabricating a journal it would then lose.
+    Keep every module-scope constant (seed data, the `Map`, the parsed
+    faults) inside `fallback.ts`: a `new Map(...)` in `entries.ts` is not
+    provably side-effect-free and drags the seed data back into the bundle.
+    `make check-no-fallback` is what holds all of this.
   - `theme.ts` provides `getTheme(mode)`, switched between light/dark based
     on `prefers-color-scheme` in `App.tsx`.
   - `pages/` holds one component per route (Login, EntryList, Preview,

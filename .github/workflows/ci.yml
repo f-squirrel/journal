@@ -55,6 +55,11 @@ jobs:
       # catches `invoke` field-name mismatches against the committed bindings.
       - run: npm run build
 
+      # The browser fallback fabricates entries and accepts saves that go
+      # nowhere, so it must not reach a shipped build. The target rebuilds
+      # rather than reusing the step above, so it also stands alone locally.
+      - run: make check-no-fallback
+
       # Playwright starts the Vite dev server itself (playwright.config.ts),
       # so this needs no separate serve step. It exercises the browser
       # fallback in src/api/entries.ts, not the Rust backend.

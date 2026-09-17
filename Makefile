@@ -1,4 +1,4 @@
-.PHONY: run build test rust-test test-e2e bindings check-bindings
+.PHONY: run build test rust-test test-e2e bindings check-bindings check-no-fallback
 
 # Regenerate first: launching the app against stale bindings is how a broken
 # `invoke` bridge stays invisible (`tsc` passes, the command fails at runtime).
@@ -33,3 +33,17 @@ check-bindings:
 	 after=$$(cat src/bindings/*.ts 2>/dev/null | sha256sum); \
 	 test "$$before" = "$$after" \
 	   || { echo "src/bindings was stale; regenerated — commit the result."; exit 1; }
+
+# Fail if the browser fallback reached a production bundle. The fallback
+# fabricates two entries and accepts saves into a Map that dies with the
+# page, so a shipped build that served it would report writes that never
+# happened. It is `import.meta.env.DEV`-gated in src/api/entries.ts, but
+# that gate is only as good as the bundler dropping the chunk, which is
+# what this checks. Greps for the seed data and the fault hook separately:
+# they can be retained independently.
+check-no-fallback:
+	npm run build
+	@! grep -rq "First day back" dist/assets/*.js \
+	  || { echo "the seeded fallback shipped in a production bundle"; exit 1; }
+	@! grep -rq "failMessage" dist/assets/*.js \
+	  || { echo "the fault-injection hook shipped in a production bundle"; exit 1; }
