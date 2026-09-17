@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import type { EntryHeader, JournalEntry } from "../types";
+import { byUpdatedAt } from "../utils/date";
 import {
   deleteEntry as deleteEntryBackend,
   getEntry,
@@ -91,30 +92,55 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       // then reject if the backend refuses, rolling the optimistic edit back
       // first: showing an entry as saved while nothing reached disk is how it
       // silently disappears on the next launch.
+      //
+      // Both re-sort, because the list is the backend's order
+      // (`Vault::list_entries`, most-recently-updated first) and an edit
+      // changes where its entry belongs in it. Replacing the header in place
+      // left an entry showing a fresh timestamp under entries it was now
+      // newer than, until the next unlock re-fetched.
+      //
+      // Both roll back with a functional update that removes or restores only
+      // the one entry, rather than restoring a whole array captured before the
+      // save. That array is stale by definition — anything else that landed
+      // while the save was in flight would be discarded with it. Today the UI
+      // serializes mutations by disabling buttons, so this is a trap set for
+      // whoever adds autosave.
       upsertEntry: async (entry) => {
-        const previous = entries;
+        const header = toHeader(entry);
+        // Read inside the updater, not from `entries` in this closure, so the
+        // rollback restores the row as it actually was. Assigned rather than
+        // returned because that is the only way out of a state updater; it is
+        // idempotent, which is what StrictMode's double invocation needs.
+        let replaced: EntryHeader | undefined;
         setEntries((prev) => {
-          const header = toHeader(entry);
-          const index = prev.findIndex((e) => e.id === entry.id);
-          if (index === -1) return [header, ...prev];
-          const next = [...prev];
-          next[index] = header;
-          return next;
+          replaced = prev.find((e) => e.id === entry.id);
+          return [header, ...prev.filter((e) => e.id !== entry.id)].sort(byUpdatedAt);
         });
         try {
           await saveEntryBackend(entry);
         } catch (err) {
-          setEntries(previous);
+          setEntries((prev) => {
+            const without = prev.filter((e) => e.id !== entry.id);
+            return replaced ? [replaced, ...without].sort(byUpdatedAt) : without;
+          });
           throw err;
         }
       },
       removeEntry: async (id) => {
-        const previous = entries;
-        setEntries((prev) => prev.filter((entry) => entry.id !== id));
+        let removed: EntryHeader | undefined;
+        setEntries((prev) => {
+          removed = prev.find((entry) => entry.id === id);
+          return prev.filter((entry) => entry.id !== id);
+        });
         try {
           await deleteEntryBackend(id);
         } catch (err) {
-          setEntries(previous);
+          setEntries((prev) => {
+            if (!removed) return prev;
+            // Filtered first, so a re-added entry cannot end up duplicated.
+            const without = prev.filter((entry) => entry.id !== id);
+            return [removed, ...without].sort(byUpdatedAt);
+          });
           throw err;
         }
       },

@@ -68,3 +68,16 @@ test("a new entry saves where crypto.randomUUID is unavailable", async ({ page }
   await page.getByRole("button", { name: "Save" }).click();
   await expect(page.getByRole("heading", { name: "No randomUUID here" })).toBeVisible();
 });
+
+test("an edited entry moves to the top of the list", async ({ page }) => {
+  await login(page);
+  // The older of the two seeded entries, so it starts second in the list the
+  // backend's order (most-recently-updated first) puts them in.
+  await page.getByText("First day back").click();
+  await page.getByRole("button", { name: "Edit" }).click();
+  await page.getByPlaceholder("Write in Markdown...").fill("# Edited just now");
+  await page.getByRole("button", { name: "Save" }).click();
+  await page.getByRole("button", { name: "Entries" }).click();
+
+  await expect(page.getByTestId("entry-row").first()).toContainText("First day back");
+});
