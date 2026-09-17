@@ -207,7 +207,12 @@ field-name mismatches — a class of bug neither the Playwright suite nor
     the alpha note above, confirm with the user first when it would drop
     their local data.
   - `tauri.conf.json` — app identifier, window config, build hooks
-    (`beforeDevCommand`/`beforeBuildCommand` run the npm scripts above).
+    (`beforeDevCommand`/`beforeBuildCommand` run the npm scripts above),
+    and the webview's Content-Security-Policy (ADR 0011, which also
+    turned `withGlobalTauri` off). Tauri applies that policy only when it
+    serves the frontend itself, so `make run` and the Playwright suite —
+    which load Vite's `devUrl` — do not exercise it: check a CSP change
+    against a packaged build, or a dev build with `devUrl` unset.
   - `capabilities/default.json` — Tauri's permission/capability grants for
     the webview; extend this when adding new Tauri plugins or commands.
   - Logging goes through `tauri-plugin-log`, registered as

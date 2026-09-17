@@ -12,3 +12,4 @@
 | [0008](0008-tauri-plugin-log-for-logging.md) | Use `tauri-plugin-log` as the app's log sink | Accepted |
 | [0009](0009-blob-store-seam-and-local-first-sync.md) | Layer entry storage over a blob store, and sync local-first | Accepted |
 | [0010](0010-name-crates-after-what-they-hold.md) | Name the storage crates after what they hold | Accepted |
+| [0011](0011-content-security-policy-and-no-global-tauri.md) | Set a Content-Security-Policy, and stop exposing `window.__TAURI__` | Accepted |
