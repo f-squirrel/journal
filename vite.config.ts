@@ -25,8 +25,12 @@ export default defineConfig(() => ({
         }
       : undefined,
     watch: {
-      // 3. tell Vite to ignore watching `src-tauri`
-      ignored: ["**/src-tauri/**"],
+      // 3. tell Vite to ignore watching `src-tauri` and the Cargo workspace's
+      //    build output. `target/` runs to tens of gigabytes once the Rust
+      //    side has been built, and watching it exhausts the inotify limit —
+      //    the dev server then dies on startup with ENOSPC, taking the
+      //    Playwright suite (which starts it) with it.
+      ignored: ["**/src-tauri/**", "**/target/**"],
     },
   },
 }));
