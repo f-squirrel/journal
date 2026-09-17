@@ -37,7 +37,7 @@ jobs:
             build-essential \
             curl wget file
 
-      - run: cargo test --workspace
+      - run: make rust-test
 
   web:
     name: tsc + playwright
@@ -59,4 +59,4 @@ jobs:
       # so this needs no separate serve step. It exercises the browser
       # fallback in src/api/entries.ts, not the Rust backend.
       - run: npx playwright install --with-deps chromium
-      - run: npm run test:e2e
+      - run: make test-e2e
