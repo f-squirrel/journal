@@ -1,5 +1,6 @@
 .claude/settings.local.json
 .claude/plans/
+.claude/review/
 
 # Rust
 /target
