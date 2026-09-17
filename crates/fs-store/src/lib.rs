@@ -6,6 +6,7 @@
 //! as a variant inside this one (ADR 0009).
 
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -73,23 +74,51 @@ impl BlobStore for FsStore {
         }
     }
 
-    /// Writes the bytes to a temp file and renames it into place.
+    /// Writes the bytes to a temp file, syncs it, and renames it into place.
     ///
-    /// A bare `fs::write` truncates before it writes, so a reader — or a second
-    /// writer — that arrives mid-call sees a torn blob. Commands have run
-    /// concurrently since they moved off the main thread (P1-1), and the
-    /// truncation window is an entry lost rather than an entry stale. Rename is
-    /// atomic within a directory on every platform the app targets, so a reader
-    /// sees either the old blob or the new one.
+    /// *Atomicity* is the rename. A bare `fs::write` truncates before it
+    /// writes, so a reader — or a second writer — that arrives mid-call sees a
+    /// torn blob. Commands have run concurrently since they moved off the main
+    /// thread (P1-1), and the truncation window is an entry lost rather than an
+    /// entry stale. Rename is atomic within a directory on every platform the
+    /// app targets, so a reader sees either the old blob or the new one.
+    ///
+    /// *Durability* is the two syncs, and the rename alone does not give it.
+    /// ext4's `auto_da_alloc` forces writeback when a rename replaces an
+    /// existing file, which covers edits but not the first save of a new
+    /// name; APFS needs `F_FULLFSYNC` for ordering and a plain rename does not
+    /// imply it. Without the file sync, a crash inside the writeback window
+    /// leaves a present but zero-length blob — one that fails to decrypt
+    /// forever, so `Vault::list_entries` skips it with a `warn!` and the entry
+    /// is gone from the UI with nothing to repair it. One `fsync` per save is
+    /// affordable here: a save is user-initiated and infrequent. Do not batch
+    /// it.
     fn put(&self, name: &BlobName, bytes: &[u8]) -> Result<(), StoreError> {
         fs::create_dir_all(&self.dir)?;
         let temp = self.temp_path(name);
-        fs::write(&temp, bytes)?;
-        if let Err(e) = fs::rename(&temp, self.path(name)) {
+
+        // One closure for everything that can fail once `temp` exists, so the
+        // cleanup below covers all of it rather than the rename alone.
+        let write = || -> std::io::Result<()> {
+            let mut file = fs::File::create(&temp)?;
+            file.write_all(bytes)?;
+            // The bytes, before the rename gives them a name a reader will
+            // trust.
+            file.sync_all()
+        };
+        if let Err(e) = write().and_then(|()| fs::rename(&temp, self.path(name))) {
             // The blob is untouched, but the scratch file would otherwise stay
-            // in the store's directory for good.
+            // in the store's directory for good. `File::create` on a missing
+            // parent fails before `temp` exists, so this is a no-op there
+            // rather than wrong.
             fs::remove_file(&temp).ok();
             return Err(e.into());
+        }
+
+        // The rename itself, so the new name survives a crash. Best-effort:
+        // not every platform lets a directory be opened for sync.
+        if let Ok(dir) = fs::File::open(&self.dir) {
+            let _ = dir.sync_all();
         }
         Ok(())
     }
@@ -168,6 +197,21 @@ mod tests {
     fn put_then_get_returns_the_bytes() {
         let store = temp_store();
         store.put(&name("a.json"), b"hello").unwrap();
+        assert_eq!(store.get(&name("a.json")).unwrap().unwrap(), b"hello");
+        fs::remove_dir_all(store.dir()).ok();
+    }
+
+    /// R1-1 guard (green before and after): `put` grew a `File::create` and two
+    /// syncs, and the directory it writes into is still created on first write.
+    /// Dropping the `create_dir_all` would fail only on a first-ever save —
+    /// the one case no other test here covers.
+    #[test]
+    fn put_creates_the_store_directory_on_first_write() {
+        let store = temp_store();
+        assert!(!store.dir().exists(), "the store directory already existed");
+
+        store.put(&name("a.json"), b"hello").unwrap();
+
         assert_eq!(store.get(&name("a.json")).unwrap().unwrap(), b"hello");
         fs::remove_dir_all(store.dir()).ok();
     }
