@@ -8,7 +8,12 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import type { EntryHeader, JournalEntry } from "../types";
+import type {
+  EntryHeader,
+  JournalEntry,
+  ProviderInfo,
+  SyncStatusPayload,
+} from "../types";
 import { useIdleLock } from "../hooks/useIdleLock";
 import { byUpdatedAt } from "../utils/date";
 import {
@@ -19,6 +24,27 @@ import {
   saveEntry as saveEntryBackend,
   unlockVault,
 } from "../api/entries";
+import {
+  connectRemote,
+  disconnectRemote,
+  listProviders,
+  onSyncChanged,
+  onSyncStatus,
+  syncNow as syncNowBackend,
+  syncStatus,
+} from "../api/sync";
+
+/// What the app knows about sync before the backend has said: nothing is
+/// connected, so no row is marked.
+const SYNC_OFF: SyncStatusPayload = {
+  state: "off",
+  provider: null,
+  pending_ids: [],
+  conflicted_ids: [],
+  pending_other: 0,
+  last_synced_at: null,
+  message: null,
+};
 
 function toHeader(entry: JournalEntry): EntryHeader {
   return { id: entry.id, title: entry.title, updated_at: entry.updated_at };
@@ -43,6 +69,25 @@ interface AppStateContextValue {
   loadEntry: (id: string) => Promise<JournalEntry | undefined>;
   upsertEntry: (entry: JournalEntry) => Promise<void>;
   removeEntry: (id: string) => Promise<void>;
+  /// The backend's latest word on sync. Sync runs whether or not the vault is
+  /// unlocked, so this is live on the login screen too.
+  sync: SyncStatusPayload;
+  /// False until the backend has answered once, so the login screen does not
+  /// offer to connect an account that turns out to be connected already.
+  syncLoaded: boolean;
+  /// Entries with local changes not uploaded yet, and entries with a parked
+  /// conflict, for a row to look itself up in.
+  pendingIds: ReadonlySet<string>;
+  conflictedIds: ReadonlySet<string>;
+  /// The cloud providers this build can connect to.
+  providers: ProviderInfo[];
+  /// Waits for the user in their browser, so it can take minutes. Rejects with
+  /// the reason it could not connect.
+  connectSync: (provider: string) => Promise<void>;
+  /// Forgets the account. The journal on this device is untouched.
+  disconnectSync: () => Promise<void>;
+  /// Runs a pass now; rejects with why it failed.
+  syncNow: () => Promise<void>;
 }
 
 const AppStateContext = createContext<AppStateContextValue | null>(null);
@@ -50,6 +95,14 @@ const AppStateContext = createContext<AppStateContextValue | null>(null);
 export function AppStateProvider({ children }: { children: ReactNode }) {
   const [authenticated, setAuthenticated] = useState(false);
   const [entries, setEntries] = useState<EntryHeader[]>([]);
+  const [sync, setSync] = useState<SyncStatusPayload>(SYNC_OFF);
+  const [syncLoaded, setSyncLoaded] = useState(false);
+  const [providers, setProviders] = useState<ProviderInfo[]>([]);
+  // Bumped when a pass changed entries on disk, to re-run the list effect.
+  const [listVersion, setListVersion] = useState(0);
+  // Set by the first `sync://status` event, so the seed read below cannot land
+  // after a newer status and put an older one back.
+  const heardStatus = useRef(false);
   const flushes = useRef(new Set<Flush>());
 
   const registerFlush = useCallback((flush: Flush) => {
@@ -117,7 +170,92 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [authenticated]);
+  }, [authenticated, listVersion]);
+
+  // Sync is not gated on the vault: it runs while locked, and connecting is
+  // how a second device gets its key, so this is live from the first render.
+  useEffect(() => {
+    let cancelled = false;
+    const stops: Array<() => void> = [];
+    // A listener that finishes registering after the effect was cleaned up
+    // (StrictMode runs it twice in development) stops itself at once.
+    const keep = (registering: Promise<() => void>) =>
+      registering
+        .then((stop) => (cancelled ? stop() : stops.push(stop)))
+        .catch((err) => console.error("Could not listen for sync:", err));
+
+    void keep(
+      onSyncStatus((status) => {
+        heardStatus.current = true;
+        setSync(status);
+        setSyncLoaded(true);
+      }),
+    );
+    // The entry open in the pane is left alone: autosave owns its draft, and a
+    // remote edit to it has already become a conflicted copy on the backend.
+    void keep(onSyncChanged(() => setListVersion((n) => n + 1)));
+
+    syncStatus()
+      .then((status) => {
+        if (cancelled) return;
+        if (!heardStatus.current) setSync(status);
+        setSyncLoaded(true);
+      })
+      .catch((err) => console.error("Failed to read the sync status:", err));
+    listProviders()
+      .then((listed) => {
+        if (!cancelled) setProviders(listed);
+      })
+      .catch((err) => console.error("Failed to list sync providers:", err));
+
+    return () => {
+      cancelled = true;
+      stops.forEach((stop) => stop());
+    };
+  }, []);
+
+  const pendingIds = useMemo(() => new Set<string>(sync.pending_ids), [sync]);
+  const conflictedIds = useMemo(
+    () => new Set<string>(sync.conflicted_ids),
+    [sync],
+  );
+
+  // Read after every command as well as waiting for the event: the events are
+  // throttled, and what a caller awaits should be reflected when it returns.
+  const refreshSync = useCallback(
+    () =>
+      syncStatus()
+        .then(setSync)
+        .catch((err) => console.error("Failed to read the sync status:", err)),
+    [],
+  );
+
+  const connectSync = useCallback(
+    async (provider: string) => {
+      try {
+        await connectRemote(provider);
+      } finally {
+        await refreshSync();
+      }
+    },
+    [refreshSync],
+  );
+
+  const disconnectSync = useCallback(async () => {
+    try {
+      await disconnectRemote();
+    } finally {
+      await refreshSync();
+    }
+  }, [refreshSync]);
+
+  const syncNow = useCallback(async () => {
+    try {
+      await syncNowBackend();
+    } finally {
+      await refreshSync();
+    }
+  }, [refreshSync]);
 
   // Stable identity: both EditorPage and PreviewPage key a `useEffect` on
   // `loadEntry`, so rebuilding it whenever `entries` changes would re-run
@@ -147,6 +285,14 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       },
       registerFlush,
       loadEntry,
+      sync,
+      syncLoaded,
+      pendingIds,
+      conflictedIds,
+      providers,
+      connectSync,
+      disconnectSync,
+      syncNow,
       // `upsertEntry` and `removeEntry` update React state optimistically and
       // then reject if the backend refuses, rolling the optimistic edit back
       // first: showing an entry as saved while nothing reached disk is how it
@@ -208,7 +354,22 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         }
       },
     }),
-    [authenticated, entries, flushAll, lockSession, registerFlush, loadEntry],
+    [
+      authenticated,
+      entries,
+      flushAll,
+      lockSession,
+      registerFlush,
+      loadEntry,
+      sync,
+      syncLoaded,
+      pendingIds,
+      conflictedIds,
+      providers,
+      connectSync,
+      disconnectSync,
+      syncNow,
+    ],
   );
 
   return (

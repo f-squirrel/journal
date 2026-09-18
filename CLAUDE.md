@@ -44,8 +44,9 @@ the user rather than assuming a migration must be written.
   (`e2e/`, see ADR 0004) against the Vite dev server, which
   `playwright.config.ts` starts automatically. These run against the
   browser fallback (seeded in-memory data), not the Rust backend — see
-  `src/api/entries.ts` below, which also carries the URL fault-injection
-  hook the suite uses to make that fallback fail on demand.
+  `src/api/backend.ts` below, and `src/api/fallback.ts`, which carries the
+  URL fault-injection hook the suite uses to make that fallback fail on
+  demand (and to simulate sync).
 - `make check-no-fallback` — build the frontend and fail if the browser
   fallback (seed entries or the fault hook) reached the production bundle.
   Runs in CI next to `npm run build`; see `src/api/fallback.ts` below.
@@ -94,6 +95,16 @@ field-name mismatches — a class of bug neither the Playwright suite nor
     rebuilding it on every `entries` change re-runs that effect and wipes
     the draft. All pages read/write through `useAppState()` rather than
     local state or prop drilling.
+    It also holds the **sync status** (`sync`, plus `pendingIds` and
+    `conflictedIds` as `Set`s for rows to look themselves up in, and
+    `providers` from `list_providers`), seeded from `sync_status` and kept
+    current by `sync://status`. Sync is not gated on the vault — it runs while
+    locked, and connecting is how a second device gets its key — so the
+    subscription is live from the first render, on the login screen too.
+    `sync://changed` bumps a version that re-runs the list effect, so the
+    list reloads; the entry open in the pane is left alone, since autosave
+    owns its draft. `connectSync`/`disconnectSync`/`syncNow` re-read the
+    status when they finish rather than trusting the throttled event.
     **The journal locks itself after 10 s without input**
     (`hooks/useIdleLock.ts`, `IDLE_LOCK_MS`; a constant until it becomes a
     setting): the timer is only a trigger for the same lock a manual "Log
@@ -105,21 +116,28 @@ field-name mismatches — a class of bug neither the Playwright suite nor
     quiet period) but not a manual log out. The fallback vault refuses
     entry commands while locked, like `VaultState`, so the Playwright
     suite (`e2e/auto-lock.spec.ts`, on `page.clock`) can see that.
-  - `src/api/entries.ts` is the only module that knows whether a Rust
-    backend exists: inside Tauri every call goes over `invoke` and
-    rejections propagate untouched; outside it (`npm run dev`, Playwright)
-    a **development** build serves the seeded in-memory vault in
-    `src/api/fallback.ts`. That module also carries the fault-injection
-    hook it parses once at load: `?fail=<ops>`, `?failMessage=<text>`,
-    `?slow=<ops>` and `?vault=new`. The app uses `HashRouter`, so the query
-    string goes *before* the hash (`/?fail=save`, not `/#/?fail=save`).
-    `entries.ts` reaches it through a dynamic `import()` that must stay
-    textually inside an `import.meta.env.DEV` branch — the constant is
+  - `src/api/backend.ts` is the only module that knows whether a Rust
+    backend exists, for both `entries.ts` (entry CRUD) and `sync.ts` (the
+    sync commands and the two `sync://` events): inside Tauri every call
+    goes over `invoke` and rejections propagate untouched; outside it
+    (`npm run dev`, Playwright) a **development** build serves the seeded
+    in-memory vault in `src/api/fallback.ts`. That module also carries the
+    fault-injection hook it parses once at load: `?fail=<ops>` (the ops
+    include `connect` and `sync`), `?failMessage=<text>`, `?slow=<ops>`,
+    `?vault=new` and `?sync=on|conflict`. It simulates sync too, in the
+    sequence the backend produces — a save marks its entry pending at once,
+    a debounced pass clears it — and connecting from it plays a second
+    device joining: the vault "arrives" and an entry from another device
+    reaches the list through `sync://changed`. The app uses `HashRouter`, so
+    the query string goes *before* the hash (`/?fail=save`, not
+    `/#/?fail=save`). `backend.ts` reaches the fallback through a dynamic
+    `import()` that must stay textually inside an `import.meta.env.DEV`
+    branch — the constant is
     replaced with `false` in a production build, so the branch is dead code
     and the whole chunk is dropped. A production build with no Tauri
     backend throws instead of fabricating a journal it would then lose.
     Keep every module-scope constant (seed data, the `Map`, the parsed
-    faults) inside `fallback.ts`: a `new Map(...)` in `entries.ts` is not
+    faults) inside `fallback.ts`: a `new Map(...)` in `backend.ts` is not
     provably side-effect-free and drags the seed data back into the bundle.
     `make check-no-fallback` is what holds all of this.
   - `theme.ts` provides `getTheme(mode)`, switched between light/dark based
@@ -131,7 +149,17 @@ field-name mismatches — a class of bug neither the Playwright suite nor
     button wide (`SIDEBAR_WIDTH` in `components/chrome.ts`): each control
     is an `IconButton` whose label lives in a `Tooltip` on hover and in
     `aria-label`, which is what keeps it addressable by name (the
-    Playwright suite clicks "New entry" and "Log out"). Below the `md`
+    Playwright suite clicks "New entry" and "Log out"). The sync button's
+    label *is* the status ("2 changes not uploaded yet", `utils/sync.ts`)
+    and it opens `components/SyncDialog.tsx`, where the account is
+    connected, retried and disconnected (with a warning naming what has not
+    been uploaded). List rows carry a mark only when sync is connected and
+    the row is the exception — "Not uploaded yet", or a conflict — never on
+    a synced row, and it must not make a row taller. `LoginPage` offers
+    "Connect <provider>" to someone with no vault, which is how a second
+    device joins. While a modal is open MUI hides the rail from the
+    accessibility tree, so `e2e/sync.spec.ts` reads its `aria-label`.
+    Below the `md`
     breakpoint the three columns become one — the rail moves into a drawer
     and the list gives way to the pane — so check a change at phone width
     too.
@@ -248,8 +276,7 @@ field-name mismatches — a class of bug neither the Playwright suite nor
   is gone but entries remain, so a lost key cannot silently orphan a
   journal. That decision lives here, not in `journal-key`, because only
   this layer knows what an entry blob is named; keep it that way rather
-  than branching on `Keyring::exists` in a command. Sync is not wired up
-  yet.
+  than branching on `Keyring::exists` in a command.
   `crates/key` (`journal-key`) encrypts every entry blob at rest with
   `age`, under an X25519 keypair (see ADR 0007, which supersedes 0006,
   amended by 0009, which moved the key into the store, and 0010, which
@@ -287,8 +314,9 @@ field-name mismatches — a class of bug neither the Playwright suite nor
   existing entries orphans all of them. `Keyring::exists` is public only
   so `has_vault` (and thus `LoginPage`) can pick its copy.
   `src-tauri/src/sync/` is the sync wiring, in six files: `mod.rs`
-  (`SyncControl`, the connect/disconnect flow, the `connect_remote(provider)`,
-  `disconnect_remote`, `sync_now` and `sync_status` commands, and the
+  (`SyncControl`, the connect/disconnect flow, the `list_providers`,
+  `connect_remote(provider)`, `disconnect_remote`, `sync_now` and
+  `sync_status` commands, and the
   `Provider` trait — an `id`, a display `name`, `begin` and `remote` — that a
   build lists in `SyncConfig::providers` and that lets tests stand in a fake),
   `dropbox.rs` (the one `Provider` there is; adding Google Drive is another
@@ -353,7 +381,8 @@ field-name mismatches — a class of bug neither the Playwright suite nor
     oslog on iOS, so one registration covers all three targets. Level is
     fixed at `Info` — it does not read `RUST_LOG`.
 - Frontend and backend communicate via Tauri's `invoke()` bridge
-  (`@tauri-apps/api`), wrapped in `src/api/entries.ts` for entry CRUD.
+  (`@tauri-apps/api`), wrapped in `src/api/entries.ts` for entry CRUD and
+  `src/api/sync.ts` for sync.
 
 ## Architecture Decision Records
 

@@ -6,6 +6,7 @@ import {
   Box,
   Button,
   CircularProgress,
+  Divider,
   Paper,
   Stack,
   TextField,
@@ -25,7 +26,7 @@ import { hasVault } from "../api/entries";
 const MIN_PASSPHRASE_LENGTH = 12;
 
 export default function LoginPage() {
-  const { login } = useAppState();
+  const { login, sync, syncLoaded, providers, connectSync } = useAppState();
   const navigate = useNavigate();
   const [password, setPassword] = useState("");
   const [confirmation, setConfirmation] = useState("");
@@ -39,6 +40,9 @@ export default function LoginPage() {
   // page, with a restart as the only way back into the app.
   const [checkAttempt, setCheckAttempt] = useState(0);
   const [checkFailed, setCheckFailed] = useState(false);
+  // Joining a journal that already lives in the cloud (see `joinFrom`).
+  const [joining, setJoining] = useState<string | null>(null);
+  const [notice, setNotice] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -73,6 +77,39 @@ export default function LoginPage() {
   // warning and "Create vault" on every launch until `has_vault` answers,
   // which trains a returning user to ignore the one warning that matters.
   const pending = vaultExists === null;
+
+  /// The second device's way in: connect the account, which runs a pass, and
+  /// the journal's key arrives with it. Asking again then finds a vault, and
+  /// the form turns into a sign-in. The cloud may also hold no journal yet, and
+  /// then the form stays a create form, now with sync connected.
+  async function joinFrom(provider: (typeof providers)[number]) {
+    setError("");
+    setNotice("");
+    setJoining(provider.id);
+    try {
+      await connectSync(provider.id);
+      const exists = await hasVault();
+      setVaultExists(exists);
+      if (!exists) {
+        setNotice(
+          `Connected to ${provider.name}, but it holds no journal yet. Create one here and it will be uploaded.`,
+        );
+      }
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setJoining(null);
+    }
+  }
+
+  // Offered only when it is known that there is no journal here and no account
+  // connected: a returning user has nothing to join, and a connected one has
+  // already joined.
+  const canJoin =
+    vaultExists === false &&
+    syncLoaded &&
+    sync.state === "off" &&
+    providers.length > 0;
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
@@ -205,6 +242,7 @@ export default function LoginPage() {
                 to, and that key exists nowhere else. Keep it somewhere safe.
               </Alert>
             )}
+            {notice && <Alert severity="info">{notice}</Alert>}
             {error && (
               <Alert
                 severity="error"
@@ -247,6 +285,28 @@ export default function LoginPage() {
             >
               {pending ? "Checking…" : isNewVault ? "Create vault" : "Sign in"}
             </Button>
+            {canJoin && (
+              <>
+                <Divider>or</Divider>
+                <Typography variant="body2" color="text.secondary">
+                  Already have a journal in the cloud? Connect the account it is
+                  in to use it here.
+                </Typography>
+                {providers.map((provider) => (
+                  <Button
+                    key={provider.id}
+                    variant="outlined"
+                    fullWidth
+                    onClick={() => joinFrom(provider)}
+                    disabled={joining !== null || submitting}
+                  >
+                    {joining === provider.id
+                      ? `Waiting for ${provider.name}…`
+                      : `Connect ${provider.name}`}
+                  </Button>
+                ))}
+              </>
+            )}
           </Stack>
         </Box>
       </Paper>

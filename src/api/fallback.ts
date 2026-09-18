@@ -1,4 +1,9 @@
-import type { EntryHeader, JournalEntry } from "../types";
+import type {
+  EntryHeader,
+  JournalEntry,
+  ProviderInfo,
+  SyncStatusPayload,
+} from "../types";
 import { byUpdatedAt } from "../utils/date";
 
 // The browser fallback: an in-memory vault for `npm run dev` and the
@@ -39,14 +44,17 @@ function toHeader(entry: JournalEntry): EntryHeader {
 // `invoke` bridge, so backend failures have to be injectable from the URL:
 //
 //   ?vault=new          hasVault() resolves false, giving the create-vault UI
-//   ?fail=<ops>         comma-separated: has, unlock, list, get, save, delete
+//   ?fail=<ops>         comma-separated: has, unlock, list, get, save, delete,
+//                       connect, sync (see "simulated sync" below)
 //   ?failMessage=<text> the rejection message (default "Injected fault.")
 //   ?slow=<ops>         the named ops resolve after SLOW_MS
+//   ?sync=on|conflict   start connected to a provider (see below)
 //
 // The app uses HashRouter, so the query string goes *before* the hash:
 // `page.goto("/?fail=save")`, not `/#/?fail=save`.
 
-type Op = "has" | "unlock" | "list" | "get" | "save" | "delete";
+type Op =
+  "has" | "unlock" | "list" | "get" | "save" | "delete" | "connect" | "sync";
 
 const SLOW_MS = 1200;
 
@@ -55,6 +63,7 @@ interface Faults {
   fail: Set<Op>;
   failMessage: string;
   slow: Set<Op>;
+  sync: "off" | "on" | "conflict";
 }
 
 function parseFaults(search: string): Faults {
@@ -66,6 +75,10 @@ function parseFaults(search: string): Faults {
     fail: ops(params.get("fail")),
     failMessage: params.get("failMessage") ?? "Injected fault.",
     slow: ops(params.get("slow")),
+    sync:
+      params.get("sync") === "on" || params.get("sync") === "conflict"
+        ? (params.get("sync") as "on" | "conflict")
+        : "off",
   };
 }
 
@@ -77,6 +90,10 @@ const fallbackEntries = new Map(seedEntries.map((entry) => [entry.id, entry]));
 // Playwright suite could catch a draft lost that way.
 let locked = true;
 
+// Whether the vault exists, which connecting can change: on a new device the
+// journal's key arrives from the cloud (see `connectRemote`).
+let vaultPresent = !faults.newVault;
+
 /// Runs one fallback operation, honouring any fault injected via the URL.
 /// Rejects with a bare string, the way `invoke` rejects with the Rust
 /// command's `Err(String)`.
@@ -84,7 +101,8 @@ async function run<T>(op: Op, work: () => T): Promise<T> {
   // Checked up front, before any delay: the Rust commands clone the vault
   // out of `VaultState` at the start, so a write already running when the
   // lock lands still completes.
-  if (locked && op !== "has" && op !== "unlock") {
+  // Connecting needs no vault, and neither does any part of sync.
+  if (locked && op !== "has" && op !== "unlock" && op !== "connect") {
     throw "vault is locked";
   }
   if (faults.slow.has(op)) {
@@ -101,7 +119,7 @@ async function run<T>(op: Op, work: () => T): Promise<T> {
 // One function per Tauri command in `entries.ts`, with the same signature.
 
 export function hasVault(): Promise<boolean> {
-  return run("has", () => !faults.newVault);
+  return run("has", () => vaultPresent);
 }
 
 export function unlockVault(_passphrase: string): Promise<void> {
@@ -131,11 +149,171 @@ export function getEntry(id: string): Promise<JournalEntry | null> {
 export function saveEntry(entry: JournalEntry): Promise<void> {
   return run("save", () => {
     fallbackEntries.set(entry.id, entry);
+    markPending(entry.id);
   });
 }
 
 export function deleteEntry(id: string): Promise<void> {
   return run("delete", () => {
     fallbackEntries.delete(id);
+    markPending(id);
   });
+}
+
+// --- simulated sync --------------------------------------------------------
+//
+// The same sequence the real backend produces (`src-tauri/src/sync`): a save
+// marks its entry pending at once, a debounced pass uploads it, and the mark
+// clears with a `synced` status. Off by default, like an app nobody has
+// connected. From the URL:
+//
+//   ?sync=on          starts connected and synced
+//   ?sync=conflict    starts connected with one conflicted entry
+//   ?fail=sync        every pass fails: the ids stay pending, and the state is
+//                     `offline` with the fault message
+//   ?fail=connect     connecting is refused
+//   ?slow=sync        a pass takes SLOW_MS to start, long enough to look at a
+//                     pending mark; ?slow=connect slows connecting the same way
+//
+// A pass also fails for `sync_now`, which then rejects as the real one does.
+
+const providers: ProviderInfo[] = [{ id: "dropbox", name: "Dropbox" }];
+
+/// How long after a save the simulated pass runs. The real one waits about two
+/// seconds; a test has no use for that.
+const PUSH_MS = 300;
+
+/// What connecting finds in the cloud, as if another device had written it:
+/// it reaches the list through `sync://changed`, not through a save here.
+const cloudEntry: JournalEntry = {
+  id: "c3d9a1f4-7b2e-4c8a-9e5d-3f1a6b2c0d03",
+  title: "Written on the laptop",
+  updated_at: "2026-09-05T21:10:00.000Z",
+  markdown: "# Written on the laptop\n\nThis one came from another device.",
+};
+
+let connected: ProviderInfo | null = null;
+const pending = new Set<string>();
+const conflicted = new Set<string>();
+let lastSyncedAt: string | null = null;
+/// Why the last pass failed, if it did.
+let failure: string | null = null;
+let pushTimer: ReturnType<typeof setTimeout> | undefined;
+const statusListeners = new Set<(status: SyncStatusPayload) => void>();
+const changedListeners = new Set<() => void>();
+
+if (faults.sync !== "off") {
+  connected = providers[0];
+  lastSyncedAt = new Date().toISOString();
+  if (faults.sync === "conflict") conflicted.add(seedEntries[0].id);
+}
+
+/// The status, derived in the order `derive_state` does in Rust (minus the
+/// states this simulation never reaches): failure, then conflicts, then
+/// pending, and `synced` when none applies.
+function status(): SyncStatusPayload {
+  const state = !connected
+    ? "off"
+    : failure
+      ? "offline"
+      : conflicted.size > 0
+        ? "conflicts"
+        : pending.size > 0
+          ? "pending"
+          : "synced";
+  return {
+    state,
+    provider: connected?.name ?? null,
+    pending_ids: [...pending],
+    conflicted_ids: [...conflicted],
+    pending_other: 0,
+    last_synced_at: lastSyncedAt,
+    message: state === "offline" ? failure : null,
+  };
+}
+
+function emitStatus() {
+  const current = status();
+  statusListeners.forEach((listener) => listener(current));
+}
+
+/// One pass: uploads everything pending, or fails, leaving it pending.
+function pass() {
+  if (!connected) return;
+  if (faults.fail.has("sync")) {
+    failure = faults.failMessage;
+  } else {
+    failure = null;
+    pending.clear();
+    lastSyncedAt = new Date().toISOString();
+  }
+  emitStatus();
+}
+
+function markPending(id: string) {
+  if (!connected) return;
+  pending.add(id);
+  emitStatus();
+  // Debounced, as the real one is: another save pushes the pass back.
+  clearTimeout(pushTimer);
+  pushTimer = setTimeout(pass, faults.slow.has("sync") ? SLOW_MS : PUSH_MS);
+}
+
+export function syncStatus(): Promise<SyncStatusPayload> {
+  return Promise.resolve(status());
+}
+
+export function listProviders(): Promise<ProviderInfo[]> {
+  return Promise.resolve(providers);
+}
+
+export function connectRemote(providerId: string): Promise<void> {
+  return run("connect", () => {
+    const provider = providers.find((p) => p.id === providerId);
+    if (!provider) throw `unknown sync provider "${providerId}"`;
+    connected = provider;
+    failure = null;
+    lastSyncedAt = new Date().toISOString();
+    // The first pass, which pulls what another device left in the cloud: the
+    // journal's key on a device that has none, and its entries.
+    vaultPresent = true;
+    if (!fallbackEntries.has(cloudEntry.id)) {
+      fallbackEntries.set(cloudEntry.id, cloudEntry);
+      changedListeners.forEach((listener) => listener());
+    }
+    emitStatus();
+  });
+}
+
+export function disconnectRemote(): Promise<void> {
+  clearTimeout(pushTimer);
+  connected = null;
+  failure = null;
+  lastSyncedAt = null;
+  pending.clear();
+  conflicted.clear();
+  emitStatus();
+  return Promise.resolve();
+}
+
+export async function syncNow(): Promise<void> {
+  if (!connected) throw "sync is not connected";
+  if (faults.slow.has("sync")) {
+    await new Promise((resolve) => setTimeout(resolve, SLOW_MS));
+  }
+  clearTimeout(pushTimer);
+  pass();
+  if (failure) throw failure;
+}
+
+export function onSyncStatus(
+  handler: (status: SyncStatusPayload) => void,
+): () => void {
+  statusListeners.add(handler);
+  return () => statusListeners.delete(handler);
+}
+
+export function onSyncChanged(handler: () => void): () => void {
+  changedListeners.add(handler);
+  return () => changedListeners.delete(handler);
 }

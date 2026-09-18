@@ -7,11 +7,14 @@ import {
   ListItemButton,
   ListSubheader,
   Stack,
+  Tooltip,
   Typography,
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
 import MenuIcon from "@mui/icons-material/Menu";
 import NotesIcon from "@mui/icons-material/Notes";
+import CloudUploadOutlinedIcon from "@mui/icons-material/CloudUploadOutlined";
+import WarningAmberIcon from "@mui/icons-material/WarningAmber";
 import { useMatch, useNavigate } from "react-router-dom";
 import { useAppState } from "../context/AppStateContext";
 import { useNewEntry } from "../hooks/useNewEntry";
@@ -22,6 +25,46 @@ import {
   groupByMonth,
 } from "../utils/date";
 import { HEADER_HEIGHT, LIST_WIDTH } from "./chrome";
+
+/// A row's sync mark: the exception, not decoration. A synced row shows
+/// nothing, and neither does any row while sync is off, or every row would
+/// carry one. A conflict outranks "not uploaded", since a parked conflict is
+/// also waiting to be pushed.
+///
+/// The icon is 14px inside the time line's own height, so a marked row is no
+/// taller than an unmarked one. The label is on the wrapper, which is what
+/// `role="img"` and the tooltip both name.
+function SyncMark({ id }: { id: string }) {
+  const { sync, pendingIds, conflictedIds } = useAppState();
+  if (sync.state === "off") return null;
+  const conflicted = conflictedIds.has(id);
+  if (!conflicted && !pendingIds.has(id)) return null;
+
+  const label = conflicted
+    ? "Conflicting versions — resolving"
+    : "Not uploaded yet";
+  return (
+    <Tooltip title={label} placement="top" arrow>
+      <Box
+        component="span"
+        role="img"
+        aria-label={label}
+        data-testid="sync-mark"
+        sx={{
+          display: "inline-flex",
+          color: conflicted ? "warning.main" : "inherit",
+          opacity: conflicted ? 1 : 0.6,
+        }}
+      >
+        {conflicted ? (
+          <WarningAmberIcon sx={{ fontSize: 14 }} />
+        ) : (
+          <CloudUploadOutlinedIcon sx={{ fontSize: 14 }} />
+        )}
+      </Box>
+    </Tooltip>
+  );
+}
 
 /// The middle column: every entry, newest first, under sticky month headers.
 ///
@@ -164,9 +207,12 @@ export default function EntryList({
                     <Typography noWrap sx={{ fontSize: 14, fontWeight: 600 }}>
                       {entry.title}
                     </Typography>
-                    <Typography sx={{ fontSize: 12, opacity: 0.7 }}>
-                      {formatTime(entry.updated_at)}
-                    </Typography>
+                    <Stack direction="row" alignItems="center" spacing={0.75}>
+                      <Typography sx={{ fontSize: 12, opacity: 0.7 }}>
+                        {formatTime(entry.updated_at)}
+                      </Typography>
+                      <SyncMark id={entry.id} />
+                    </Stack>
                   </Box>
                 </ListItemButton>
               )),
