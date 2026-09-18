@@ -49,4 +49,5 @@ mod status;
 pub use engine::{ConflictResolver, Resolution, SyncEngine, SyncReport, KEY_BLOB};
 pub use error::{SyncError, SyncErrorKind};
 pub use notify::NotifyingStore;
+pub use state::erase_state;
 pub use status::SyncStatus;

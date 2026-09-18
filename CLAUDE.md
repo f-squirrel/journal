@@ -142,7 +142,9 @@ field-name mismatches — a class of bug neither the Playwright suite nor
     the draft's URL never changes under the keyed pane.
   - `src/bindings/` is **generated** — do not edit by hand. ts-rs derives
     it from `crates/entry` (behind that crate's off-by-default `ts`
-    feature, so the codegen crate stays out of the shipped binary).
+    feature, so the codegen crate stays out of the shipped binary). That
+    includes `SyncStatusPayload`/`SyncState`, the sync status the backend
+    sends over `sync_status` and `sync://status`.
     `src/types.ts` re-exports it under the names the app uses
     (`EntryHeader`, `JournalEntry`), so imports stay pointed at
     `../types`. Rename a field in Rust without running `make bindings`
@@ -205,8 +207,9 @@ field-name mismatches — a class of bug neither the Playwright suite nor
   supplies (it needs plaintext). `.vault-key` is never merged — a mismatch
   stops sync (`KeyMismatch`); its name is a constant here because `journal-key`
   keeps its own private, and a test checks they agree. It also has
-  `NotifyingStore` and the pending/conflicted `SyncStatus` behind the UI's
-  per-entry marks. Nothing wires it up yet — see `.claude/plans/cloud-sync.md`.
+  `NotifyingStore`, the pending/conflicted `SyncStatus` behind the UI's
+  per-entry marks, and `erase_state` for disconnecting. `src-tauri/src/sync/`
+  wires it up — see below and `.claude/plans/cloud-sync.md`.
   `crates/dropbox` (`journal-dropbox`) is the first `RemoteStore`: the
   official `dropbox-sdk` on its blocking `ureq` client (no async runtime in its
   tree), one file per blob in an "App folder". Besides `DropboxRemote` it holds
@@ -216,7 +219,8 @@ field-name mismatches — a class of bug neither the Playwright suite nor
   refresh written here so it can be tested. Its tests run against a scripted
   `HttpClient`, not a network; `live_round_trip` is `#[ignore]`d and needs
   `DROPBOX_TOKEN`. The SDK logs the token response at `debug`, so keep its
-  `dropbox_sdk::oauth2` target at `info` or above. Nothing wires it up yet.
+  `dropbox_sdk::oauth2` target at `info` or above. `src-tauri/src/sync/` wires
+  it up.
   `crates/vault` (`journal-vault`) is the layer that knows what an
   entry *is*, and is what the rest of the app means by "the vault":
   `{id}.json` blob naming, serde, and the header sort. One encrypted
@@ -266,6 +270,30 @@ field-name mismatches — a class of bug neither the Playwright suite nor
   their only caller — keep it that way, since a fresh key written over
   existing entries orphans all of them. `Keyring::exists` is public only
   so `has_vault` (and thus `LoginPage`) can pick its copy.
+  `src-tauri/src/sync/` is the sync wiring, in five files: `mod.rs`
+  (`SyncControl`, the connect/disconnect flow, the `connect_dropbox`,
+  `disconnect_remote`, `sync_now` and `sync_status` commands, and the
+  `Provider` trait that lets tests stand in for Dropbox), `worker.rs` (the
+  thread that owns the `SyncEngine` and its pure `Schedule`: a pass at
+  startup, every 60 s, ~2 s after a save, on demand; exponential backoff after
+  a transient failure, a halt after `Unauthorized`/`KeyMismatch` until
+  `sync_now`), `resolver.rs` (D1 — the newer entry keeps its id, the older
+  becomes a "(conflicted copy)"; `Deferred` while the vault is locked, and
+  `unlock` kicks a pass to settle those), `status.rs` (`derive_state`, the
+  payload, and the 250 ms coalescer behind `sync://status`) and `oauth.rs`
+  (the loopback listener on `127.0.0.1:53682` the browser is redirected to;
+  register `http://127.0.0.1:53682/` with the Dropbox app). `sync://changed`
+  fires when a pass pulled, deleted or merged entries. Three things to keep:
+  the vault is given a `NotifyingStore` over the `FsStore` while the engine
+  gets the bare `FsStore` (its own pulls are not edits); the `Slot` that
+  connects the two exists before the vault's store because connecting can
+  happen long after; and a worker is stopped only after it is taken out of the
+  `Slot`, since a pass's resolver saves through the store whose callback locks
+  it. Sync keeps running while the vault is locked. The app key is a build-time
+  env var: `DROPBOX_APP_KEY=… make run` (without it, connecting reports how to
+  set it). The token lives in the app config dir and the engine state in
+  `sync-state.json` in the data dir, both outside the synced `entries/`.
+  Known gap: a Dropbox cursor reset is not yet handled (see the plan).
   - The key file's scrypt work factor is **pinned** (`WORK_FACTOR` in
     `identity.rs`) rather than benchmarked, and capped on read
     (`MAX_WORK_FACTOR`). `age` otherwise picks the factor by

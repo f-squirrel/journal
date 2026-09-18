@@ -21,17 +21,24 @@ tauri-build = { workspace = true }
 tauri = { workspace = true }
 tauri-plugin-log = { workspace = true }
 tauri-plugin-opener = { workspace = true }
+chrono = { workspace = true }
 log = { workspace = true }
 secrecy = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+url = { workspace = true }
 journal-entry = { path = "../crates/entry" }
 journal-vault = { path = "../crates/vault" }
 journal-store = { path = "../crates/store" }
 journal-fs-store = { path = "../crates/fs-store" }
 journal-key = { path = "../crates/key" }
+journal-remote = { path = "../crates/remote" }
+journal-sync = { path = "../crates/sync" }
+journal-dropbox = { path = "../crates/dropbox" }
 
 [dev-dependencies]
 # `tauri::test` runs the real builder over a mock runtime, so the logging
 # plugin's setup hook (which is what installs the logger) actually runs.
 tauri = { workspace = true, features = ["test"] }
+# `MemoryRemote`, standing in for Dropbox in the sync wiring's tests.
+journal-remote = { path = "../crates/remote", features = ["testing"] }

@@ -1,3 +1,7 @@
+mod sync;
+
+pub use sync::{SyncState, SyncStatusPayload};
+
 use std::fmt;
 use std::str::FromStr;
 

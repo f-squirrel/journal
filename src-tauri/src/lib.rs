@@ -1,14 +1,20 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
+mod sync;
+
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
+use journal_dropbox::FileTokenStore;
 use journal_entry::{Entry, Header, Id};
 use journal_fs_store::FsStore;
 use journal_key::Keyring;
 use journal_store::BlobStore;
+use journal_sync::NotifyingStore;
 use journal_vault::Vault;
 use secrecy::SecretString;
+use sync::SyncControl;
 use tauri::{Manager, Runtime, State};
+use tauri_plugin_opener::OpenerExt;
 
 /// The blob store the journal lives in, plus the unlocked `Vault` over it,
 /// if any. `vault` is `None` until `unlock` succeeds, and is cleared again by
@@ -128,7 +134,11 @@ async fn has_vault(state: State<'_, VaultState>) -> Result<bool, String> {
 }
 
 #[tauri::command]
-async fn unlock(state: State<'_, VaultState>, passphrase: String) -> Result<(), String> {
+async fn unlock(
+    state: State<'_, VaultState>,
+    sync: State<'_, Arc<SyncControl>>,
+    passphrase: String,
+) -> Result<(), String> {
     let store = state.store.clone();
     let passphrase = SecretString::from(passphrase);
 
@@ -138,7 +148,10 @@ async fn unlock(state: State<'_, VaultState>, passphrase: String) -> Result<(), 
     let generation = begin_unlock(&state);
     let opened = blocking(move || Vault::open(store, &passphrase)).await?;
 
-    install_vault(&state, generation, opened)
+    install_vault(&state, generation, opened)?;
+    // A conflict parked while the vault was locked can be settled now.
+    sync.kick();
+    Ok(())
 }
 
 #[tauri::command]
@@ -200,15 +213,58 @@ pub fn run() {
             list_entries,
             get_entry,
             save_entry,
-            delete_entry
+            delete_entry,
+            sync::connect_dropbox,
+            sync::disconnect_remote,
+            sync::sync_now,
+            sync::sync_status
         ])
         .setup(|app| {
-            let entries_dir = app.path().app_data_dir()?.join("entries");
+            let data_dir = app.path().app_data_dir()?;
+            let entries = FsStore::new(data_dir.join("entries"));
+
+            // The vault writes through a store that reports each write to sync,
+            // and sync reads and writes the store beneath it: its own pulls are
+            // not edits. The slot exists first because the callback reaches the
+            // worker through it, and there is no worker until an account is
+            // connected.
+            let slot = Arc::new(sync::Slot::default());
+            let notifying = {
+                let slot = slot.clone();
+                NotifyingStore::new(entries.clone(), move |name| slot.dirty(name))
+            };
             app.manage(VaultState {
-                store: Arc::new(FsStore::new(entries_dir)),
+                store: Arc::new(notifying),
                 vault: Mutex::new(None),
                 generation: AtomicU64::new(0),
             });
+
+            let handle = app.handle().clone();
+            let opener = app.handle().clone();
+            let control = Arc::new(SyncControl::new(sync::SyncConfig {
+                slot,
+                local: Arc::new(entries),
+                vault: Arc::new(move || vault(&handle.state::<VaultState>()).ok()),
+                events: Arc::new(sync::TauriEvents(app.handle().clone())),
+                provider: Arc::new(sync::Dropbox::from_build()),
+                // In the config directory, not the data directory the journal
+                // lives in: a credential must never be somewhere that syncs.
+                tokens: Arc::new(FileTokenStore::new(
+                    app.path().app_config_dir()?.join("dropbox-token"),
+                )),
+                state_path: data_dir.join("sync-state.json"),
+                open_url: Arc::new(move |url| {
+                    opener
+                        .opener()
+                        .open_url(url.as_str(), None::<&str>)
+                        .map_err(|e| e.to_string())
+                }),
+                redirect_port: sync::oauth::REDIRECT_PORT,
+                timing: sync::worker::Timing::default(),
+            }));
+            app.manage(control.clone());
+            // Scans every blob against the sync state: not on the main thread.
+            std::thread::spawn(move || control.resume());
 
             if let Some(window) = app.get_webview_window("main") {
                 window.maximize()?;

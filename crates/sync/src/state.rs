@@ -189,6 +189,28 @@ impl State {
     }
 }
 
+/// Deletes the state file at `path` and the parked conflicts beside it, for an
+/// app that is disconnecting from its remote. Succeeds if there is none.
+///
+/// Only bookkeeping goes: the blobs in the local store are untouched, and so is
+/// the other side of any conflict that was still parked — which is one more
+/// reason to settle conflicts before disconnecting, but not a loss of text the
+/// device's own store holds.
+pub fn erase_state(path: &Path) -> io::Result<()> {
+    // The parked bytes first, so a crash leaves an index without bytes, which
+    // `load` already drops, rather than bytes nothing refers to.
+    let mut parked = path.as_os_str().to_owned();
+    parked.push(".parked");
+    match fs::remove_dir_all(PathBuf::from(parked)) {
+        Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e),
+        _ => {}
+    }
+    match fs::remove_file(path) {
+        Err(e) if e.kind() != io::ErrorKind::NotFound => Err(e),
+        _ => Ok(()),
+    }
+}
+
 /// Writes a file so that a reader — or a crash — sees the old contents or the
 /// new, never half of each: temp file, sync, rename.
 fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
@@ -209,4 +231,38 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
         return Err(e);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn erasing_removes_the_state_and_its_parked_bytes_and_nothing_else() {
+        let dir = std::env::temp_dir().join(format!("journal-sync-erase-{}", std::process::id()));
+        let path = dir.join("state.json");
+        let name = BlobName::try_from("a.json").unwrap();
+        let mut state = State::load(path.clone()).unwrap();
+        state
+            .park(
+                &name,
+                Parked {
+                    rev: Revision::new("1"),
+                    remote_hash: Digest::of(b"x"),
+                    theirs: b"x".to_vec(),
+                },
+            )
+            .unwrap();
+        fs::write(dir.join("unrelated"), b"keep").unwrap();
+
+        erase_state(&path).unwrap();
+
+        assert!(!path.exists());
+        assert!(!state.parked_dir().exists());
+        assert!(dir.join("unrelated").exists());
+        // Nothing left to erase is not a failure.
+        erase_state(&path).unwrap();
+
+        fs::remove_dir_all(dir).ok();
+    }
 }

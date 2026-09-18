@@ -22,6 +22,9 @@ marks; `mark_dirty` and `NotifyingStore` feed it from local saves. Retry,
 backoff and scheduling are not here: errors come back typed
 (`SyncErrorKind`) and the app's worker decides.
 
+`erase_state` deletes the state file and the parked conflicts beside it, for an
+app that is disconnecting; the local store is not touched.
+
 Give the engine the store *beneath* `NotifyingStore`, so its own pulls are not
 counted as local edits. Tests run two devices (two `FsStore`s) against one
 `MemoryRemote`.

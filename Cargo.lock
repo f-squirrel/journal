@@ -2499,10 +2499,14 @@ dependencies = [
 name = "journal"
 version = "0.1.0"
 dependencies = [
+ "chrono",
+ "journal-dropbox",
  "journal-entry",
  "journal-fs-store",
  "journal-key",
+ "journal-remote",
  "journal-store",
+ "journal-sync",
  "journal-vault",
  "log",
  "secrecy",
@@ -2512,6 +2516,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-log",
  "tauri-plugin-opener",
+ "url",
 ]
 
 [[package]]

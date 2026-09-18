@@ -41,6 +41,17 @@ fn blob_name(id: &Id) -> BlobName {
         .expect("a uuid followed by an extension is a valid blob name")
 }
 
+/// The entry a blob holds, or `None` for a blob that is not an entry: the
+/// sealed key, or a name from somewhere else.
+///
+/// The inverse of [`blob_name`], and strict about it: a name that parses as an
+/// id but is not the one `blob_name` would write for it (upper-case, say) is
+/// not ours.
+pub fn entry_id(name: &BlobName) -> Option<Id> {
+    let id: Id = name.strip_suffix(ENTRY_EXT)?.parse().ok()?;
+    (blob_name(&id) == *name).then_some(id)
+}
+
 /// Whether `name` is one of our entry blobs.
 ///
 /// The single definition of that question. It used to have a second copy in
@@ -139,6 +150,13 @@ impl Vault {
 
     pub fn delete_entry(&self, id: &Id) -> Result<(), VaultError> {
         Ok(self.store.delete(&blob_name(id))?)
+    }
+
+    /// Decrypts and parses the bytes of an entry blob that is not in this
+    /// vault's store — the other side of a sync conflict, say.
+    pub fn decode_entry(&self, ciphertext: &[u8]) -> Result<Entry, VaultError> {
+        let plaintext = self.cipher.decrypt(ciphertext)?;
+        Ok(serde_json::from_slice(&plaintext)?)
     }
 
     /// Reads one blob and decodes it, or `None` if there is no such blob.
@@ -254,6 +272,39 @@ mod tests {
         vault.delete_entry(&a).unwrap();
         assert!(vault.get_entry(&a).unwrap().is_none());
         assert_eq!(vault.list_entries().unwrap().len(), 1);
+
+        discard(&store);
+    }
+
+    /// The sync layer turns blob names back into entries with this, so it has
+    /// to agree with the naming that produced them and refuse everything else.
+    #[test]
+    fn entry_id_inverts_the_blob_naming_and_refuses_other_names() {
+        let id = Id::new();
+        assert_eq!(entry_id(&blob_name(&id)), Some(id));
+
+        let name = |s: &str| BlobName::try_from(s).unwrap();
+        // The sealed key, and names from somewhere else.
+        assert_eq!(entry_id(&name(".vault-key")), None);
+        assert_eq!(entry_id(&name("notes.json")), None);
+        assert_eq!(entry_id(&name("README")), None);
+        // An id that parses but is not the spelling we write.
+        let upper = format!("{}{ENTRY_EXT}", id.to_string().to_uppercase());
+        assert_eq!(entry_id(&name(&upper)), None);
+    }
+
+    #[test]
+    fn decode_entry_reads_the_bytes_a_save_wrote() {
+        let store = temp_store();
+        let vault = fake_vault(store.clone());
+        let id = Id::new();
+        vault.save_entry(&sample(id)).unwrap();
+
+        let bytes = store.get(&blob_name(&id)).unwrap().unwrap();
+        let entry = vault.decode_entry(&bytes).unwrap();
+        assert_eq!(entry.header.id, id);
+        assert_eq!(entry.markdown, "# hello");
+        assert!(vault.decode_entry(b"not valid ciphertext").is_err());
 
         discard(&store);
     }

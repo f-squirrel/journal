@@ -1,0 +1,97 @@
+//! What the app tells the frontend about sync: one payload, sent over both the
+//! `sync_status` command and the `sync://status` event.
+//!
+//! It lives beside the entry types because the frontend's wire types are
+//! generated from this crate (`make bindings`), and it names entries by
+//! [`Id`]. Deriving the state from the sync engine's own status is the
+//! backend's job (`src-tauri`); this is only the shape.
+
+use chrono::{DateTime, Utc};
+use serde::Serialize;
+
+use crate::Id;
+
+/// The one word the rail's sync button is drawn from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(
+    feature = "ts",
+    derive(ts_rs::TS),
+    ts(export, export_to = "../../../src/bindings/")
+)]
+#[serde(rename_all = "snake_case")]
+pub enum SyncState {
+    /// Not connected to a cloud provider.
+    Off,
+    /// Everything local has reached the provider, as of `last_synced_at`.
+    Synced,
+    /// Local changes are waiting to be uploaded.
+    Pending,
+    /// A pass is running right now.
+    Syncing,
+    /// The last pass could not reach the provider, or was told to slow down.
+    Offline,
+    /// Two devices edited the same entry, and the resolver has not settled it
+    /// yet (the vault is locked).
+    Conflicts,
+    /// The last pass failed for a reason retrying will not obviously fix.
+    Error,
+    /// The provider no longer accepts our credentials: connect again.
+    Reauth,
+    /// This device and the cloud hold different journal keys, so sync is
+    /// stopped until the user chooses which journal to keep.
+    KeyMismatch,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[cfg_attr(
+    feature = "ts",
+    derive(ts_rs::TS),
+    ts(export, export_to = "../../../src/bindings/")
+)]
+pub struct SyncStatusPayload {
+    pub state: SyncState,
+    /// Entries with local changes not yet uploaded. Includes an entry deleted
+    /// here whose deletion has not been sent, so the frontend ignores ids with
+    /// no row. Sent in every state, so an `offline` status still marks what
+    /// did not upload.
+    pub pending_ids: Vec<Id>,
+    /// Entries with a parked conflict.
+    pub conflicted_ids: Vec<Id>,
+    /// Pending blobs that are not entries: the sealed key.
+    pub pending_other: u32,
+    /// When the last pass finished without error.
+    pub last_synced_at: Option<DateTime<Utc>>,
+    /// Why the last pass failed, in words for the user.
+    pub message: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The frontend reads these keys and strings by name, and the wire format
+    /// is `snake_case` on both sides (see the crate's other types).
+    #[test]
+    fn the_payload_serializes_snake_case() {
+        let payload = SyncStatusPayload {
+            state: SyncState::KeyMismatch,
+            pending_ids: vec!["5c1f7c9e-6e8b-4a2f-9c1a-1f6b9b6b0a01".parse().unwrap()],
+            conflicted_ids: vec![],
+            pending_other: 1,
+            last_synced_at: Some("2026-09-07T20:17:50Z".parse().unwrap()),
+            message: None,
+        };
+
+        assert_eq!(
+            serde_json::to_value(&payload).unwrap(),
+            serde_json::json!({
+                "state": "key_mismatch",
+                "pending_ids": ["5c1f7c9e-6e8b-4a2f-9c1a-1f6b9b6b0a01"],
+                "conflicted_ids": [],
+                "pending_other": 1,
+                "last_synced_at": "2026-09-07T20:17:50Z",
+                "message": null,
+            })
+        );
+    }
+}
