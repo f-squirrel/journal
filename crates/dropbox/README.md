@@ -48,16 +48,9 @@ no async runtime in the tree (`cargo tree -p journal-dropbox` shows no `tokio`,
   format to get it out; a test pins that format.
 - **Errors** map as: authentication failures (including a revoked refresh
   token) → `Unauthorized`; 429 → `RateLimited` (never less than 1 s); network
-  failures and 5xx → `Transient`; anything else → `Other` with the SDK's
-  message.
-
-## Known gap
-
-`list_folder/continue` can answer that the cursor is invalid (`reset`). The
-`RemoteStore` trait has no way to say "start over", so this surfaces as
-`RemoteError::Other` and every pass would fail the same way until the sync
-state is deleted. The fix belongs in the trait and the engine (a distinct
-error, and the engine dropping its cursor and re-listing); it is not made here.
+  failures and 5xx → `Transient`; `list_folder/continue`'s `reset` →
+  `CursorExpired` (the engine then lists everything again); anything else →
+  `Other` with the SDK's message.
 
 ## Logging
 

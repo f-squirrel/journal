@@ -48,6 +48,10 @@ pub trait RemoteStore: Send + Sync {
     /// then persist the last cursor. This works the same way for the initial
     /// listing.
     ///
+    /// A remote may forget a cursor it handed out (Dropbox does, without
+    /// warning). It then answers [`RemoteError::CursorExpired`], on any page,
+    /// and the caller starts over with `None`. `None` itself never expires.
+    ///
     /// Changes come in feed order, and one name may appear more than once (an
     /// edit followed by a delete): a later change supersedes an earlier one.
     /// A change may also describe a revision that a later change, or a later

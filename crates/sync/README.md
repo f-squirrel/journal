@@ -14,7 +14,10 @@ outranks an edit, a conflict is parked for the resolver rather than settled by
 last-writer-wins, and losing the state file costs extra comparison, not text.
 The sealed key blob (`KEY_BLOB`) is never merged: two different keys stop the
 pass with `SyncError::KeyMismatch`. Base state is written per blob after it
-succeeds and the cursor last, so any failed pass can simply be re-run.
+succeeds and the cursor last, so any failed pass can simply be re-run. A cursor
+the remote no longer honours (`RemoteError::CursorExpired`) is not a failure:
+the pass lists everything from scratch, the same way a first run does, and a
+blob missing from that listing is read as deleted.
 
 `SyncEngine::status` says which blobs are not uploaded yet (`pending`) and
 which conflicts wait on the resolver (`conflicted`), for the UI's per-entry

@@ -85,6 +85,10 @@ mod tests {
             SyncErrorKind::Other
         );
         assert_eq!(
+            kind(RemoteError::CursorExpired.into()),
+            SyncErrorKind::Other
+        );
+        assert_eq!(
             kind(std::io::Error::other("x").into()),
             SyncErrorKind::Other
         );

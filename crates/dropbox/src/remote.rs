@@ -67,12 +67,7 @@ impl<C: UserAuthClient + Send> RemoteStore for DropboxRemote<C> {
                 &ListFolderContinueArg::new(cursor.as_str().to_owned()),
             )
             .map_err(|e| match lift(e) {
-                // The trait has no way to say "start over" yet, so this stops
-                // the pass with a message rather than a fix. See the crate
-                // README.
-                Failure::Api(ListFolderContinueError::Reset) => RemoteError::Other(
-                    "Dropbox invalidated the change cursor; a full re-listing is needed".to_owned(),
-                ),
+                Failure::Api(ListFolderContinueError::Reset) => RemoteError::CursorExpired,
                 other => other.or_other("could not read Dropbox's changes"),
             })?,
         };
@@ -439,7 +434,7 @@ mod tests {
     }
 
     #[test]
-    fn a_reset_cursor_is_reported_not_swallowed() {
+    fn a_reset_cursor_is_reported_as_expired() {
         let http = FakeHttp::default().expect(
             "2/files/list_folder/continue",
             Reply::api_error(wire::tag("reset")),
@@ -449,10 +444,7 @@ mod tests {
             .changes(Some(&Cursor::new("old")))
             .unwrap_err();
 
-        assert!(
-            matches!(&err, RemoteError::Other(m) if m.contains("cursor")),
-            "{err:?}"
-        );
+        assert_eq!(err, RemoteError::CursorExpired);
     }
 
     // --- get ---

@@ -139,12 +139,29 @@ impl<'a> Pass<'a> {
     }
 
     /// Everything the remote reports since the last cursor, all pages.
+    ///
+    /// A cursor the remote has forgotten is not a failure: it is what a first
+    /// run looks like, so the pass lists from scratch and compares against the
+    /// bases it already has. A blob missing from a full listing was deleted
+    /// there, which is how deletions made while the cursor was lost are found.
     fn pull_changes(&self) -> Result<(RemoteView, Cursor), SyncError> {
+        match self.read_feed(self.state.cursor.as_ref()) {
+            Err(SyncError::Remote(RemoteError::CursorExpired)) => {
+                log::info!("the remote forgot the sync cursor; listing everything again");
+                self.read_feed(None)
+            }
+            read => read,
+        }
+    }
+
+    /// The feed from `since` to its end. It restarts from nothing, and does not
+    /// resume, if a cursor expires part-way.
+    fn read_feed(&self, since: Option<&Cursor>) -> Result<(RemoteView, Cursor), SyncError> {
         let mut view = RemoteView {
-            complete: self.state.cursor.is_none(),
+            complete: since.is_none(),
             seen: BTreeMap::new(),
         };
-        let mut page = self.engine.remote.changes(self.state.cursor.as_ref())?;
+        let mut page = self.engine.remote.changes(since)?;
         loop {
             for change in page.changes {
                 match change {

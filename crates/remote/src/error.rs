@@ -22,6 +22,13 @@ pub enum RemoteError {
     #[error("another writer changed this blob first")]
     Conflict { theirs: Option<(Vec<u8>, Revision)> },
 
+    /// The remote no longer honours the cursor passed to
+    /// [`changes`](crate::RemoteStore::changes), so what changed since it cannot
+    /// be told. Nothing is wrong with the account: list from scratch
+    /// (`changes(None)`) and compare, which finds deletions by absence.
+    #[error("the remote's change cursor is no longer valid")]
+    CursorExpired,
+
     /// Credentials revoked, or expired past what a refresh can fix. Retrying
     /// cannot help: stop, and ask the user to reconnect.
     #[error("the remote rejected our credentials; reconnect to continue")]

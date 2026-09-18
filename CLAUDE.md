@@ -317,7 +317,9 @@ field-name mismatches — a class of bug neither the Playwright suite nor
   and revisions, so `install` keeps it only while the provider is the same one
   as the saved login; connecting a different provider erases it, and a test
   holds that.
-  Known gap: a Dropbox cursor reset is not yet handled (see the plan).
+  A cursor the remote forgets (Dropbox's `reset`) is `RemoteError::CursorExpired`;
+  the engine then lists from scratch, and a blob missing from that listing is a
+  deletion.
   - The key file's scrypt work factor is **pinned** (`WORK_FACTOR` in
     `identity.rs`) rather than benchmarked, and capped on read
     (`MAX_WORK_FACTOR`). `age` otherwise picks the factor by

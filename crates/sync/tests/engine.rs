@@ -515,3 +515,87 @@ fn the_key_blob_name_is_the_one_the_key_crate_writes() {
     let names: Vec<_> = device.store.list().unwrap();
     assert_eq!(names, [n(KEY_BLOB)]);
 }
+
+#[test]
+fn a_cursor_the_remote_forgot_is_relisted_and_finds_what_happened_meanwhile() {
+    let remote = Arc::new(MemoryRemote::new());
+    let (a, b) = synced_pair(
+        &remote,
+        &[("x.json", b"1"), ("y.json", b"1"), ("z.json", b"1")],
+    );
+    a.put("x.json", b"a edited");
+    a.delete("y.json");
+    a.put("w.json", b"a new");
+    a.sync();
+    // B has edits of its own, one of them to what A deleted (D4: it survives).
+    b.put("y.json", b"b edited too");
+    b.put("z.json", b"b edited");
+
+    remote.fail_next(RemoteError::CursorExpired);
+    let report = b.sync();
+
+    assert_eq!(
+        report,
+        SyncReport {
+            pulled: 2,
+            pushed: 2,
+            ..Default::default()
+        }
+    );
+    assert_eq!(
+        b.snapshot(),
+        snapshot_of(&[
+            ("w.json", b"a new"),
+            ("x.json", b"a edited"),
+            ("y.json", b"b edited too"),
+            ("z.json", b"b edited"),
+        ])
+    );
+    a.sync();
+    assert_eq!(a.snapshot(), b.snapshot());
+    assert_eq!(remote_snapshot(&*remote), b.snapshot());
+}
+
+#[test]
+fn a_deletion_made_while_the_cursor_was_lost_is_found_by_absence() {
+    let remote = Arc::new(MemoryRemote::new());
+    let (a, b) = synced_pair(&remote, &[("x.json", b"1"), ("y.json", b"1")]);
+    a.delete("x.json");
+    a.sync();
+
+    remote.fail_next(RemoteError::CursorExpired);
+
+    assert_eq!(b.sync().deleted, 1);
+    assert_eq!(b.snapshot(), snapshot_of(&[("y.json", b"1")]));
+}
+
+#[test]
+fn a_cursor_that_expires_part_way_through_paging_starts_over() {
+    let remote = Arc::new(MemoryRemote::new().with_page_size(1));
+    let (a, b) = synced_pair(&remote, &[("x.json", b"1"), ("y.json", b"1")]);
+    a.put("x.json", b"2");
+    a.put("y.json", b"2");
+    a.put("z.json", b"2");
+    a.sync();
+
+    // The first page reads, the second is refused.
+    remote.fail_after(1, RemoteError::CursorExpired);
+    b.sync();
+
+    assert_eq!(b.snapshot(), a.snapshot());
+    assert_eq!(b.snapshot().len(), 3);
+}
+
+#[test]
+fn a_remote_that_refuses_even_a_fresh_listing_is_a_failure() {
+    let remote = Arc::new(MemoryRemote::new());
+    let (_, b) = synced_pair(&remote, &[("x.json", b"1")]);
+
+    remote.fail_next(RemoteError::CursorExpired);
+    remote.fail_next(RemoteError::CursorExpired);
+
+    // Not retried forever: the pass gives up and says so.
+    assert_eq!(b.try_sync().unwrap_err().kind(), SyncErrorKind::Other);
+    // And the next one, with the remote sane again, is fine.
+    b.sync();
+}
