@@ -1,4 +1,4 @@
-.PHONY: run build test rust-test test-e2e bindings check-bindings check-no-fallback
+.PHONY: run build test rust-test test-e2e bindings check-bindings check-no-fallback format rust-format ts-format
 
 # Regenerate first: launching the app against stale bindings is how a broken
 # `invoke` bridge stays invisible (`tsc` passes, the command fails at runtime).
@@ -47,3 +47,16 @@ check-no-fallback:
 	  || { echo "the seeded fallback shipped in a production bundle"; exit 1; }
 	@! grep -rq "failMessage" dist/assets/*.js \
 	  || { echo "the fault-injection hook shipped in a production bundle"; exit 1; }
+
+# Format every crate in the workspace. --all makes that explicit rather than
+# relying on the default (format the root package plus its path deps).
+rust-format:
+	cargo fmt --all
+
+# Format every TypeScript/TSX file. src/bindings/ is excluded via
+# .prettierignore since it's ts-rs's own generated output (see `bindings`
+# above) — reformatting it would make `make check-bindings` fail forever.
+ts-format:
+	npm run format
+
+format: rust-format ts-format

@@ -51,8 +51,13 @@ the user rather than assuming a migration must be written.
   Runs in CI next to `npm run build`; see `src/api/fallback.ts` below.
 - `make rust-test` — `cargo test` over the whole workspace.
 - `make test` — the whole suite: `rust-test` then `test-e2e`, in that order.
+- `make format` — `rust-format` (`cargo fmt --all`, whole workspace) then
+  `ts-format` (`npm run format`, Prettier over every `.ts`/`.tsx` file).
+  `src/bindings/` is excluded via `.prettierignore` since it's ts-rs's own
+  generated output — formatting it would fight `make bindings`.
 
-There is no linter configured yet, and no unit tests for the frontend (Rust
+There is no linter configured yet (Prettier above only formats, it doesn't
+lint), and no unit tests for the frontend (Rust
 crates have `cargo test` unit tests, e.g. `crates/vault`; `src-tauri`'s
 run over `tauri::test`'s mock runtime, from its `tauri = { features =
 ["test"] }` dev-dependency). `tsc` (via
