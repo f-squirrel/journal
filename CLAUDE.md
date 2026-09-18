@@ -192,6 +192,13 @@ field-name mismatches — a class of bug neither the Playwright suite nor
   `src-tauri` names a concrete store, and the crates between reach for
   `journal-fs-store` as a dev-dependency for their tests. See ADR 0009
   for the three-layer split and the local-first sync plan.
+  `crates/remote` (`journal-remote`) is the cloud-side counterpart:
+  `RemoteStore`, a *separate* trait from `BlobStore` because a shared remote
+  needs a change feed (deletions included) and conditional writes that report
+  a lost race as `RemoteError::Conflict` rather than overwriting. It is
+  synchronous and holds no implementation; its `testing` feature provides
+  `MemoryRemote` for the sync engine's tests. Nothing wires it up yet — see
+  `.claude/plans/cloud-sync.md`.
   `crates/vault` (`journal-vault`) is the layer that knows what an
   entry *is*, and is what the rest of the app means by "the vault":
   `{id}.json` blob naming, serde, and the header sort. One encrypted

@@ -1,0 +1,19 @@
+[package]
+name = "journal-remote"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+# `MemoryRemote`, an in-memory `RemoteStore` for tests. Off by default so it
+# stays out of the shipped binary; the sync engine's tests turn it on.
+testing = ["dep:sha2"]
+
+[dependencies]
+journal-store = { path = "../store" }
+serde = { workspace = true }
+sha2 = { workspace = true, optional = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+# The crate's own tests exercise `MemoryRemote` without the feature flag.
+sha2 = { workspace = true }
