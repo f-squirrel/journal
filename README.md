@@ -1,40 +1,128 @@
 # Journal
 
-A journaling app built as a [Tauri v2](https://v2.tauri.app/) application: a
-React/TypeScript frontend in a native shell, with a Rust backend. Targets
-desktop today; iOS and Android are planned but not yet wired up.
+A private, local-first journal with Markdown editing and encrypted storage.
+The interface is built with React and runs in a native
+[Tauri 2](https://v2.tauri.app/) shell backed by Rust.
 
-> **Alpha software.** Nothing here is final: features, storage formats, APIs,
-> and the UI can all change without notice, and breaking changes may be made
-> without a migration path. Don't rely on it for data you can't afford to lose.
+> [!WARNING]
+> Journal is alpha software. Storage formats, APIs, and features may change
+> without a migration path. There are no releases or external users yet. Do
+> not trust it as the only copy of writing you cannot afford to lose.
 
-## Current state
+## What works today
 
-- **UI**: a three-pane layout (sidebar, entry list, entry pane), in the shape
-  of Day One's. Entries are markdown, edited inline with a CodeMirror-based
-  editor and rendered with `react-markdown` in read mode. Editing autosaves —
-  there's no Save button.
-- **Storage**: entries are stored locally, one encrypted JSON blob per entry,
-  behind a generic blob-store trait (`crates/store`) so alternate/synced
-  backends can be added later. `crates/fs-store` is the only implementation
-  today, writing one file per blob to a local directory.
-- **Encryption**: every entry is encrypted at rest with
-  [`age`](https://github.com/FiloSottile/age) under an X25519 keypair. The
-  keypair itself is sealed with a passphrase (scrypt) and stored alongside the
-  entries, so a synced store carries its key with it. See the ADRs below for
-  the design history.
-- **Not yet built**: sync to Dropbox/Google Drive/iCloud, and iOS/Android
-  builds.
+- A responsive three-pane desktop interface
+- Markdown editing with syntax highlighting and rendered read mode
+- Inline autosave—there is no Save button
+- Passphrase-protected journals
+- One independently encrypted blob per entry
+- Local filesystem storage
+- Light and dark themes
 
-## Development
+The sync engine and Dropbox adapter are implemented and tested as backend
+crates, but they are not connected to the application yet. Google Drive,
+iCloud, iOS, and Android support are planned.
 
-- `npm run dev` — Vite dev server only (frontend, in a browser, with seeded
-  in-memory data — no Rust backend).
-- `make run` — the full Tauri app (opens the native window; needs a Rust
-  toolchain). This is the primary way to see real app behavior.
-- `make build` — build the native installers.
-- `make test` — the full test suite (`cargo test` + Playwright UI tests).
+## Run it
 
-See [`CLAUDE.md`](CLAUDE.md) for the full architecture rundown and command
-reference, and [`docs/adrs/`](docs/adrs/README.md) for the reasoning behind
-major design decisions.
+### Prerequisites
+
+- [Node.js 22](https://nodejs.org/) and npm
+- The [stable Rust toolchain](https://rustup.rs/)
+- GNU Make
+- The [system dependencies required by Tauri](https://v2.tauri.app/start/prerequisites/)
+
+Install the JavaScript dependencies and launch the native app:
+
+```sh
+npm ci
+make run
+```
+
+On first launch, entering a passphrase creates a new journal. Later launches
+require the same passphrase; there is no password recovery.
+
+### Frontend-only development
+
+```sh
+npm run dev
+```
+
+This runs the interface in a browser with seeded, in-memory entries. It does
+not use the Rust backend, persist data, or exercise encryption. Use `make run`
+when testing real application behavior.
+
+## Development commands
+
+| Command | Purpose |
+| --- | --- |
+| `make run` | Regenerate bridge types and launch the Tauri app |
+| `make build` | Check bridge types and build native installers |
+| `make test` | Run all Rust and Playwright tests |
+| `make rust-test` | Run the Rust workspace tests |
+| `make test-e2e` | Run the browser-based Playwright suite |
+| `npm run build` | Type-check and build the frontend |
+| `make bindings` | Regenerate TypeScript types from Rust wire types |
+| `make check-bindings` | Fail if generated bridge types are stale |
+| `make check-no-fallback` | Ensure development seed data is absent from production |
+| `make format` | Format Rust and TypeScript sources |
+
+The end-to-end tests use the browser's in-memory backend. Rust tests cover the
+vault, encryption, storage, synchronization, Dropbox protocol behavior, and
+Tauri command wiring without requiring network access.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    UI["React + TypeScript"] --> IPC["Tauri commands"]
+    IPC --> Vault["journal-vault"]
+    Vault --> Key["journal-key<br/>age + X25519"]
+    Vault --> Store["journal-store"]
+    Store --> FS["journal-fs-store"]
+
+    Sync["journal-sync"] --> Store
+    Sync --> Remote["journal-remote"]
+    Remote --> Dropbox["journal-dropbox"]
+```
+
+The application keeps platform glue in `src-tauri` and places backend behavior
+in small Rust workspace crates:
+
+| Path | Responsibility |
+| --- | --- |
+| `src/` | React UI, routing, autosave, and the Tauri API wrapper |
+| `src-tauri/` | Native application setup and Tauri commands |
+| `crates/entry` | Shared entry and header types |
+| `crates/key` | Key creation, sealing, unlocking, and encryption |
+| `crates/vault` | Encrypted entry CRUD and journal rules |
+| `crates/store` | Abstract local blob-store interface |
+| `crates/fs-store` | Filesystem blob-store implementation |
+| `crates/remote` | Revision-aware remote-store interface |
+| `crates/sync` | Local-first, clock-free synchronization engine |
+| `crates/dropbox` | Dropbox remote store and OAuth PKCE flow |
+| `e2e/` | Playwright UI tests |
+| `docs/adrs/` | Architecture decision records |
+
+Rust owns the wire format. TypeScript definitions in `src/bindings/` are
+generated from Rust with `ts-rs` and should not be edited by hand.
+
+## Storage and security
+
+Entries are serialized as JSON, encrypted with
+[`age`](https://github.com/FiloSottile/age) to an X25519 identity, and written
+as separate blobs in the platform's application-data directory. The identity
+is sealed with the journal passphrase using scrypt. The passphrase is never
+stored.
+
+This design protects journal contents at rest, but it has not received an
+independent security audit. Losing either the passphrase or the sealed key
+means losing access to the journal. Backups and data migration are not
+implemented.
+
+## Further reading
+
+- [`CLAUDE.md`](CLAUDE.md) — detailed architecture and contributor guidance
+- [`docs/adrs/`](docs/adrs/README.md) — decisions and their trade-offs
+- [`crates/sync/README.md`](crates/sync/README.md) — synchronization model
+- [`crates/dropbox/README.md`](crates/dropbox/README.md) — Dropbox integration
