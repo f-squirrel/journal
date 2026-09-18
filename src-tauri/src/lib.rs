@@ -4,7 +4,7 @@ mod sync;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use journal_dropbox::FileTokenStore;
+use journal_credential::FileCredentialStore;
 use journal_entry::{Entry, Header, Id};
 use journal_fs_store::FsStore;
 use journal_key::Keyring;
@@ -214,7 +214,7 @@ pub fn run() {
             get_entry,
             save_entry,
             delete_entry,
-            sync::connect_dropbox,
+            sync::connect_remote,
             sync::disconnect_remote,
             sync::sync_now,
             sync::sync_status
@@ -246,11 +246,13 @@ pub fn run() {
                 local: Arc::new(entries),
                 vault: Arc::new(move || vault(&handle.state::<VaultState>()).ok()),
                 events: Arc::new(sync::TauriEvents(app.handle().clone())),
-                provider: Arc::new(sync::Dropbox::from_build()),
+                // Every provider this build can connect to. Adding one is a line
+                // here and an adapter crate; nothing below names a provider.
+                providers: vec![Arc::new(sync::Dropbox::from_build())],
                 // In the config directory, not the data directory the journal
                 // lives in: a credential must never be somewhere that syncs.
-                tokens: Arc::new(FileTokenStore::new(
-                    app.path().app_config_dir()?.join("dropbox-token"),
+                credentials: Arc::new(FileCredentialStore::new(
+                    app.path().app_config_dir()?.join("remote-login"),
                 )),
                 state_path: data_dir.join("sync-state.json"),
                 open_url: Arc::new(move |url| {

@@ -7,8 +7,9 @@
 //! revision-conditional upload. It moves ciphertext only and holds no key.
 //!
 //! [`authorize_url`] and [`finish`] connect an account (OAuth 2 with PKCE, no
-//! client secret), and a [`TokenStore`] keeps the resulting [`RefreshToken`].
-//! The crate opens no browser and listens on no socket; that is the app's job.
+//! client secret), and the refresh token that comes back is a
+//! [`journal_credential::RefreshToken`], which `journal-credential` keeps. The
+//! crate opens no browser and listens on no socket; that is the app's job.
 //!
 //! Built on Dropbox's official `dropbox-sdk`, on its blocking `ureq` client:
 //! no async runtime is involved, matching the trait it implements (D8).
@@ -27,9 +28,6 @@ mod fake;
 mod hash;
 mod remote;
 
-pub use auth::{
-    authorize_url, finish, ConnectError, FileTokenStore, PendingAuth, RefreshToken, TokenStore,
-    TokenStoreError,
-};
+pub use auth::{authorize_url, finish, ConnectError, PendingAuth};
 pub use client::RefreshingClient;
 pub use remote::DropboxRemote;

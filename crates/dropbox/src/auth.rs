@@ -12,42 +12,15 @@
 //! allows, and hands the `code` back to [`finish`].
 
 use std::fmt;
-use std::fs;
-use std::io::{self, Write};
-use std::path::{Path, PathBuf};
 
 use dropbox_sdk::client_trait::NoauthClient;
 use dropbox_sdk::default_client::NoauthDefaultClient;
 use dropbox_sdk::oauth2::{Authorization, AuthorizeUrlBuilder, Oauth2Type, PkceCode};
 use dropbox_sdk::Error;
-use secrecy::{ExposeSecret, SecretString};
+use journal_credential::RefreshToken;
 use thiserror::Error;
 use url::Url;
 use uuid::Uuid;
-
-/// The long-lived credential: everything needed to act as the user, until they
-/// revoke the app.
-///
-/// Never `Debug`-printed or logged: the type redacts itself, and
-/// [`expose`](RefreshToken::expose) is the one place the text comes out.
-#[derive(Clone)]
-pub struct RefreshToken(SecretString);
-
-impl RefreshToken {
-    pub fn new(token: impl Into<String>) -> Self {
-        Self(SecretString::from(token.into()))
-    }
-
-    pub fn expose(&self) -> &str {
-        self.0.expose_secret()
-    }
-}
-
-impl fmt::Debug for RefreshToken {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("RefreshToken([REDACTED])")
-    }
-}
 
 /// A connection that has been started and not finished: what [`finish`] needs
 /// to redeem the code, and what the redirect must be checked against.
@@ -103,7 +76,7 @@ pub fn authorize_url(app_key: &str, redirect_uri: &str) -> (Url, PendingAuth) {
 /// Redeems the authorization `code` from the redirect for a refresh token.
 ///
 /// Blocks on the network. The token is returned, not stored: saving it is the
-/// caller's decision (see [`TokenStore`]).
+/// caller's decision (see `journal-credential`).
 pub fn finish(pending: PendingAuth, code: &str) -> Result<RefreshToken, ConnectError> {
     finish_with(NoauthDefaultClient::default(), pending, code)
 }
@@ -153,120 +126,8 @@ pub enum ConnectError {
     Other(String),
 }
 
-/// Where the refresh token is kept between runs.
-///
-/// A trait because the right place differs by platform and will change: a file
-/// for now (D6), the OS keychain or keystore later. The token is a credential
-/// and the store must never be inside the synced blob store, or it would be
-/// uploaded.
-pub trait TokenStore: Send + Sync {
-    /// The saved token, or `None` if nothing is connected.
-    fn load(&self) -> Result<Option<RefreshToken>, TokenStoreError>;
-
-    fn save(&self, token: &RefreshToken) -> Result<(), TokenStoreError>;
-
-    /// Forgets the token. Succeeds if there was none.
-    fn clear(&self) -> Result<(), TokenStoreError>;
-}
-
-#[derive(Debug, Error)]
-#[error("{0}")]
-pub struct TokenStoreError(String);
-
-/// A [`TokenStore`] that keeps the token in one file, readable by its owner
-/// alone.
-///
-/// The refresh token is the only thing kept. Dropbox does not rotate it, and
-/// the SDK does not expose it after the first exchange in any case, so there is
-/// nothing to save after a refresh.
-#[derive(Debug, Clone)]
-pub struct FileTokenStore {
-    path: PathBuf,
-}
-
-impl FileTokenStore {
-    pub fn new(path: impl Into<PathBuf>) -> Self {
-        Self { path: path.into() }
-    }
-
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
-
-    fn temp_path(&self) -> PathBuf {
-        let mut name = self.path.as_os_str().to_owned();
-        name.push(".tmp");
-        PathBuf::from(name)
-    }
-
-    fn fail(&self, action: &str, e: io::Error) -> TokenStoreError {
-        TokenStoreError(format!(
-            "could not {action} the Dropbox token at {}: {e}",
-            self.path.display()
-        ))
-    }
-}
-
-impl TokenStore for FileTokenStore {
-    fn load(&self) -> Result<Option<RefreshToken>, TokenStoreError> {
-        match fs::read_to_string(&self.path) {
-            Ok(text) => {
-                let token = text.trim();
-                Ok((!token.is_empty()).then(|| RefreshToken::new(token)))
-            }
-            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(self.fail("read", e)),
-        }
-    }
-
-    fn save(&self, token: &RefreshToken) -> Result<(), TokenStoreError> {
-        let write = || -> io::Result<()> {
-            if let Some(dir) = self.path.parent() {
-                fs::create_dir_all(dir)?;
-            }
-            // Written whole and renamed into place, so a crash leaves either
-            // the old token or the new one and never half of one.
-            let temp = self.temp_path();
-            let mut file = fs::OpenOptions::new()
-                .write(true)
-                .create(true)
-                .truncate(true)
-                .open(&temp)?;
-            // Before the token goes in, and whether or not the scratch file
-            // already existed with looser permissions.
-            restrict_to_owner(&file)?;
-            file.write_all(token.expose().as_bytes())?;
-            file.sync_all()?;
-            fs::rename(&temp, &self.path)
-        };
-        write().map_err(|e| self.fail("write", e))
-    }
-
-    fn clear(&self) -> Result<(), TokenStoreError> {
-        match fs::remove_file(&self.path) {
-            Ok(()) => Ok(()),
-            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(self.fail("remove", e)),
-        }
-    }
-}
-
-#[cfg(unix)]
-fn restrict_to_owner(file: &fs::File) -> io::Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    file.set_permissions(fs::Permissions::from_mode(0o600))
-}
-
-/// Elsewhere the app's config directory is already per-user.
-#[cfg(not(unix))]
-fn restrict_to_owner(_file: &fs::File) -> io::Result<()> {
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicU64, Ordering};
-
     use serde_json::json;
 
     use super::*;
@@ -411,80 +272,5 @@ mod tests {
         let verifier = pending.verifier.code.clone();
 
         assert!(!format!("{pending:?}").contains(&verifier));
-        assert!(!format!("{:?}", RefreshToken::new("hunter2")).contains("hunter2"));
-    }
-
-    // --- FileTokenStore ---
-
-    fn store() -> FileTokenStore {
-        static COUNTER: AtomicU64 = AtomicU64::new(0);
-        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let dir =
-            std::env::temp_dir().join(format!("journal-dropbox-test-{}-{n}", std::process::id()));
-        // A directory that does not exist yet: saving creates it.
-        FileTokenStore::new(dir.join("config").join("dropbox-token"))
-    }
-
-    #[test]
-    fn nothing_saved_loads_as_none() {
-        assert!(store().load().unwrap().is_none());
-    }
-
-    #[test]
-    fn a_saved_token_loads_back() {
-        let store = store();
-        store.save(&RefreshToken::new("refresh-1")).unwrap();
-
-        assert_eq!(store.load().unwrap().unwrap().expose(), "refresh-1");
-    }
-
-    #[test]
-    fn saving_again_replaces_the_token_and_leaves_no_scratch_file() {
-        let store = store();
-        store.save(&RefreshToken::new("refresh-1")).unwrap();
-        store.save(&RefreshToken::new("refresh-2")).unwrap();
-
-        assert_eq!(store.load().unwrap().unwrap().expose(), "refresh-2");
-        let files: Vec<_> = fs::read_dir(store.path().parent().unwrap())
-            .unwrap()
-            .map(|e| e.unwrap().file_name())
-            .collect();
-        assert_eq!(files, ["dropbox-token"]);
-    }
-
-    #[test]
-    fn clearing_forgets_the_token_and_is_idempotent() {
-        let store = store();
-        store.save(&RefreshToken::new("refresh-1")).unwrap();
-
-        store.clear().unwrap();
-        store.clear().unwrap();
-
-        assert!(store.load().unwrap().is_none());
-    }
-
-    #[test]
-    fn a_blank_file_is_no_token() {
-        let store = store();
-        store.save(&RefreshToken::new("x")).unwrap();
-        fs::write(store.path(), "\n").unwrap();
-
-        assert!(store.load().unwrap().is_none());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn the_token_file_is_readable_by_its_owner_alone() {
-        use std::os::unix::fs::PermissionsExt;
-        let store = store();
-
-        // Even when a scratch file with looser permissions is in the way.
-        fs::create_dir_all(store.path().parent().unwrap()).unwrap();
-        fs::write(store.temp_path(), "old").unwrap();
-        fs::set_permissions(store.temp_path(), fs::Permissions::from_mode(0o644)).unwrap();
-        store.save(&RefreshToken::new("refresh-1")).unwrap();
-
-        let mode = fs::metadata(store.path()).unwrap().permissions().mode();
-        assert_eq!(mode & 0o777, 0o600);
     }
 }

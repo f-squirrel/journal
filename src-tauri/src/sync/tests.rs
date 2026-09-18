@@ -13,7 +13,7 @@ use std::sync::{Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use journal_dropbox::FileTokenStore;
+use journal_credential::{Credential, FileCredentialStore};
 use journal_entry::SyncState;
 use journal_fs_store::FsStore;
 use journal_remote::{
@@ -38,7 +38,7 @@ const COMMANDS: [&str; 11] = [
     "get_entry",
     "save_entry",
     "delete_entry",
-    "connect_dropbox",
+    "connect_remote",
     "disconnect_remote",
     "sync_now",
     "sync_status",
@@ -64,10 +64,25 @@ impl Events for Recorder {
 /// A provider that needs no network: the "browser" answers with a fixed code,
 /// and the remote is whatever it was given.
 struct Fake {
+    id: &'static str,
     remote: Arc<dyn RemoteStore>,
 }
 
+impl Fake {
+    fn provider(id: &'static str, remote: Arc<dyn RemoteStore>) -> Arc<dyn Provider> {
+        Arc::new(Self { id, remote })
+    }
+}
+
 impl Provider for Fake {
+    fn id(&self) -> &'static str {
+        self.id
+    }
+
+    fn name(&self) -> &'static str {
+        "Fake Cloud"
+    }
+
     fn begin(&self, redirect_uri: &str) -> Result<Connection, String> {
         let mut url = Url::parse("https://provider.example/authorize").unwrap();
         url.query_pairs_mut()
@@ -194,14 +209,14 @@ struct Rig {
 
 impl Rig {
     fn new(remote: Arc<dyn RemoteStore>) -> Self {
-        Self::with_provider(Arc::new(Fake { remote }))
+        Self::with_providers(vec![Fake::provider("fake", remote)])
     }
 
-    fn with_provider(provider: Arc<dyn Provider>) -> Self {
-        Self::build(provider, timing())
+    fn with_providers(providers: Vec<Arc<dyn Provider>>) -> Self {
+        Self::build(providers, timing())
     }
 
-    fn build(provider: Arc<dyn Provider>, timing: Timing) -> Self {
+    fn build(providers: Vec<Arc<dyn Provider>>, timing: Timing) -> Self {
         static COUNTER: AtomicUsize = AtomicUsize::new(0);
         let n = COUNTER.fetch_add(1, Ordering::SeqCst);
         let dir = std::env::temp_dir().join(format!("journal-sync-app-{}-{n}", std::process::id()));
@@ -222,7 +237,7 @@ impl Rig {
                 crate::get_entry,
                 crate::save_entry,
                 crate::delete_entry,
-                connect_dropbox,
+                connect_remote,
                 disconnect_remote,
                 sync_now,
                 sync_status
@@ -249,8 +264,8 @@ impl Rig {
             local: Arc::new(entries),
             vault: Arc::new(move || crate::vault(&handle.state::<VaultState>()).ok()),
             events: events.clone(),
-            provider,
-            tokens: Arc::new(FileTokenStore::new(dir.join("config").join("token"))),
+            providers,
+            credentials: Arc::new(FileCredentialStore::new(dir.join("config").join("login"))),
             state_path: dir.join("sync-state.json"),
             open_url: Arc::new(browser),
             redirect_port: 0,
@@ -334,9 +349,22 @@ impl Rig {
             .to_owned()
     }
 
-    /// Connects, over the loopback and the fake browser.
+    /// Connects to the provider `fake`, over the loopback and the fake
+    /// browser.
     fn connect(&self) {
-        self.ok("connect_dropbox", json!({}));
+        self.connect_to("fake");
+    }
+
+    fn connect_to(&self, provider: &str) {
+        self.ok("connect_remote", json!({ "provider": provider }));
+    }
+
+    /// What the login file says: the provider it is for, if one is saved.
+    fn saved_provider(&self) -> Option<String> {
+        FileCredentialStore::new(self.dir.join("config").join("login"))
+            .load()
+            .unwrap()
+            .map(|login| login.provider)
     }
 }
 
@@ -380,15 +408,110 @@ fn sync_is_off_until_an_account_is_connected() {
 
 #[test]
 fn a_build_without_an_app_key_says_how_to_get_one() {
-    let rig = Rig::with_provider(Arc::new(Dropbox { app_key: None }));
+    let rig = Rig::with_providers(vec![Arc::new(Dropbox::new(None))]);
 
-    let error = rig.invoke("connect_dropbox", json!({})).unwrap_err();
+    let error = rig
+        .invoke("connect_remote", json!({ "provider": "dropbox" }))
+        .unwrap_err();
 
     assert!(
         error.as_str().unwrap().contains("DROPBOX_APP_KEY"),
         "{error}"
     );
     assert_eq!(rig.status()["state"], "off");
+}
+
+#[test]
+fn an_unknown_provider_is_refused_before_anything_happens() {
+    let rig = Rig::new(Arc::new(MemoryRemote::new()));
+
+    let error = rig
+        .invoke("connect_remote", json!({ "provider": "nope" }))
+        .unwrap_err();
+
+    assert!(
+        error.as_str().unwrap().contains("unknown sync provider"),
+        "{error}"
+    );
+    assert_eq!(rig.status()["state"], "off");
+    assert_eq!(rig.saved_provider(), None);
+}
+
+#[test]
+fn the_login_remembers_which_provider_it_is_for() {
+    let rig = Rig::new(Arc::new(MemoryRemote::new()));
+    rig.unlock();
+
+    rig.connect();
+
+    assert_eq!(rig.saved_provider().as_deref(), Some("fake"));
+}
+
+#[test]
+fn a_login_for_a_provider_this_build_lacks_leaves_sync_off() {
+    let rig = Rig::new(Arc::new(MemoryRemote::new()));
+    FileCredentialStore::new(rig.dir.join("config").join("login"))
+        .save(&Credential::new("elsewhere", RefreshToken::new("refresh")))
+        .unwrap();
+
+    rig.control.resume();
+
+    assert_eq!(rig.status()["state"], "off");
+    // Not forgotten: a build that has the provider will find it.
+    assert_eq!(rig.saved_provider().as_deref(), Some("elsewhere"));
+}
+
+/// The engine's state is a cursor and revisions from one provider's remote.
+/// Handed to another provider's, the cursor means nothing, and the revisions
+/// name blobs that are not there.
+#[test]
+fn connecting_another_provider_starts_from_a_clean_state() {
+    let first = Arc::new(MemoryRemote::new());
+    let second = Arc::new(MemoryRemote::new());
+    let rig = Rig::with_providers(vec![
+        Fake::provider("one", first.clone()),
+        Fake::provider("two", second.clone()),
+    ]);
+    rig.unlock();
+    rig.save(ID, "Today", "words", "2026-03-01T10:00:00Z");
+    rig.connect_to("one");
+    assert!(remote_has(&first, &format!("{ID}.json")));
+
+    rig.connect_to("two");
+
+    assert_eq!(rig.saved_provider().as_deref(), Some("two"));
+    assert!(
+        remote_has(&second, &format!("{ID}.json")),
+        "uploaded afresh"
+    );
+    assert_eq!(rig.status()["state"], "synced");
+    assert_eq!(rig.status()["message"], Value::Null);
+    assert_eq!(rig.titles(), ["Today"]);
+}
+
+#[test]
+fn reconnecting_the_same_provider_keeps_the_state() {
+    let remote = Arc::new(MemoryRemote::new());
+    let rig = Rig::new(remote.clone());
+    rig.unlock();
+    rig.save(ID, "Today", "words", "2026-03-01T10:00:00Z");
+    rig.connect();
+    // The revisions the engine recorded. (Not the whole file: its cursor moves
+    // as each pass reads back its own uploads.)
+    let bases = || -> Value {
+        let file = std::fs::read(rig.dir.join("sync-state.json")).unwrap();
+        serde_json::from_slice::<Value>(&file).unwrap()["blobs"].clone()
+    };
+    let before = bases();
+    assert!(before.as_object().is_some_and(|blobs| !blobs.is_empty()));
+
+    // What a revoked login and a fresh grant look like: same provider, worker
+    // running. Erased state would be rebuilt as new revisions of the same
+    // bytes; kept state is exactly what it was.
+    rig.connect();
+
+    assert_eq!(bases(), before);
+    assert_eq!(rig.status()["state"], "synced");
 }
 
 #[test]
@@ -520,14 +643,14 @@ fn disconnecting_forgets_the_account_and_leaves_the_journal() {
     rig.unlock();
     rig.save(ID, "Today", "words", "2026-03-01T10:00:00Z");
     rig.connect();
-    let token = rig.dir.join("config").join("token");
-    assert!(token.exists());
+    let login = rig.dir.join("config").join("login");
+    assert!(login.exists());
     assert!(rig.dir.join("sync-state.json").exists());
 
     rig.ok("disconnect_remote", json!({}));
 
     assert_eq!(rig.status()["state"], "off");
-    assert!(!token.exists(), "the credential is gone");
+    assert!(!login.exists(), "the login is gone");
     assert!(!rig.dir.join("sync-state.json").exists(), "and the state");
     // The journal on this device is untouched, and so is the remote's copy.
     assert_eq!(rig.titles(), ["Today"]);
@@ -545,8 +668,8 @@ fn an_account_connected_in_an_earlier_run_resumes() {
     let rig = Rig::new(remote.clone());
     rig.unlock();
     rig.save(ID, "Today", "words", "2026-03-01T10:00:00Z");
-    FileTokenStore::new(rig.dir.join("config").join("token"))
-        .save(&RefreshToken::new("refresh"))
+    FileCredentialStore::new(rig.dir.join("config").join("login"))
+        .save(&Credential::new("fake", RefreshToken::new("refresh")))
         .unwrap();
     assert_eq!(rig.status()["state"], "off");
 

@@ -84,6 +84,7 @@ flowchart LR
     Sync["journal-sync"] --> Store
     Sync --> Remote["journal-remote"]
     Remote --> Dropbox["journal-dropbox"]
+    Dropbox --> Credential["journal-credential"]
 ```
 
 The application keeps platform glue in `src-tauri` and places backend behavior
@@ -100,6 +101,7 @@ in small Rust workspace crates:
 | `crates/fs-store` | Filesystem blob-store implementation |
 | `crates/remote` | Revision-aware remote-store interface |
 | `crates/sync` | Local-first, clock-free synchronization engine |
+| `crates/credential` | Provider-neutral saved login (refresh token) |
 | `crates/dropbox` | Dropbox remote store and OAuth PKCE flow |
 | `e2e/` | Playwright UI tests |
 | `docs/adrs/` | Architecture decision records |

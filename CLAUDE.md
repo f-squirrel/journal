@@ -225,13 +225,18 @@ field-name mismatches — a class of bug neither the Playwright suite nor
   official `dropbox-sdk` on its blocking `ureq` client (no async runtime in its
   tree), one file per blob in an "App folder". Besides `DropboxRemote` it holds
   the OAuth 2 PKCE connect flow (`authorize_url`/`finish`, which open no
-  browser and listen on no socket), `TokenStore` and its 0600 `FileTokenStore`
-  for the refresh token, and `RefreshingClient`, the SDK client with token
-  refresh written here so it can be tested. Its tests run against a scripted
+  browser and listen on no socket), and `RefreshingClient`, the SDK client with
+  token refresh written here so it can be tested. It takes a `RefreshToken` but
+  does not keep one: that is `crates/credential`. Its tests run against a scripted
   `HttpClient`, not a network; `live_round_trip` is `#[ignore]`d and needs
   `DROPBOX_TOKEN`. The SDK logs the token response at `debug`, so keep its
   `dropbox_sdk::oauth2` target at `info` or above. `src-tauri/src/sync/` wires
   it up.
+  `crates/credential` (`journal-credential`) is the provider-neutral login:
+  `RefreshToken`, `Credential` (the token plus the id of the provider that
+  issued it) and `CredentialStore`, with a 0600 `FileCredentialStore` that keeps
+  the one saved credential. A new provider's adapter takes a `RefreshToken` and
+  needs nothing else from it.
   `crates/vault` (`journal-vault`) is the layer that knows what an
   entry *is*, and is what the rest of the app means by "the vault":
   `{id}.json` blob naming, serde, and the header sort. One encrypted
@@ -281,10 +286,14 @@ field-name mismatches — a class of bug neither the Playwright suite nor
   their only caller — keep it that way, since a fresh key written over
   existing entries orphans all of them. `Keyring::exists` is public only
   so `has_vault` (and thus `LoginPage`) can pick its copy.
-  `src-tauri/src/sync/` is the sync wiring, in five files: `mod.rs`
-  (`SyncControl`, the connect/disconnect flow, the `connect_dropbox`,
+  `src-tauri/src/sync/` is the sync wiring, in six files: `mod.rs`
+  (`SyncControl`, the connect/disconnect flow, the `connect_remote(provider)`,
   `disconnect_remote`, `sync_now` and `sync_status` commands, and the
-  `Provider` trait that lets tests stand in for Dropbox), `worker.rs` (the
+  `Provider` trait — an `id`, a display `name`, `begin` and `remote` — that a
+  build lists in `SyncConfig::providers` and that lets tests stand in a fake),
+  `dropbox.rs` (the one `Provider` there is; adding Google Drive is another
+  file like it plus a line in `lib.rs`, and nothing else names a provider),
+  `worker.rs` (the
   thread that owns the `SyncEngine` and its pure `Schedule`: a pass at
   startup, every 60 s, ~2 s after a save, on demand; exponential backoff after
   a transient failure, a halt after `Unauthorized`/`KeyMismatch` until
@@ -302,8 +311,12 @@ field-name mismatches — a class of bug neither the Playwright suite nor
   `Slot`, since a pass's resolver saves through the store whose callback locks
   it. Sync keeps running while the vault is locked. The app key is a build-time
   env var: `DROPBOX_APP_KEY=… make run` (without it, connecting reports how to
-  set it). The token lives in the app config dir and the engine state in
-  `sync-state.json` in the data dir, both outside the synced `entries/`.
+  set it). The saved login (`remote-login`: provider id and token) lives in the
+  app config dir and the engine state in `sync-state.json` in the data dir,
+  both outside the synced `entries/`. The engine state is one provider's cursor
+  and revisions, so `install` keeps it only while the provider is the same one
+  as the saved login; connecting a different provider erases it, and a test
+  holds that.
   Known gap: a Dropbox cursor reset is not yet handled (see the plan).
   - The key file's scrypt work factor is **pinned** (`WORK_FACTOR` in
     `identity.rs`) rather than benchmarked, and capped on read

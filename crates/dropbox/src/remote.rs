@@ -19,9 +19,9 @@ use journal_remote::{
 };
 use journal_store::BlobName;
 
-use crate::auth::RefreshToken;
 use crate::client::RefreshingClient;
 use crate::hash;
+use journal_credential::RefreshToken;
 
 /// Dropbox omits `retry_after` for some write limits and the SDK reads that as
 /// zero, which would invite an immediate retry into the same limit.

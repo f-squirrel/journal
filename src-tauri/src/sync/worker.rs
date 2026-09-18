@@ -43,8 +43,9 @@ impl Default for Timing {
         Self {
             debounce: Duration::from_secs(2),
             max_debounce: Duration::from_secs(10),
-            // Dropbox's `list_folder/longpoll` would make this a push rather
-            // than a poll; a later optimisation.
+            // A provider's push channel (Dropbox's `list_folder/longpoll`)
+            // would make this a push rather than a poll; a later
+            // optimisation.
             interval: Duration::from_secs(60),
             backoff_base: Duration::from_secs(5),
             backoff_max: Duration::from_secs(300),
@@ -162,6 +163,8 @@ pub struct Worker {
     /// Why the last pass failed, in the error's own words. Read for the status
     /// message; the engine keeps only the kind.
     detail: Arc<Mutex<Option<String>>>,
+    /// The provider's name, for the words the status says about it.
+    provider: &'static str,
 }
 
 struct Context {
@@ -181,6 +184,7 @@ impl Worker {
         events: Arc<dyn Events>,
         timing: Timing,
         poke: Arc<dyn Fn() + Send + Sync>,
+        provider: &'static str,
     ) -> Arc<Self> {
         let (tx, rx) = mpsc::channel();
         let detail = Arc::new(Mutex::new(None));
@@ -200,11 +204,17 @@ impl Worker {
             tx,
             thread: Mutex::new(Some(thread)),
             detail,
+            provider,
         })
     }
 
     pub fn engine(&self) -> &SyncEngine {
         &self.engine
+    }
+
+    /// The name of the provider this worker syncs with.
+    pub fn provider(&self) -> &'static str {
+        self.provider
     }
 
     pub fn detail(&self) -> Option<String> {

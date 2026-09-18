@@ -2500,6 +2500,7 @@ name = "journal"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "journal-credential",
  "journal-dropbox",
  "journal-entry",
  "journal-fs-store",
@@ -2520,14 +2521,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "journal-credential"
+version = "0.1.0"
+dependencies = [
+ "secrecy",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "journal-dropbox"
 version = "0.1.0"
 dependencies = [
  "dropbox-sdk",
+ "journal-credential",
  "journal-remote",
  "journal-store",
  "log",
- "secrecy",
  "serde_json",
  "sha2 0.10.9",
  "thiserror 2.0.20",

@@ -1,8 +1,9 @@
 //! Cloud sync, wired into the app: the worker thread, the connect flow, the
 //! status the frontend sees, and the commands that drive them.
 //!
-//! The crates below do the work — `journal-sync` reconciles blobs,
-//! `journal-dropbox` speaks to Dropbox — and know nothing of Tauri. This module
+//! The crates below do the work — `journal-sync` reconciles blobs, an adapter
+//! such as `journal-dropbox` speaks to one provider — and know nothing of
+//! Tauri. This module
 //! is the glue, and holds the parts that are the app's own decisions: when to
 //! sync ([`worker`]), what a conflict means ([`resolver`]), how the browser
 //! gets back to the app ([`oauth`]) and what the UI is told ([`status`]).
@@ -14,6 +15,7 @@
 //! Nothing here holds the vault's lock state across I/O: the resolver is given
 //! a handle it owns (see [`resolver::VaultHandle`]).
 
+pub mod dropbox;
 pub mod oauth;
 pub mod resolver;
 pub mod status;
@@ -26,7 +28,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
-use journal_dropbox::{authorize_url, finish, DropboxRemote, RefreshToken, TokenStore};
+use journal_credential::{Credential, CredentialStore, RefreshToken};
 use journal_entry::SyncStatusPayload;
 use journal_remote::RemoteStore;
 use journal_store::{BlobName, BlobStore};
@@ -34,6 +36,7 @@ use journal_sync::{erase_state, SyncEngine, SyncStatus};
 use tauri::State;
 use url::Url;
 
+pub use dropbox::Dropbox;
 use resolver::{VaultHandle, VaultResolver};
 use status::Coalescer;
 use worker::{Timing, Worker};
@@ -90,56 +93,24 @@ pub struct Connection {
 }
 
 /// What the app needs of a cloud provider beyond the `RemoteStore` itself: how
-/// to connect an account, and how to reach it afterwards. Dropbox is the only
-/// one; the trait is what lets the tests stand another in.
+/// to connect an account, and how to reach it afterwards. A build offers a list
+/// of these ([`SyncConfig::providers`]); the tests stand in one that needs no
+/// network.
 pub trait Provider: Send + Sync {
+    /// Names this provider in the saved login and in the `connect_remote`
+    /// command. Lowercase, and never changes once shipped: a saved login is
+    /// matched to its provider by it.
+    fn id(&self) -> &'static str;
+
+    /// What the user calls it, for the words the app says about it.
+    fn name(&self) -> &'static str;
+
     /// Starts connecting. `redirect_uri` is where the provider will send the
     /// browser back to.
     fn begin(&self, redirect_uri: &str) -> Result<Connection, String>;
 
     /// The remote for an account that has been connected.
     fn remote(&self, token: &RefreshToken) -> Result<Arc<dyn RemoteStore>, String>;
-}
-
-/// Dropbox, under the app key this build was made with.
-///
-/// The key is public — PKCE means the app carries no secret — but it names an
-/// app registered by whoever ships the build, so it is supplied at build time:
-/// `DROPBOX_APP_KEY=… make run`. A build without one runs, with sync off and a
-/// message saying why when connecting is tried.
-pub struct Dropbox {
-    app_key: Option<&'static str>,
-}
-
-impl Dropbox {
-    pub fn from_build() -> Self {
-        Self {
-            app_key: option_env!("DROPBOX_APP_KEY").filter(|key| !key.is_empty()),
-        }
-    }
-
-    fn key(&self) -> Result<&'static str, String> {
-        self.app_key.ok_or_else(|| {
-            "Dropbox is not set up in this build: register an app at dropbox.com/developers, \
-             allow the redirect URI http://127.0.0.1:53682/, and build with DROPBOX_APP_KEY set"
-                .to_owned()
-        })
-    }
-}
-
-impl Provider for Dropbox {
-    fn begin(&self, redirect_uri: &str) -> Result<Connection, String> {
-        let (url, pending) = authorize_url(self.key()?, redirect_uri);
-        Ok(Connection {
-            url,
-            state: pending.state().to_owned(),
-            redeem: Box::new(move |code| finish(pending, code).map_err(|e| e.to_string())),
-        })
-    }
-
-    fn remote(&self, token: &RefreshToken) -> Result<Arc<dyn RemoteStore>, String> {
-        Ok(Arc::new(DropboxRemote::new(self.key()?, token)))
-    }
 }
 
 /// The running worker, present exactly while a provider is connected.
@@ -180,10 +151,12 @@ impl Slot {
 
     fn payload(&self) -> SyncStatusPayload {
         match self.get() {
-            Some(worker) => {
-                status::payload(true, &worker.engine().status(), worker.detail().as_deref())
-            }
-            None => status::payload(false, &SyncStatus::default(), None),
+            Some(worker) => status::payload(
+                Some(worker.provider()),
+                &worker.engine().status(),
+                worker.detail().as_deref(),
+            ),
+            None => status::payload(None, &SyncStatus::default(), None),
         }
     }
 }
@@ -196,14 +169,25 @@ pub struct SyncConfig {
     pub local: Arc<dyn BlobStore>,
     pub vault: VaultHandle,
     pub events: Arc<dyn Events>,
-    pub provider: Arc<dyn Provider>,
-    pub tokens: Arc<dyn TokenStore>,
+    /// The providers this build can connect to. Ids are unique.
+    pub providers: Vec<Arc<dyn Provider>>,
+    /// The one saved login, and which provider it is for.
+    pub credentials: Arc<dyn CredentialStore>,
     /// The engine's per-device state. Outside the store, so it is never synced.
     pub state_path: PathBuf,
     /// Shows the user the provider's page.
     pub open_url: OpenUrl,
     pub redirect_port: u16,
     pub timing: Timing,
+}
+
+/// Where a login being installed came from.
+#[derive(Clone, Copy)]
+enum Login {
+    /// Read back from the store, in an earlier run.
+    Saved,
+    /// Just granted, and not yet saved.
+    New,
 }
 
 /// The app's sync, managed by Tauri as an `Arc` so a command can hand it to the
@@ -233,12 +217,24 @@ impl SyncControl {
         }
     }
 
+    /// The provider with this id, if the build offers it.
+    fn provider(&self, id: &str) -> Result<&Arc<dyn Provider>, String> {
+        self.config
+            .providers
+            .iter()
+            .find(|p| p.id() == id)
+            .ok_or_else(|| format!("unknown sync provider {id:?}"))
+    }
+
     /// Starts syncing if an account was connected in an earlier run. Scans the
     /// whole local store, so call it off the main thread.
     pub fn resume(&self) {
-        match self.config.tokens.load() {
-            Ok(Some(token)) => {
-                if let Err(e) = self.install(&token, true) {
+        match self.config.credentials.load() {
+            Ok(Some(credential)) => {
+                let resumed = self
+                    .provider(&credential.provider)
+                    .and_then(|provider| self.install(provider, &credential.token, Login::Saved));
+                if let Err(e) = resumed {
                     log::warn!("could not resume sync: {e}");
                 }
             }
@@ -268,23 +264,27 @@ impl SyncControl {
     }
 
     /// Connects an account: sends the user to the provider, waits for the
-    /// browser to come back, saves the credential and starts syncing.
+    /// browser to come back, saves the login and starts syncing.
     ///
     /// Works before there is a vault: on a second device this is how the
     /// journal's key arrives. It runs one pass before returning, so that the
     /// caller can ask `has_vault` again and find it. That pass failing does not
-    /// fail the connection — the credential is good — and the status says why.
-    pub fn connect(&self) -> Result<(), String> {
+    /// fail the connection — the login is good — and the status says why.
+    ///
+    /// Connecting to a different provider than the one connected replaces it.
+    /// The old login is only replaced once the new one has been granted, so a
+    /// browser tab closed halfway leaves what was working still working.
+    pub fn connect(&self, provider_id: &str) -> Result<(), String> {
         let cfg = &self.config;
-        let (listener, redirect_uri) = oauth::bind(cfg.redirect_port)?;
-        let Connection { url, state, redeem } = cfg.provider.begin(&redirect_uri)?;
+        let provider = self.provider(provider_id)?;
+        let (listener, redirect_uri) = oauth::bind(cfg.redirect_port, provider.name())?;
+        let Connection { url, state, redeem } = provider.begin(&redirect_uri)?;
         (cfg.open_url)(&url).map_err(|e| format!("could not open the browser: {e}"))?;
-        let code = oauth::await_code(&listener, &state, LOGIN_TIMEOUT)?;
+        let code = oauth::await_code(&listener, &state, LOGIN_TIMEOUT, provider.name())?;
         drop(listener);
         let token = redeem(&code)?;
-        cfg.tokens.save(&token).map_err(|e| e.to_string())?;
 
-        let worker = self.install(&token, false)?;
+        let worker = self.install(provider, &token, Login::New)?;
         if let Err(e) = worker.sync_now() {
             log::warn!("the first sync after connecting failed: {e}");
         }
@@ -301,11 +301,11 @@ impl SyncControl {
         if let Some(worker) = self.config.slot.take() {
             worker.stop();
         }
-        let tokens = self.config.tokens.clear().map_err(|e| e.to_string());
+        let login = self.config.credentials.clear().map_err(|e| e.to_string());
         let state = erase_state(&self.config.state_path)
             .map_err(|e| format!("could not remove the sync state: {e}"));
         (self.coalescer.poker())();
-        tokens.and(state)
+        login.and(state)
     }
 
     fn turn(&self) -> std::sync::MutexGuard<'_, ()> {
@@ -316,23 +316,46 @@ impl SyncControl {
 
     /// Starts a worker for `token`, replacing one that is running.
     ///
-    /// The engine's state is kept when it is still the right one: replacing a
-    /// running worker (reconnecting after a revoked login), or `resuming` in a
-    /// new run of an account that was already connected. Connecting from
-    /// nothing throws away whatever state is lying around, because it
-    /// describes some earlier account's remote and the engine would compare
-    /// this one against it.
-    fn install(&self, token: &RefreshToken, resuming: bool) -> Result<Arc<Worker>, String> {
+    /// The engine's state — a cursor and revisions — describes one provider's
+    /// remote, so it is kept only while that provider stays the one. Replacing
+    /// a running worker (reconnecting after a revoked login) and `resuming` in
+    /// a new run of an account that was already connected keep it. Connecting
+    /// from nothing throws away whatever is lying around, because it describes
+    /// some earlier account's remote and the engine would compare this one
+    /// against it; so does connecting to a different provider, which would
+    /// otherwise be handed the first one's cursor.
+    fn install(
+        &self,
+        provider: &Arc<dyn Provider>,
+        token: &RefreshToken,
+        login: Login,
+    ) -> Result<Arc<Worker>, String> {
         let cfg = &self.config;
         let _turn = self.turn();
-        match cfg.slot.take() {
-            Some(old) => old.stop(),
-            None if resuming => {}
-            None => erase_state(&cfg.state_path)
-                .map_err(|e| format!("could not clear the old sync state: {e}"))?,
+
+        let keep_state = match login {
+            Login::Saved => true,
+            Login::New => {
+                // Unreadable counts as different: losing the state is safe.
+                let same = matches!(
+                    cfg.credentials.load(),
+                    Ok(Some(saved)) if saved.provider == provider.id()
+                );
+                cfg.credentials
+                    .save(&Credential::new(provider.id(), token.clone()))
+                    .map_err(|e| e.to_string())?;
+                same
+            }
+        };
+        if let Some(old) = cfg.slot.take() {
+            old.stop();
+        }
+        if !keep_state {
+            erase_state(&cfg.state_path)
+                .map_err(|e| format!("could not clear the old sync state: {e}"))?;
         }
 
-        let remote = cfg.provider.remote(token)?;
+        let remote = provider.remote(token)?;
         let poke = self.coalescer.poker();
         let on_status = {
             let poke = poke.clone();
@@ -346,6 +369,7 @@ impl SyncControl {
             cfg.events.clone(),
             cfg.timing,
             poke.clone(),
+            provider.name(),
         );
         cfg.slot.set(worker.clone());
         poke();
@@ -353,10 +377,14 @@ impl SyncControl {
     }
 }
 
+/// Connects to the provider with this id (see [`Provider::id`]).
 #[tauri::command]
-pub async fn connect_dropbox(control: State<'_, Arc<SyncControl>>) -> Result<(), String> {
+pub async fn connect_remote(
+    provider: String,
+    control: State<'_, Arc<SyncControl>>,
+) -> Result<(), String> {
     let control = control.inner().clone();
-    crate::blocking(move || control.connect()).await
+    crate::blocking(move || control.connect(&provider)).await
 }
 
 /// Forgets the account. Local data is untouched.

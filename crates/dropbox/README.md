@@ -24,9 +24,9 @@ no async runtime in the tree (`cargo tree -p journal-dropbox` shows no `tokio`,
   no socket: the app shows the URL, catches the redirect, checks that the
   redirect's `state` equals `PendingAuth::state()`, and passes the `code` to
   `finish`.
-- `TokenStore` / `FileTokenStore` — where the refresh token is kept: one file,
-  mode `0600`, written atomically. It must live outside the synced store. An
-  OS keychain implementation can replace it without touching anything else.
+- The refresh token is a `journal_credential::RefreshToken`. Keeping it is
+  `journal-credential`'s job, not this crate's: nothing here is Dropbox-specific
+  about a saved login.
 
 ## Behaviour worth knowing
 
@@ -71,7 +71,7 @@ that lowers it must keep that target at `info` or above.
 The tests need no network: a scripted `HttpClient` asserts each request's
 route, JSON arguments and headers and returns canned responses. They cover
 every trait method, every error mapping, paging, token refresh (including a
-revoked token and a second expiry), the PKCE exchange, the token file, and the
+revoked token and a second expiry), the PKCE exchange, and the
 content hash against vectors from Dropbox's published algorithm.
 
 `live_round_trip` is `#[ignore]`d: it talks to Dropbox and needs

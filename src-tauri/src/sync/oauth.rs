@@ -1,7 +1,7 @@
 //! Catching the OAuth redirect on a loopback socket.
 //!
-//! `journal-dropbox` builds the authorize URL and redeems the code, and opens
-//! no browser and listens on no socket. Listening is this file: a one-shot
+//! A provider's adapter crate (`journal-dropbox`) builds the authorize URL and
+//! redeems the code, and opens no browser and listens on no socket. Listening is this file: a one-shot
 //! HTTP listener on 127.0.0.1 that the browser is sent back to, which reads the
 //! `code` and `state` off the request and answers with a page saying to return
 //! to the app. Desktop only in effect: a phone's browser cannot reach the
@@ -16,8 +16,9 @@ use std::time::{Duration, Instant};
 use url::Url;
 
 /// The port the redirect URI names. A fixed one, because Dropbox matches the
-/// redirect against URIs registered with the app: register
-/// `http://127.0.0.1:53682/` there. (rclone uses the same port for the same
+/// redirect against URIs registered with the app (register
+/// `http://127.0.0.1:53682/` there), and a provider that accepts any loopback
+/// port would not mind it. (rclone uses the same port for the same
 /// purpose, so the two cannot connect at once.)
 pub const REDIRECT_PORT: u16 = 53682;
 
@@ -27,11 +28,12 @@ const READ_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_REQUEST_LINE: u64 = 8 * 1024;
 
 /// Listens on `port` (0 for any free one) and returns the redirect URI that
-/// names the socket.
-pub fn bind(port: u16) -> Result<(TcpListener, String), String> {
+/// names the socket. `provider` is the name the user knows it by, for the
+/// messages here and on the page the browser lands on.
+pub fn bind(port: u16, provider: &str) -> Result<(TcpListener, String), String> {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, port)).map_err(|e| {
         format!(
-            "could not listen on 127.0.0.1:{port} for Dropbox's redirect: {e}. \
+            "could not listen on 127.0.0.1:{port} for {provider}'s redirect: {e}. \
              Is another connection in progress?"
         )
     })?;
@@ -47,7 +49,8 @@ pub fn bind(port: u16) -> Result<(TcpListener, String), String> {
 enum Redirect {
     /// The redirect we are waiting for.
     Code(String),
-    /// The user refused, or Dropbox reported a failure.
+    /// The user refused, or the provider reported a failure: the OAuth `error`
+    /// code it sent.
     Denied(String),
     /// Not ours: another path, a wrong `state`, garbage. Keep waiting.
     Ignore,
@@ -59,35 +62,43 @@ enum Redirect {
 /// ignored rather than failing the wait: `state` is what stops another site
 /// from completing *its* authorization inside this app, and dropping such a
 /// request is the whole defence — it must not also be a way to abort the real
-/// one. Gives up after `timeout`.
+/// one. Gives up after `timeout`. `provider` is as for [`bind`].
 pub fn await_code(
     listener: &TcpListener,
     expected_state: &str,
     timeout: Duration,
+    provider: &str,
 ) -> Result<String, String> {
     listener
         .set_nonblocking(true)
-        .map_err(|e| format!("could not wait for Dropbox's redirect: {e}"))?;
+        .map_err(|e| format!("could not wait for {provider}'s redirect: {e}"))?;
     let deadline = Instant::now() + timeout;
     loop {
         match listener.accept() {
-            Ok((stream, _)) => match serve(stream, expected_state) {
+            Ok((stream, _)) => match serve(stream, expected_state, provider) {
                 Redirect::Code(code) => return Ok(code),
-                Redirect::Denied(reason) => return Err(reason),
+                Redirect::Denied(error) => {
+                    return Err(match error.as_str() {
+                        "access_denied" => format!("{provider} access was not granted"),
+                        other => format!("{provider} refused the connection: {other}"),
+                    })
+                }
                 Redirect::Ignore => {}
             },
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
                 if Instant::now() >= deadline {
-                    return Err("timed out waiting for Dropbox; try connecting again".to_owned());
+                    return Err(format!(
+                        "timed out waiting for {provider}; try connecting again"
+                    ));
                 }
                 thread::sleep(Duration::from_millis(50));
             }
-            Err(e) => return Err(format!("could not accept Dropbox's redirect: {e}")),
+            Err(e) => return Err(format!("could not accept {provider}'s redirect: {e}")),
         }
     }
 }
 
-fn serve(mut stream: TcpStream, expected_state: &str) -> Redirect {
+fn serve(mut stream: TcpStream, expected_state: &str, provider: &str) -> Redirect {
     // An accepted socket may inherit the listener's non-blocking mode.
     if stream.set_nonblocking(false).is_err()
         || stream.set_read_timeout(Some(READ_TIMEOUT)).is_err()
@@ -104,13 +115,15 @@ fn serve(mut stream: TcpStream, expected_state: &str) -> Redirect {
     let (status, body) = match &redirect {
         Redirect::Code(_) => (
             "200 OK",
-            "Journal is connected to Dropbox. You can close this tab.",
+            format!("Journal is connected to {provider}. You can close this tab."),
         ),
         Redirect::Denied(_) => (
             "200 OK",
-            "Dropbox was not connected. You can close this tab and try again in Journal.",
+            format!(
+                "{provider} was not connected. You can close this tab and try again in Journal."
+            ),
         ),
-        Redirect::Ignore => ("404 Not Found", "Not found."),
+        Redirect::Ignore => ("404 Not Found", "Not found.".to_owned()),
     };
     let page = format!("<!doctype html><meta charset=utf-8><title>Journal</title><p>{body}</p>");
     let _ = write!(
@@ -145,10 +158,7 @@ fn parse(request_line: &str, expected_state: &str) -> Redirect {
         return Redirect::Ignore;
     }
     if let Some(error) = param("error") {
-        return Redirect::Denied(match error.as_str() {
-            "access_denied" => "Dropbox access was not granted".to_owned(),
-            other => format!("Dropbox refused the connection: {other}"),
-        });
+        return Redirect::Denied(error);
     }
     match param("code") {
         Some(code) if !code.is_empty() => Redirect::Code(code),
@@ -175,24 +185,24 @@ mod tests {
 
     #[test]
     fn the_redirect_uri_names_the_socket_it_is_listening_on() {
-        let (listener, uri) = bind(0).unwrap();
+        let (listener, uri) = bind(0, "Dropbox").unwrap();
         assert_eq!(uri, format!("http://127.0.0.1:{}/", port(&listener)));
     }
 
     #[test]
     fn a_busy_port_says_so() {
-        let (listener, _) = bind(0).unwrap();
-        let error = bind(port(&listener)).unwrap_err();
+        let (listener, _) = bind(0, "Dropbox").unwrap();
+        let error = bind(port(&listener), "Dropbox").unwrap_err();
         assert!(error.contains("could not listen"), "{error}");
     }
 
     #[test]
     fn the_code_comes_back_when_the_state_matches() {
-        let (listener, _) = bind(0).unwrap();
+        let (listener, _) = bind(0, "Dropbox").unwrap();
         let p = port(&listener);
         let browser = thread::spawn(move || browse(p, "/?code=abc%20123&state=s3cret"));
 
-        let code = await_code(&listener, "s3cret", Duration::from_secs(5)).unwrap();
+        let code = await_code(&listener, "s3cret", Duration::from_secs(5), "Dropbox").unwrap();
 
         assert_eq!(code, "abc 123");
         let reply = browser.join().unwrap();
@@ -202,7 +212,7 @@ mod tests {
 
     #[test]
     fn requests_that_are_not_the_redirect_do_not_end_the_wait() {
-        let (listener, _) = bind(0).unwrap();
+        let (listener, _) = bind(0, "Dropbox").unwrap();
         let p = port(&listener);
         let browser = thread::spawn(move || {
             // Another site's authorization, and the favicon, and only then the
@@ -214,7 +224,7 @@ mod tests {
             [forged, missing_state, favicon]
         });
 
-        let code = await_code(&listener, "s3cret", Duration::from_secs(5)).unwrap();
+        let code = await_code(&listener, "s3cret", Duration::from_secs(5), "Dropbox").unwrap();
 
         assert_eq!(code, "good");
         for reply in browser.join().unwrap() {
@@ -224,11 +234,11 @@ mod tests {
 
     #[test]
     fn a_refusal_ends_the_wait_with_a_reason() {
-        let (listener, _) = bind(0).unwrap();
+        let (listener, _) = bind(0, "Dropbox").unwrap();
         let p = port(&listener);
         let browser = thread::spawn(move || browse(p, "/?error=access_denied&state=s3cret"));
 
-        let error = await_code(&listener, "s3cret", Duration::from_secs(5)).unwrap_err();
+        let error = await_code(&listener, "s3cret", Duration::from_secs(5), "Dropbox").unwrap_err();
 
         assert!(error.contains("not granted"), "{error}");
         browser.join().unwrap();
@@ -244,8 +254,9 @@ mod tests {
 
     #[test]
     fn no_redirect_in_time_is_an_error() {
-        let (listener, _) = bind(0).unwrap();
-        let error = await_code(&listener, "s3cret", Duration::from_millis(100)).unwrap_err();
+        let (listener, _) = bind(0, "Dropbox").unwrap();
+        let error =
+            await_code(&listener, "s3cret", Duration::from_millis(100), "Dropbox").unwrap_err();
         assert!(error.contains("timed out"), "{error}");
     }
 

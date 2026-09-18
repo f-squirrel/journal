@@ -13,7 +13,7 @@ use dropbox_sdk::oauth2::Authorization;
 use dropbox_sdk::types::auth::AuthError;
 use dropbox_sdk::Error;
 
-use crate::auth::RefreshToken;
+use journal_credential::RefreshToken;
 
 /// A user-authorized client that refreshes its own access token.
 ///

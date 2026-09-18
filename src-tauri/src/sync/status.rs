@@ -48,13 +48,18 @@ pub fn derive_state(connected: bool, status: &SyncStatus) -> SyncState {
     }
 }
 
-/// The payload for the frontend.
+/// The payload for the frontend. `provider` is the connected provider's name,
+/// or `None` when nothing is connected.
 ///
 /// `detail` is the failing pass's own message, when the worker has one. Blob
 /// names become entry ids here, through the vault's own naming: the engine
 /// knows names only, and a pending blob that is not an entry is counted, not
 /// named.
-pub fn payload(connected: bool, status: &SyncStatus, detail: Option<&str>) -> SyncStatusPayload {
+pub fn payload(
+    provider: Option<&str>,
+    status: &SyncStatus,
+    detail: Option<&str>,
+) -> SyncStatusPayload {
     let ids = |names: &std::collections::BTreeSet<_>| -> Vec<_> {
         names.iter().filter_map(entry_id).collect()
     };
@@ -62,27 +67,33 @@ pub fn payload(connected: bool, status: &SyncStatus, detail: Option<&str>) -> Sy
     let pending_other = status.pending.len() - pending_ids.len();
 
     SyncStatusPayload {
-        state: derive_state(connected, status),
+        state: derive_state(provider.is_some(), status),
         pending_ids,
         conflicted_ids: ids(&status.conflicted),
         pending_other: u32::try_from(pending_other).unwrap_or(u32::MAX),
         last_synced_at: status.last_success.map(DateTime::<Utc>::from),
-        message: status
-            .last_error
-            .map(|kind| detail.map_or_else(|| default_message(kind), str::to_owned)),
+        message: status.last_error.map(|kind| {
+            detail.map_or_else(
+                || default_message(provider.unwrap_or("the remote"), kind),
+                str::to_owned,
+            )
+        }),
     }
 }
 
 /// Said when a pass has failed but the worker has not recorded why yet.
-fn default_message(kind: SyncErrorKind) -> String {
+fn default_message(provider: &str, kind: SyncErrorKind) -> String {
     match kind {
-        SyncErrorKind::Offline => "Could not reach Dropbox.",
-        SyncErrorKind::RateLimited => "Dropbox asked us to slow down.",
-        SyncErrorKind::Unauthorized => "Dropbox no longer accepts this login. Connect again.",
-        SyncErrorKind::KeyMismatch => "This device and Dropbox hold different journal keys.",
-        SyncErrorKind::Other => "Sync failed.",
+        SyncErrorKind::Offline => format!("Could not reach {provider}."),
+        SyncErrorKind::RateLimited => format!("{provider} asked us to slow down."),
+        SyncErrorKind::Unauthorized => {
+            format!("{provider} no longer accepts this login. Connect again.")
+        }
+        SyncErrorKind::KeyMismatch => {
+            format!("This device and {provider} hold different journal keys.")
+        }
+        SyncErrorKind::Other => "Sync failed.".to_owned(),
     }
-    .to_owned()
 }
 
 /// Sends `sync://status` at most once per `interval`, always with the latest
@@ -243,7 +254,7 @@ mod tests {
             ..SyncStatus::default()
         };
 
-        let payload = payload(true, &status, None);
+        let payload = payload(Some("Dropbox"), &status, None);
 
         assert_eq!(payload.pending_ids, [a]);
         assert_eq!(payload.conflicted_ids, [b]);
@@ -264,7 +275,7 @@ mod tests {
             ..SyncStatus::default()
         };
 
-        let payload = payload(true, &status, Some("no route to host"));
+        let payload = payload(Some("Dropbox"), &status, Some("no route to host"));
 
         assert_eq!(payload.state, SyncState::Offline);
         assert_eq!(payload.pending_ids, [a]);
@@ -277,12 +288,24 @@ mod tests {
             last_error: Some(SyncErrorKind::Unauthorized),
             ..SyncStatus::default()
         };
-        assert!(payload(true, &status, None).message.is_some());
+        assert!(payload(Some("Dropbox"), &status, None).message.is_some());
         // And a success carries no message, even if a stale detail is around.
         assert_eq!(
-            payload(true, &SyncStatus::default(), Some("old")).message,
+            payload(Some("Dropbox"), &SyncStatus::default(), Some("old")).message,
             None
         );
+    }
+
+    #[test]
+    fn the_default_words_name_the_connected_provider() {
+        let status = SyncStatus {
+            last_error: Some(SyncErrorKind::Offline),
+            ..SyncStatus::default()
+        };
+
+        let message = payload(Some("Google Drive"), &status, None).message;
+
+        assert_eq!(message.as_deref(), Some("Could not reach Google Drive."));
     }
 
     struct Recorder(Mutex<Vec<(Instant, SyncStatusPayload)>>);
@@ -309,7 +332,7 @@ mod tests {
                 Duration::from_millis(100),
                 move || SyncStatusPayload {
                     pending_other: *pending.lock().unwrap(),
-                    ..payload(true, &SyncStatus::default(), None)
+                    ..payload(Some("Dropbox"), &SyncStatus::default(), None)
                 },
                 recorder.clone(),
             )

@@ -34,6 +34,7 @@ journal-fs-store = { path = "../crates/fs-store" }
 journal-key = { path = "../crates/key" }
 journal-remote = { path = "../crates/remote" }
 journal-sync = { path = "../crates/sync" }
+journal-credential = { path = "../crates/credential" }
 journal-dropbox = { path = "../crates/dropbox" }
 
 [dev-dependencies]
