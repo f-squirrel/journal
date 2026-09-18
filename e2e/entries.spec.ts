@@ -12,7 +12,9 @@ async function login(page: Page) {
   await page.goto("/");
   await page.getByLabel("Passphrase").fill("password123");
   await page.getByRole("button", { name: "Sign in" }).click();
-  await expect(page.getByRole("heading", { name: "All entries" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "All entries" }),
+  ).toBeVisible();
 }
 
 /// The entry body, rendered or in the editor — same test id either way.
@@ -48,12 +50,16 @@ test("lists entry headers without their markdown body", async ({ page }) => {
   await expect(page.getByText("Started journaling again")).toHaveCount(0);
 });
 
-test("opens an entry and loads its full content on demand", async ({ page }) => {
+test("opens an entry and loads its full content on demand", async ({
+  page,
+}) => {
   await login(page);
   await page.getByText("First day back").click();
   // The pane's own title, not the `# First day back` the entry's markdown
   // renders as an h1 below it.
-  await expect(page.getByRole("heading", { name: "First day back", level: 2 })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "First day back", level: 2 }),
+  ).toBeVisible();
   await expect(page.getByText("Started journaling again.")).toBeVisible();
 });
 
@@ -107,11 +113,16 @@ test("deleting an entry removes it from the list", async ({ page }) => {
   await page.getByText("Project ideas").click();
   await page.getByRole("button", { name: "Entry actions" }).click();
   await page.getByRole("menuitem", { name: "Delete entry" }).click();
-  await page.getByRole("dialog").getByRole("button", { name: "Delete" }).click();
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "Delete" })
+    .click();
   await expect(page.getByText("Project ideas")).toHaveCount(0);
 });
 
-test("a new entry saves where crypto.randomUUID is unavailable", async ({ page }) => {
+test("a new entry saves where crypto.randomUUID is unavailable", async ({
+  page,
+}) => {
   // The iOS/macOS Tauri origin (`tauri://localhost`) is not a secure context,
   // so this secure-context-only API is missing there.
   await page.addInitScript(() => {
@@ -152,5 +163,7 @@ test("an edited entry moves to the top of the list", async ({ page }) => {
   await editor(page).fill("# Edited just now");
 
   await expect(page.getByTestId("save-status")).toHaveText("Saved");
-  await expect(page.getByTestId("entry-row").first()).toContainText("First day back");
+  await expect(page.getByTestId("entry-row").first()).toContainText(
+    "First day back",
+  );
 });

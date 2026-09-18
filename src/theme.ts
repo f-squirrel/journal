@@ -1,4 +1,8 @@
-import { createTheme, type PaletteMode, type Theme } from "@mui/material/styles";
+import {
+  createTheme,
+  type PaletteMode,
+  type Theme,
+} from "@mui/material/styles";
 
 declare module "@mui/material/styles" {
   interface Palette {
@@ -57,18 +61,40 @@ export function getTheme(mode: PaletteMode): Theme {
     palette: {
       mode,
       primary: isLight
-        ? { main: "#2F6F4E", light: "#5C9B79", dark: "#1D4E34", contrastText: "#FFFFFF" }
-        : { main: "#8FD9AF", light: "#B7EFD1", dark: "#5C9B79", contrastText: "#08331E" },
+        ? {
+            main: "#2F6F4E",
+            light: "#5C9B79",
+            dark: "#1D4E34",
+            contrastText: "#FFFFFF",
+          }
+        : {
+            main: "#8FD9AF",
+            light: "#B7EFD1",
+            dark: "#5C9B79",
+            contrastText: "#08331E",
+          },
       secondary: isLight
-        ? { main: "#8A6100", light: "#B98A00", dark: "#5E4100", contrastText: "#FFFFFF" }
-        : { main: "#F0C34C", light: "#F7D67A", dark: "#B98A00", contrastText: "#3D2B00" },
+        ? {
+            main: "#8A6100",
+            light: "#B98A00",
+            dark: "#5E4100",
+            contrastText: "#FFFFFF",
+          }
+        : {
+            main: "#F0C34C",
+            light: "#F7D67A",
+            dark: "#B98A00",
+            contrastText: "#3D2B00",
+          },
       background: {
         default: isLight ? "#F4EFE2" : "#14120F",
         paper: isLight ? "#FBF8F2" : "#181510",
       },
       text: {
         primary: isLight ? "#1E1B15" : "#E9E3D6",
-        secondary: isLight ? "rgba(30, 27, 21, 0.64)" : "rgba(233, 227, 214, 0.66)",
+        secondary: isLight
+          ? "rgba(30, 27, 21, 0.64)"
+          : "rgba(233, 227, 214, 0.66)",
       },
       divider: tonal.outlineVariant,
       tonal,
@@ -93,7 +119,9 @@ export function getTheme(mode: PaletteMode): Theme {
         styleOverrides: {
           root: {
             backdropFilter: "blur(10px)",
-            backgroundColor: isLight ? "rgba(247, 242, 233, 0.9)" : "rgba(28, 25, 21, 0.88)",
+            backgroundColor: isLight
+              ? "rgba(247, 242, 233, 0.9)"
+              : "rgba(28, 25, 21, 0.88)",
             color: isLight ? "#1E1B15" : "#E9E3D6",
           },
         },
@@ -110,7 +138,11 @@ export function getTheme(mode: PaletteMode): Theme {
             backgroundColor: tonal.primaryContainer,
             color: tonal.onPrimaryContainer,
             boxShadow: "none",
-            "&:hover": { backgroundColor: tonal.primaryContainer, boxShadow: "none", filter: "brightness(0.96)" },
+            "&:hover": {
+              backgroundColor: tonal.primaryContainer,
+              boxShadow: "none",
+              filter: "brightness(0.96)",
+            },
           },
         },
       },

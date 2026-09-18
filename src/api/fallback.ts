@@ -59,7 +59,8 @@ interface Faults {
 
 function parseFaults(search: string): Faults {
   const params = new URLSearchParams(search);
-  const ops = (value: string | null) => new Set((value ?? "").split(",").filter(Boolean) as Op[]);
+  const ops = (value: string | null) =>
+    new Set((value ?? "").split(",").filter(Boolean) as Op[]);
   return {
     newVault: params.get("vault") === "new",
     fail: ops(params.get("fail")),
@@ -104,7 +105,9 @@ export function listEntries(): Promise<EntryHeader[]> {
   // Sorted because `Vault::list_entries` sorts. The Playwright suite only ever
   // sees this fallback, so a fallback that returned `Map` insertion order
   // would let an ordering bug in the app test green.
-  return run("list", () => [...fallbackEntries.values()].map(toHeader).sort(byUpdatedAt));
+  return run("list", () =>
+    [...fallbackEntries.values()].map(toHeader).sort(byUpdatedAt),
+  );
 }
 
 export function getEntry(id: string): Promise<JournalEntry | null> {

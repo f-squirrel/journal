@@ -15,7 +15,12 @@ import NotesIcon from "@mui/icons-material/Notes";
 import { useMatch, useNavigate } from "react-router-dom";
 import { useAppState } from "../context/AppStateContext";
 import { useNewEntry } from "../hooks/useNewEntry";
-import { formatDayNumber, formatTime, formatWeekday, groupByMonth } from "../utils/date";
+import {
+  formatDayNumber,
+  formatTime,
+  formatWeekday,
+  groupByMonth,
+} from "../utils/date";
 import { HEADER_HEIGHT, LIST_WIDTH } from "./chrome";
 
 /// The middle column: every entry, newest first, under sticky month headers.
@@ -23,7 +28,11 @@ import { HEADER_HEIGHT, LIST_WIDTH } from "./chrome";
 /// Rows carry a title and a time but no excerpt: `list_entries` returns
 /// headers without `markdown` on purpose (see `crates/vault`), and filling
 /// excerpts would mean decrypting the whole journal just to draw the list.
-export default function EntryList({ onOpenSidebar }: { onOpenSidebar?: () => void }) {
+export default function EntryList({
+  onOpenSidebar,
+}: {
+  onOpenSidebar?: () => void;
+}) {
   const { entries } = useAppState();
   const navigate = useNavigate();
   const newEntry = useNewEntry();
@@ -59,7 +68,12 @@ export default function EntryList({ onOpenSidebar }: { onOpenSidebar?: () => voi
         }}
       >
         {onOpenSidebar && (
-          <IconButton edge="start" onClick={onOpenSidebar} aria-label="Open menu" size="small">
+          <IconButton
+            edge="start"
+            onClick={onOpenSidebar}
+            aria-label="Open menu"
+            size="small"
+          >
             <MenuIcon />
           </IconButton>
         )}
@@ -73,12 +87,21 @@ export default function EntryList({ onOpenSidebar }: { onOpenSidebar?: () => voi
 
       <Box sx={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
         {entries.length === 0 ? (
-          <Stack alignItems="center" spacing={2} sx={{ px: 3, py: 8, textAlign: "center" }}>
+          <Stack
+            alignItems="center"
+            spacing={2}
+            sx={{ px: 3, py: 8, textAlign: "center" }}
+          >
             <NotesIcon sx={{ fontSize: 36, color: "text.disabled" }} />
             <Typography variant="body2" color="text.secondary">
               No entries yet. Start your journal.
             </Typography>
-            <Button variant="contained" disableElevation startIcon={<AddIcon />} onClick={newEntry}>
+            <Button
+              variant="contained"
+              disableElevation
+              startIcon={<AddIcon />}
+              onClick={newEntry}
+            >
               Write your first entry
             </Button>
           </Stack>
@@ -121,11 +144,18 @@ export default function EntryList({ onOpenSidebar }: { onOpenSidebar?: () => voi
                   }}
                 >
                   <Box sx={{ width: 34, flexShrink: 0, textAlign: "center" }}>
-                    <Typography sx={{ fontSize: 20, fontWeight: 700, lineHeight: 1.15 }}>
+                    <Typography
+                      sx={{ fontSize: 20, fontWeight: 700, lineHeight: 1.15 }}
+                    >
                       {formatDayNumber(entry.updated_at)}
                     </Typography>
                     <Typography
-                      sx={{ fontSize: 10, letterSpacing: 0.6, textTransform: "uppercase", opacity: 0.7 }}
+                      sx={{
+                        fontSize: 10,
+                        letterSpacing: 0.6,
+                        textTransform: "uppercase",
+                        opacity: 0.7,
+                      }}
                     >
                       {formatWeekday(entry.updated_at)}
                     </Typography>

@@ -1,4 +1,11 @@
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 import type { PaletteMode } from "@mui/material";
 
 const STORAGE_KEY = "journal.colorMode";
@@ -31,7 +38,11 @@ export function ColorModeProvider({ children }: { children: ReactNode }) {
     [mode],
   );
 
-  return <ColorModeContext.Provider value={value}>{children}</ColorModeContext.Provider>;
+  return (
+    <ColorModeContext.Provider value={value}>
+      {children}
+    </ColorModeContext.Provider>
+  );
 }
 
 export function useColorMode(): ColorModeContextValue {

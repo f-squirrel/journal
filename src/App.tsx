@@ -1,6 +1,12 @@
 import type { ReactNode } from "react";
 import { CssBaseline, ThemeProvider } from "@mui/material";
-import { HashRouter, Navigate, Route, Routes, useParams } from "react-router-dom";
+import {
+  HashRouter,
+  Navigate,
+  Route,
+  Routes,
+  useParams,
+} from "react-router-dom";
 import { getTheme } from "./theme";
 import { AppStateProvider, useAppState } from "./context/AppStateContext";
 import { ColorModeProvider, useColorMode } from "./context/ColorModeContext";

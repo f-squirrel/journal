@@ -100,7 +100,13 @@ export default function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
         <Stack alignItems="center" spacing={0.5}>
           <RailButton
             label={mode === "dark" ? "Light mode" : "Dark mode"}
-            icon={mode === "dark" ? <LightModeIcon fontSize="small" /> : <DarkModeIcon fontSize="small" />}
+            icon={
+              mode === "dark" ? (
+                <LightModeIcon fontSize="small" />
+              ) : (
+                <DarkModeIcon fontSize="small" />
+              )
+            }
             onClick={toggleMode}
           />
           <RailButton

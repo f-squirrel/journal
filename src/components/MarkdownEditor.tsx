@@ -4,7 +4,11 @@ import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { Compartment, EditorState, type Extension } from "@codemirror/state";
-import { EditorView, keymap, placeholder as cmPlaceholder } from "@codemirror/view";
+import {
+  EditorView,
+  keymap,
+  placeholder as cmPlaceholder,
+} from "@codemirror/view";
 import { tags } from "@lezer/highlight";
 
 /// Styles the markdown *as it is written*: a heading is large while its `#`
@@ -25,10 +29,26 @@ function markdownHighlight(theme: Theme): HighlightStyle {
   // rule matches first wins outright — so a muted `heading` rule would take
   // the line's colour with it.
   return HighlightStyle.define([
-    { tag: tags.heading1, fontSize: "1.6rem", fontWeight: "700", lineHeight: "1.35", color: text },
-    { tag: tags.heading2, fontSize: "1.3rem", fontWeight: "700", lineHeight: "1.4", color: text },
+    {
+      tag: tags.heading1,
+      fontSize: "1.6rem",
+      fontWeight: "700",
+      lineHeight: "1.35",
+      color: text,
+    },
+    {
+      tag: tags.heading2,
+      fontSize: "1.3rem",
+      fontWeight: "700",
+      lineHeight: "1.4",
+      color: text,
+    },
     { tag: tags.heading3, fontSize: "1.12rem", fontWeight: "700", color: text },
-    { tag: [tags.heading4, tags.heading5, tags.heading6], fontWeight: "700", color: text },
+    {
+      tag: [tags.heading4, tags.heading5, tags.heading6],
+      fontWeight: "700",
+      color: text,
+    },
     { tag: tags.strong, fontWeight: "700" },
     { tag: tags.emphasis, fontStyle: "italic" },
     { tag: tags.strikethrough, textDecoration: "line-through" },
@@ -38,7 +58,12 @@ function markdownHighlight(theme: Theme): HighlightStyle {
     { tag: tags.url, color: muted, fontSize: "0.92em" },
     // `tags.list` is the item's *text*, not its bullet — colouring it tints
     // the whole list. The bullet is a `processingInstruction`, below.
-    { tag: tags.processingInstruction, color: muted, fontWeight: "400", fontSize: "1rem" },
+    {
+      tag: tags.processingInstruction,
+      color: muted,
+      fontWeight: "400",
+      fontSize: "1rem",
+    },
   ]);
 }
 
@@ -112,7 +137,8 @@ export default function MarkdownEditor({
           cmPlaceholder(placeholder),
           themes.current.of(themeExtensions(themeRef.current)),
           EditorView.updateListener.of((update) => {
-            if (update.docChanged) onChangeRef.current(update.state.doc.toString());
+            if (update.docChanged)
+              onChangeRef.current(update.state.doc.toString());
           }),
         ],
       }),
@@ -139,7 +165,9 @@ export default function MarkdownEditor({
     if (!editor) return;
     const current = editor.state.doc.toString();
     if (current === value) return;
-    editor.dispatch({ changes: { from: 0, to: current.length, insert: value } });
+    editor.dispatch({
+      changes: { from: 0, to: current.length, insert: value },
+    });
   }, [value]);
 
   const mode = theme.palette.mode;

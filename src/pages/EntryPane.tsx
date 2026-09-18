@@ -47,9 +47,16 @@ export function NoEntrySelected() {
   const newEntry = useNewEntry();
 
   return (
-    <Stack alignItems="center" justifyContent="center" spacing={2} sx={{ height: "100%", px: 4 }}>
+    <Stack
+      alignItems="center"
+      justifyContent="center"
+      spacing={2}
+      sx={{ height: "100%", px: 4 }}
+    >
       <AutoStoriesIcon sx={{ fontSize: 44, color: "text.disabled" }} />
-      <Typography color="text.secondary">Select an entry, or start a new one.</Typography>
+      <Typography color="text.secondary">
+        Select an entry, or start a new one.
+      </Typography>
       <Button startIcon={<AddIcon />} onClick={newEntry}>
         New entry
       </Button>
@@ -220,7 +227,10 @@ function EntryPane({ id, draft }: { id: string; draft: boolean }) {
         >
           {STATUS_TEXT[autosave.status]}
         </Typography>
-        <IconButton aria-label="Entry actions" onClick={(event) => setMenuAnchor(event.currentTarget)}>
+        <IconButton
+          aria-label="Entry actions"
+          onClick={(event) => setMenuAnchor(event.currentTarget)}
+        >
           <MoreHorizIcon />
         </IconButton>
       </Stack>
@@ -240,7 +250,14 @@ function EntryPane({ id, draft }: { id: string; draft: boolean }) {
       )}
 
       <Box sx={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
-        <Box sx={{ maxWidth: 720, mx: "auto", px: { xs: 2.5, sm: 5 }, py: { xs: 3, sm: 5 } }}>
+        <Box
+          sx={{
+            maxWidth: 720,
+            mx: "auto",
+            px: { xs: 2.5, sm: 5 },
+            py: { xs: 3, sm: 5 },
+          }}
+        >
           <Typography variant="h5" component="h1">
             {formatEntryHeading(timestamp)}
           </Typography>
@@ -272,7 +289,11 @@ function EntryPane({ id, draft }: { id: string; draft: boolean }) {
             </>
           ) : (
             <>
-              <Typography variant="h5" component="h2" sx={{ mb: 1.5, fontSize: "1.45rem" }}>
+              <Typography
+                variant="h5"
+                component="h2"
+                sx={{ mb: 1.5, fontSize: "1.45rem" }}
+              >
                 {title || "Untitled entry"}
               </Typography>
               {/* Same test id as the editor: the body is the body, whichever
@@ -288,14 +309,20 @@ function EntryPane({ id, draft }: { id: string; draft: boolean }) {
                   "& img": { maxWidth: "100%", borderRadius: 1 },
                 }}
               >
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{markdown}</ReactMarkdown>
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                  {markdown}
+                </ReactMarkdown>
               </Box>
             </>
           )}
         </Box>
       </Box>
 
-      <Menu anchorEl={menuAnchor} open={menuAnchor !== null} onClose={() => setMenuAnchor(null)}>
+      <Menu
+        anchorEl={menuAnchor}
+        open={menuAnchor !== null}
+        onClose={() => setMenuAnchor(null)}
+      >
         {mode === "read" ? (
           <MenuItem onClick={startEditing}>
             <EditIcon fontSize="small" sx={{ mr: 1.5 }} />

@@ -14,7 +14,9 @@ async function login(page: Page, query: string) {
   await page.goto(`/${query}`);
   await page.getByLabel("Passphrase").fill("password123");
   await page.getByRole("button", { name: "Sign in" }).click();
-  await expect(page.getByRole("heading", { name: "All entries" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "All entries" }),
+  ).toBeVisible();
 }
 
 test("a failed save keeps the draft in the pane", async ({ page }) => {
@@ -34,22 +36,34 @@ test("a failed save keeps the draft in the pane", async ({ page }) => {
   expect(page.url()).toMatch(/#\/entries\/[0-9a-f-]{36}$/);
 });
 
-test("a failed delete keeps the row and re-enables the dialog", async ({ page }) => {
+test("a failed delete keeps the row and re-enables the dialog", async ({
+  page,
+}) => {
   await login(page, "?fail=delete&failMessage=Disk+is+full.");
 
   await page.getByText("Project ideas").click();
   await page.getByRole("button", { name: "Entry actions" }).click();
   await page.getByRole("menuitem", { name: "Delete entry" }).click();
-  await page.getByRole("dialog").getByRole("button", { name: "Delete" }).click();
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "Delete" })
+    .click();
 
   await expect(page.getByText("Disk is full.")).toBeVisible();
-  await expect(page.getByRole("dialog").getByRole("button", { name: "Cancel" })).toBeEnabled();
+  await expect(
+    page.getByRole("dialog").getByRole("button", { name: "Cancel" }),
+  ).toBeEnabled();
 
   // The entry is still on disk, so it must still be in the list — which, in a
   // three-pane layout, never left the screen.
-  await page.getByRole("dialog").getByRole("button", { name: "Cancel" }).click();
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "Cancel" })
+    .click();
   await expect(page.getByRole("dialog")).toBeHidden();
-  await expect(page.getByTestId("entry-row").filter({ hasText: "Project ideas" })).toBeVisible();
+  await expect(
+    page.getByTestId("entry-row").filter({ hasText: "Project ideas" }),
+  ).toBeVisible();
 });
 
 test("a failed load does not render stale content", async ({ page }) => {
@@ -81,7 +95,9 @@ test("an unlock failure shows the backend's own message", async ({ page }) => {
 // Tauri's main thread. The constant is well clear of Playwright's action time
 // on purpose; don't tighten it.
 
-test("the entry list renders nothing until the backend answers", async ({ page }) => {
+test("the entry list renders nothing until the backend answers", async ({
+  page,
+}) => {
   await login(page, "?slow=list");
 
   // Fabricated rows inside a real journal: `entries` must start empty rather
@@ -90,7 +106,9 @@ test("the entry list renders nothing until the backend answers", async ({ page }
   await expect(page.getByText("First day back")).toBeVisible();
 });
 
-test("a list in flight at logout cannot repopulate the next session", async ({ page }) => {
+test("a list in flight at logout cannot repopulate the next session", async ({
+  page,
+}) => {
   await login(page, "?slow=list");
 
   // Log out with the listing still in flight, then sit out the delay on the
@@ -102,7 +120,9 @@ test("a list in flight at logout cannot repopulate the next session", async ({ p
 
   await page.getByLabel("Passphrase").fill("password123");
   await page.getByRole("button", { name: "Sign in" }).click();
-  await expect(page.getByRole("heading", { name: "All entries" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "All entries" }),
+  ).toBeVisible();
   // Without the cancellation guard the previous session's titles are already
   // back in state, so they render before this listing has answered.
   await expect(page.getByText("First day back")).toHaveCount(0);

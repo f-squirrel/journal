@@ -64,7 +64,10 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   // Stable identity: both EditorPage and PreviewPage key a `useEffect` on
   // `loadEntry`, so rebuilding it whenever `entries` changes would re-run
   // those effects and reset the editor's draft mid-save.
-  const loadEntry = useCallback((id: string) => getEntry(id).then((entry) => entry ?? undefined), []);
+  const loadEntry = useCallback(
+    (id: string) => getEntry(id).then((entry) => entry ?? undefined),
+    [],
+  );
 
   const value = useMemo<AppStateContextValue>(
     () => ({
@@ -114,14 +117,18 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         let replaced: EntryHeader | undefined;
         setEntries((prev) => {
           replaced = prev.find((e) => e.id === entry.id);
-          return [header, ...prev.filter((e) => e.id !== entry.id)].sort(byUpdatedAt);
+          return [header, ...prev.filter((e) => e.id !== entry.id)].sort(
+            byUpdatedAt,
+          );
         });
         try {
           await saveEntryBackend(entry);
         } catch (err) {
           setEntries((prev) => {
             const without = prev.filter((e) => e.id !== entry.id);
-            return replaced ? [replaced, ...without].sort(byUpdatedAt) : without;
+            return replaced
+              ? [replaced, ...without].sort(byUpdatedAt)
+              : without;
           });
           throw err;
         }
@@ -148,7 +155,11 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     [authenticated, entries, loadEntry],
   );
 
-  return <AppStateContext.Provider value={value}>{children}</AppStateContext.Provider>;
+  return (
+    <AppStateContext.Provider value={value}>
+      {children}
+    </AppStateContext.Provider>
+  );
 }
 
 export function useAppState(): AppStateContextValue {

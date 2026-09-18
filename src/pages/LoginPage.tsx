@@ -97,7 +97,9 @@ export default function LoginPage() {
     // *known* existing vault skips them, so an unanswered check is strict.
     if (isNewVault) {
       if (password.length < MIN_PASSPHRASE_LENGTH) {
-        setError(`Use a passphrase of at least ${MIN_PASSPHRASE_LENGTH} characters.`);
+        setError(
+          `Use a passphrase of at least ${MIN_PASSPHRASE_LENGTH} characters.`,
+        );
         return;
       }
       if (password !== confirmation) {
@@ -124,7 +126,15 @@ export default function LoginPage() {
   }
 
   return (
-    <Box sx={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", p: 4 }}>
+    <Box
+      sx={{
+        minHeight: "100vh",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        p: 4,
+      }}
+    >
       <Paper
         elevation={0}
         sx={{
@@ -164,9 +174,17 @@ export default function LoginPage() {
               type="password"
               value={password}
               onChange={(event) => setPassword(event.target.value)}
-              autoComplete={pending ? "off" : isNewVault ? "new-password" : "current-password"}
+              autoComplete={
+                pending
+                  ? "off"
+                  : isNewVault
+                    ? "new-password"
+                    : "current-password"
+              }
               helperText={
-                pending || !isNewVault ? undefined : `Use at least ${MIN_PASSPHRASE_LENGTH} characters.`
+                pending || !isNewVault
+                  ? undefined
+                  : `Use at least ${MIN_PASSPHRASE_LENGTH} characters.`
               }
               fullWidth
             />
@@ -182,9 +200,9 @@ export default function LoginPage() {
             )}
             {!pending && isNewVault && (
               <Alert severity="warning">
-                There's no way to recover this passphrase or your entries if you forget it:
-                it unlocks the key file your entries are encrypted to, and that key exists
-                nowhere else. Keep it somewhere safe.
+                There's no way to recover this passphrase or your entries if you
+                forget it: it unlocks the key file your entries are encrypted
+                to, and that key exists nowhere else. Keep it somewhere safe.
               </Alert>
             )}
             {error && (
@@ -221,7 +239,11 @@ export default function LoginPage() {
               disableElevation
               fullWidth
               disabled={submitting || pending}
-              startIcon={pending ? <CircularProgress size={16} color="inherit" /> : undefined}
+              startIcon={
+                pending ? (
+                  <CircularProgress size={16} color="inherit" />
+                ) : undefined
+              }
             >
               {pending ? "Checking…" : isNewVault ? "Create vault" : "Sign in"}
             </Button>

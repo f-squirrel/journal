@@ -31,11 +31,20 @@ export default function JournalLayout() {
       )}
 
       {(!compact || !entryOpen) && (
-        <EntryList onOpenSidebar={compact ? () => setDrawerOpen(true) : undefined} />
+        <EntryList
+          onOpenSidebar={compact ? () => setDrawerOpen(true) : undefined}
+        />
       )}
 
       {(!compact || entryOpen) && (
-        <Box sx={{ flex: 1, minWidth: 0, height: "100%", bgcolor: "background.paper" }}>
+        <Box
+          sx={{
+            flex: 1,
+            minWidth: 0,
+            height: "100%",
+            bgcolor: "background.paper",
+          }}
+        >
           <Outlet />
         </Box>
       )}
