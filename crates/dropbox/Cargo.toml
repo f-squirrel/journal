@@ -1,0 +1,18 @@
+[package]
+name = "journal-dropbox"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+dropbox-sdk = { workspace = true }
+journal-remote = { path = "../remote" }
+journal-store = { path = "../store" }
+log = { workspace = true }
+secrecy = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+url = "2"
+uuid = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

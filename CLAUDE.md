@@ -207,6 +207,16 @@ field-name mismatches — a class of bug neither the Playwright suite nor
   keeps its own private, and a test checks they agree. It also has
   `NotifyingStore` and the pending/conflicted `SyncStatus` behind the UI's
   per-entry marks. Nothing wires it up yet — see `.claude/plans/cloud-sync.md`.
+  `crates/dropbox` (`journal-dropbox`) is the first `RemoteStore`: the
+  official `dropbox-sdk` on its blocking `ureq` client (no async runtime in its
+  tree), one file per blob in an "App folder". Besides `DropboxRemote` it holds
+  the OAuth 2 PKCE connect flow (`authorize_url`/`finish`, which open no
+  browser and listen on no socket), `TokenStore` and its 0600 `FileTokenStore`
+  for the refresh token, and `RefreshingClient`, the SDK client with token
+  refresh written here so it can be tested. Its tests run against a scripted
+  `HttpClient`, not a network; `live_round_trip` is `#[ignore]`d and needs
+  `DROPBOX_TOKEN`. The SDK logs the token response at `debug`, so keep its
+  `dropbox_sdk::oauth2` target at `info` or above. Nothing wires it up yet.
   `crates/vault` (`journal-vault`) is the layer that knows what an
   entry *is*, and is what the rest of the app means by "the vault":
   `{id}.json` blob naming, serde, and the header sort. One encrypted

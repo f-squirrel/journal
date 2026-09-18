@@ -8,6 +8,13 @@ tauri-plugin-log = "2"
 tauri-plugin-opener = "2"
 tauri-build = { version = "2", features = [] }
 age = "=0.12.1"
+# Sync routes over the blocking `ureq` client only (D8): no tokio, no reqwest.
+# `dbx_files` is the one namespace the remote needs; the default features would
+# also compile team, paper and sharing.
+dropbox-sdk = { version = "0.20", default-features = false, features = [
+    "dbx_files",
+    "default_client",
+] }
 chrono = { version = "0.4", features = ["serde"] }
 log = "0.4"
 secrecy = "0.10"
