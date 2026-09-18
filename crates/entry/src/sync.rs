@@ -50,6 +50,9 @@ pub enum SyncState {
 )]
 pub struct SyncStatusPayload {
     pub state: SyncState,
+    /// The connected provider's name as the user knows it ("Dropbox"), for
+    /// words like "Synced to Dropbox". `None` when nothing is connected.
+    pub provider: Option<String>,
     /// Entries with local changes not yet uploaded. Includes an entry deleted
     /// here whose deletion has not been sent, so the frontend ignores ids with
     /// no row. Sent in every state, so an `offline` status still marks what
@@ -65,6 +68,20 @@ pub struct SyncStatusPayload {
     pub message: Option<String>,
 }
 
+/// A cloud provider the build can connect to, for the connect dialog.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[cfg_attr(
+    feature = "ts",
+    derive(ts_rs::TS),
+    ts(export, export_to = "../../../src/bindings/")
+)]
+pub struct ProviderInfo {
+    /// What `connect_remote` takes.
+    pub id: String,
+    /// What the user calls it.
+    pub name: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -75,6 +92,7 @@ mod tests {
     fn the_payload_serializes_snake_case() {
         let payload = SyncStatusPayload {
             state: SyncState::KeyMismatch,
+            provider: Some("Dropbox".to_owned()),
             pending_ids: vec!["5c1f7c9e-6e8b-4a2f-9c1a-1f6b9b6b0a01".parse().unwrap()],
             conflicted_ids: vec![],
             pending_other: 1,
@@ -86,6 +104,7 @@ mod tests {
             serde_json::to_value(&payload).unwrap(),
             serde_json::json!({
                 "state": "key_mismatch",
+                "provider": "Dropbox",
                 "pending_ids": ["5c1f7c9e-6e8b-4a2f-9c1a-1f6b9b6b0a01"],
                 "conflicted_ids": [],
                 "pending_other": 1,

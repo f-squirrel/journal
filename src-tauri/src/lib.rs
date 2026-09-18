@@ -214,6 +214,7 @@ pub fn run() {
             get_entry,
             save_entry,
             delete_entry,
+            sync::list_providers,
             sync::connect_remote,
             sync::disconnect_remote,
             sync::sync_now,

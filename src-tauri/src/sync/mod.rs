@@ -29,7 +29,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use journal_credential::{Credential, CredentialStore, RefreshToken};
-use journal_entry::SyncStatusPayload;
+use journal_entry::{ProviderInfo, SyncStatusPayload};
 use journal_remote::RemoteStore;
 use journal_store::{BlobName, BlobStore};
 use journal_sync::{erase_state, SyncEngine, SyncStatus};
@@ -247,6 +247,18 @@ impl SyncControl {
         self.config.slot.payload()
     }
 
+    /// The providers a user can connect to, in the order the build lists them.
+    pub fn providers(&self) -> Vec<ProviderInfo> {
+        self.config
+            .providers
+            .iter()
+            .map(|p| ProviderInfo {
+                id: p.id().to_owned(),
+                name: p.name().to_owned(),
+            })
+            .collect()
+    }
+
     /// Sync soon: the vault was just unlocked, so a conflict that had to wait
     /// for the key can be settled.
     pub fn kick(&self) {
@@ -375,6 +387,14 @@ impl SyncControl {
         poke();
         Ok(worker)
     }
+}
+
+/// The providers this build can connect to, for the connect dialog.
+#[tauri::command]
+pub async fn list_providers(
+    control: State<'_, Arc<SyncControl>>,
+) -> Result<Vec<ProviderInfo>, String> {
+    Ok(control.providers())
 }
 
 /// Connects to the provider with this id (see [`Provider::id`]).

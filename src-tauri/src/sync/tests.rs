@@ -30,7 +30,7 @@ use super::*;
 use crate::VaultState;
 
 const PASSPHRASE: &str = "correct horse";
-const COMMANDS: [&str; 11] = [
+const COMMANDS: [&str; 12] = [
     "has_vault",
     "unlock",
     "lock",
@@ -38,6 +38,7 @@ const COMMANDS: [&str; 11] = [
     "get_entry",
     "save_entry",
     "delete_entry",
+    "list_providers",
     "connect_remote",
     "disconnect_remote",
     "sync_now",
@@ -237,6 +238,7 @@ impl Rig {
                 crate::get_entry,
                 crate::save_entry,
                 crate::delete_entry,
+                list_providers,
                 connect_remote,
                 disconnect_remote,
                 sync_now,
@@ -419,6 +421,36 @@ fn a_build_without_an_app_key_says_how_to_get_one() {
         "{error}"
     );
     assert_eq!(rig.status()["state"], "off");
+}
+
+#[test]
+fn the_build_lists_its_providers_for_the_connect_dialog() {
+    let rig = Rig::with_providers(vec![
+        Fake::provider("one", Arc::new(MemoryRemote::new())),
+        Fake::provider("two", Arc::new(MemoryRemote::new())),
+    ]);
+
+    let providers = rig.ok("list_providers", json!({}));
+
+    assert_eq!(
+        providers,
+        json!([
+            { "id": "one", "name": "Fake Cloud" },
+            { "id": "two", "name": "Fake Cloud" },
+        ])
+    );
+}
+
+#[test]
+fn the_status_names_the_provider_only_while_one_is_connected() {
+    let rig = Rig::new(Arc::new(MemoryRemote::new()));
+    assert_eq!(rig.status()["provider"], Value::Null);
+
+    rig.connect();
+    assert_eq!(rig.status()["provider"], "Fake Cloud");
+
+    rig.ok("disconnect_remote", json!({}));
+    assert_eq!(rig.status()["provider"], Value::Null);
 }
 
 #[test]

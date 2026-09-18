@@ -68,6 +68,7 @@ pub fn payload(
 
     SyncStatusPayload {
         state: derive_state(provider.is_some(), status),
+        provider: provider.map(str::to_owned),
         pending_ids,
         conflicted_ids: ids(&status.conflicted),
         pending_other: u32::try_from(pending_other).unwrap_or(u32::MAX),

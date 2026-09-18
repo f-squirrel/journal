@@ -4,6 +4,11 @@ import type { SyncState } from "./SyncState";
 
 export type SyncStatusPayload = { state: SyncState, 
 /**
+ * The connected provider's name as the user knows it ("Dropbox"), for
+ * words like "Synced to Dropbox". `None` when nothing is connected.
+ */
+provider: string | null, 
+/**
  * Entries with local changes not yet uploaded. Includes an entry deleted
  * here whose deletion has not been sent, so the frontend ignores ids with
  * no row. Sent in every state, so an `offline` status still marks what
