@@ -197,8 +197,16 @@ field-name mismatches — a class of bug neither the Playwright suite nor
   needs a change feed (deletions included) and conditional writes that report
   a lost race as `RemoteError::Conflict` rather than overwriting. It is
   synchronous and holds no implementation; its `testing` feature provides
-  `MemoryRemote` for the sync engine's tests. Nothing wires it up yet — see
-  `.claude/plans/cloud-sync.md`.
+  `MemoryRemote` for the sync engine's tests.
+  `crates/sync` (`journal-sync`) is the engine over the two traits: local-first,
+  key-less, one blocking `sync_once` pass at a time. It compares each blob with
+  a per-device *base* (never synced) rather than clocks, so an edit always
+  outranks a delete and a conflict is parked for a `ConflictResolver` the app
+  supplies (it needs plaintext). `.vault-key` is never merged — a mismatch
+  stops sync (`KeyMismatch`); its name is a constant here because `journal-key`
+  keeps its own private, and a test checks they agree. It also has
+  `NotifyingStore` and the pending/conflicted `SyncStatus` behind the UI's
+  per-entry marks. Nothing wires it up yet — see `.claude/plans/cloud-sync.md`.
   `crates/vault` (`journal-vault`) is the layer that knows what an
   entry *is*, and is what the rest of the app means by "the vault":
   `{id}.json` blob naming, serde, and the header sort. One encrypted

@@ -1,0 +1,22 @@
+[package]
+name = "journal-sync"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+journal-remote = { path = "../remote" }
+journal-store = { path = "../store" }
+log = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+# The engine names only the two traits; the tests need one concrete local
+# store and the in-memory remote.
+journal-fs-store = { path = "../fs-store" }
+journal-remote = { path = "../remote", features = ["testing"] }
+# Only to check that `KEY_BLOB` still names the blob the key crate writes.
+journal-key = { path = "../key" }
+secrecy = { workspace = true }

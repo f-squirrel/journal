@@ -2536,6 +2536,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "journal-sync"
+version = "0.1.0"
+dependencies = [
+ "journal-fs-store",
+ "journal-key",
+ "journal-remote",
+ "journal-store",
+ "log",
+ "secrecy",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "journal-vault"
 version = "0.1.0"
 dependencies = [
