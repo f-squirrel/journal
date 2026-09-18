@@ -94,6 +94,17 @@ field-name mismatches — a class of bug neither the Playwright suite nor
     rebuilding it on every `entries` change re-runs that effect and wipes
     the draft. All pages read/write through `useAppState()` rather than
     local state or prop drilling.
+    **The journal locks itself after 10 s without input**
+    (`hooks/useIdleLock.ts`, `IDLE_LOCK_MS`; a constant until it becomes a
+    setting): the timer is only a trigger for the same lock a manual "Log
+    out" performs. Both write before locking — `useAutosave` registers a
+    flush via `registerFlush`, and the lock awaits every one, because
+    locking first unmounts the pane and its unmount flush then hits a
+    locked vault and loses the draft. A failed flush **declines the idle
+    lock** (the draft is the only copy; the timer retries after another
+    quiet period) but not a manual log out. The fallback vault refuses
+    entry commands while locked, like `VaultState`, so the Playwright
+    suite (`e2e/auto-lock.spec.ts`, on `page.clock`) can see that.
   - `src/api/entries.ts` is the only module that knows whether a Rust
     backend exists: inside Tauri every call goes over `invoke` and
     rejections propagate untouched; outside it (`npm run dev`, Playwright)

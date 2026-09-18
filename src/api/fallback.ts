@@ -72,10 +72,21 @@ function parseFaults(search: string): Faults {
 const faults: Faults = parseFaults(window.location.search);
 const fallbackEntries = new Map(seedEntries.map((entry) => [entry.id, entry]));
 
+// Locked until `unlockVault`, like `VaultState`. Without it a write made after
+// the lock succeeds here and is refused by the real backend, so nothing in the
+// Playwright suite could catch a draft lost that way.
+let locked = true;
+
 /// Runs one fallback operation, honouring any fault injected via the URL.
 /// Rejects with a bare string, the way `invoke` rejects with the Rust
 /// command's `Err(String)`.
 async function run<T>(op: Op, work: () => T): Promise<T> {
+  // Checked up front, before any delay: the Rust commands clone the vault
+  // out of `VaultState` at the start, so a write already running when the
+  // lock lands still completes.
+  if (locked && op !== "has" && op !== "unlock") {
+    throw "vault is locked";
+  }
   if (faults.slow.has(op)) {
     await new Promise((resolve) => setTimeout(resolve, SLOW_MS));
   }
@@ -94,10 +105,13 @@ export function hasVault(): Promise<boolean> {
 }
 
 export function unlockVault(_passphrase: string): Promise<void> {
-  return run("unlock", () => undefined);
+  return run("unlock", () => {
+    locked = false;
+  });
 }
 
 export function lockVault(): Promise<void> {
+  locked = true;
   return Promise.resolve();
 }
 

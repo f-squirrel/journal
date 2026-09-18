@@ -4,10 +4,12 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
 import type { EntryHeader, JournalEntry } from "../types";
+import { useIdleLock } from "../hooks/useIdleLock";
 import { byUpdatedAt } from "../utils/date";
 import {
   deleteEntry as deleteEntryBackend,
@@ -22,11 +24,22 @@ function toHeader(entry: JournalEntry): EntryHeader {
   return { id: entry.id, title: entry.title, updated_at: entry.updated_at };
 }
 
+/// Short on purpose, so the lock is easy to see working. It becomes a setting.
+const IDLE_LOCK_MS = 10_000;
+
+/// Writes whatever the caller has not saved yet. Resolves `true` when nothing
+/// is left unsaved, `false` when a write failed and the work is still only in
+/// memory.
+type Flush = () => Promise<boolean>;
+
 interface AppStateContextValue {
   authenticated: boolean;
   entries: EntryHeader[];
   login: (passphrase: string) => Promise<void>;
   logout: () => void;
+  /// Lets a pane hand the lock its unsaved work. Returns the unregister
+  /// function, so it fits directly into an effect.
+  registerFlush: (flush: Flush) => () => void;
   loadEntry: (id: string) => Promise<JournalEntry | undefined>;
   upsertEntry: (entry: JournalEntry) => Promise<void>;
   removeEntry: (id: string) => Promise<void>;
@@ -37,6 +50,51 @@ const AppStateContext = createContext<AppStateContextValue | null>(null);
 export function AppStateProvider({ children }: { children: ReactNode }) {
   const [authenticated, setAuthenticated] = useState(false);
   const [entries, setEntries] = useState<EntryHeader[]>([]);
+  const flushes = useRef(new Set<Flush>());
+
+  const registerFlush = useCallback((flush: Flush) => {
+    flushes.current.add(flush);
+    return () => {
+      flushes.current.delete(flush);
+    };
+  }, []);
+
+  // Locking used to be `setAuthenticated(false)` plus `lockVault()`, which
+  // unmounts the pane, whose unmount flush then writes to a vault that is
+  // already locked and is refused: an in-flight or previously failed save lost
+  // its draft. Everything that locks writes first, through here.
+  const flushAll = useCallback(async () => {
+    const saved = await Promise.all(
+      [...flushes.current].map((flush) => flush().catch(() => false)),
+    );
+    return saved.every(Boolean);
+  }, []);
+
+  const lockSession = useCallback(() => {
+    setAuthenticated(false);
+    // Decrypted titles must not outlive the session in the webview heap.
+    setEntries([]);
+    lockVault().catch(() => {
+      // Best-effort; nothing to lock into a UI state for.
+    });
+  }, []);
+
+  // Unlike a manual log out, an idle lock is not something the user asked for,
+  // so it does not go through over unsaved work: the pane is showing the error
+  // and the draft is the only copy. It declines and is retried after the next
+  // quiet period. It also stands down if the user came back while the flush
+  // was running, since what they typed then is not in the flush's result.
+  const lockWhenIdle = useCallback(
+    async (stillIdle: () => boolean) => {
+      const saved = await flushAll();
+      if (!saved || !stillIdle()) return false;
+      lockSession();
+      return true;
+    },
+    [flushAll, lockSession],
+  );
+
+  useIdleLock(authenticated, lockWhenIdle, IDLE_LOCK_MS);
 
   useEffect(() => {
     if (!authenticated) return;
@@ -82,14 +140,12 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         await unlockVault(passphrase);
         setAuthenticated(true);
       },
+      // Locks whether or not the flush succeeded: the user asked, and a broken
+      // backend must not be able to keep the journal open.
       logout: () => {
-        setAuthenticated(false);
-        // Decrypted titles must not outlive the session in the webview heap.
-        setEntries([]);
-        lockVault().catch(() => {
-          // Best-effort; nothing to lock into a UI state for.
-        });
+        void flushAll().then(lockSession);
       },
+      registerFlush,
       loadEntry,
       // `upsertEntry` and `removeEntry` update React state optimistically and
       // then reject if the backend refuses, rolling the optimistic edit back
@@ -152,7 +208,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         }
       },
     }),
-    [authenticated, entries, loadEntry],
+    [authenticated, entries, flushAll, lockSession, registerFlush, loadEntry],
   );
 
   return (

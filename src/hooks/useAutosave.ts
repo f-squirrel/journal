@@ -37,13 +37,16 @@ export interface Autosave {
 /// same reason: `upsertEntry`'s identity changes with every `entries` update,
 /// so a timer keyed on it would be torn down by unrelated saves.
 export function useAutosave(id: string): Autosave {
-  const { upsertEntry } = useAppState();
+  const { upsertEntry, registerFlush } = useAppState();
   const [status, setStatus] = useState<SaveStatus>("idle");
   const [error, setError] = useState("");
   const [savedAt, setSavedAt] = useState<string | null>(null);
 
   const draft = useRef({ title: "", markdown: "", dirty: false });
   const saving = useRef(false);
+  /// Settles when the write in flight does; null when there is none. What
+  /// `flush` waits on, since `save` itself returns at once if one is running.
+  const inflight = useRef<Promise<void> | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const saveRef = useRef<() => Promise<void>>(async () => {});
 
@@ -65,6 +68,8 @@ export function useAutosave(id: string): Autosave {
 
     draft.current.dirty = false;
     saving.current = true;
+    let settled!: () => void;
+    inflight.current = new Promise<void>((resolve) => (settled = resolve));
     setStatus("saving");
     const updatedAt = new Date().toISOString();
     let failed = false;
@@ -88,6 +93,8 @@ export function useAutosave(id: string): Autosave {
       setStatus("error");
     } finally {
       saving.current = false;
+      inflight.current = null;
+      settled();
       // Anything typed while that write was in flight still needs a write.
       // Not after a failure, though: rescheduling there would retry a broken
       // backend every 800 ms forever. The next keystroke or Retry does it.
@@ -120,6 +127,20 @@ export function useAutosave(id: string): Autosave {
     clearTimeout(timer.current);
     void saveRef.current();
   }, []);
+
+  // What the lock waits on before it drops the vault. Unlike `saveNow` it
+  // outlasts a write already in flight and reports whether the draft made it.
+  // A blank draft counts as saved: `save` never writes one, so calling it
+  // unsaved would block the lock forever over an entry that was never started.
+  const flush = useCallback(async () => {
+    if (inflight.current) await inflight.current;
+    clearTimeout(timer.current);
+    await saveRef.current();
+    const { title, markdown, dirty } = draft.current;
+    return !dirty || (!title.trim() && !markdown.trim());
+  }, []);
+
+  useEffect(() => registerFlush(flush), [registerFlush, flush]);
 
   // Flush on unmount — which, because `EntryPaneRoute` keys the pane on the
   // route id, is also what happens when the user picks another entry.
