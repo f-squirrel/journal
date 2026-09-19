@@ -103,7 +103,10 @@ field-name mismatches — a class of bug neither the Playwright suite nor
     subscription is live from the first render, on the login screen too.
     `sync://changed` bumps a version that re-runs the list effect, so the
     list reloads; the entry open in the pane is left alone, since autosave
-    owns its draft. `connectSync`/`disconnectSync`/`syncNow` re-read the
+    owns its draft. A reload does not simply replace the list: every local
+    save and delete is kept (the `mutations` ref) until no listing that
+    could have missed it is open, and laid over each listing's result —
+    otherwise a save landing mid-reload put the row's older title back. `connectSync`/`disconnectSync`/`syncNow` re-read the
     status when they finish rather than trusting the throttled event.
     **The journal locks itself after 10 s without input**
     (`hooks/useIdleLock.ts`, `IDLE_LOCK_MS`; a constant until it becomes a
@@ -124,7 +127,10 @@ field-name mismatches — a class of bug neither the Playwright suite nor
     in-memory vault in `src/api/fallback.ts`. That module also carries the
     fault-injection hook it parses once at load: `?fail=<ops>` (the ops
     include `connect` and `sync`), `?failMessage=<text>`, `?slow=<ops>`,
-    `?vault=new` and `?sync=on|conflict`. It simulates sync too, in the
+    `?vault=new` and `?sync=on|conflict|busy` (`busy`: every pass fires
+    `sync://changed`). Its listing reads the vault when called, not when it
+    answers, as the real one does, so `?slow=list` exposes races with it.
+    It simulates sync too, in the
     sequence the backend produces — a save marks its entry pending at once,
     a debounced pass clears it — and connecting from it plays a second
     device joining: the vault "arrives" and an entry from another device

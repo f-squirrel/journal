@@ -6,6 +6,7 @@ import { test, expect, type Page } from "@playwright/test";
 // the URL can ask for:
 //
 //   ?sync=on / ?sync=conflict   start connected, or connected with a conflict
+//   ?sync=busy                  every pass also fires `sync://changed`
 //   ?fail=sync                  every pass fails
 //   ?fail=connect               connecting is refused
 //   ?slow=sync                  a pass starts after 1.2 s, long enough to see
@@ -252,4 +253,42 @@ test("on a phone the rail lives in the drawer, and a mark costs a row no height"
   const box = await dialog(page).boundingBox();
   expect(box!.x).toBeGreaterThanOrEqual(0);
   expect(box!.x + box!.width).toBeLessThanOrEqual(390);
+});
+
+// A `sync://changed` reload reads the disk once; a save that lands while it is
+// in flight is not in what it returns. Replacing the list with that result put
+// the row's old title back until the next save. The fake clock pins the order:
+// with `?sync=busy` every pass fires `sync://changed`, `?slow=sync` starts a
+// pass 1.2 s after a save, and `?slow=list` holds the listing it starts open
+// for 1.2 s more. The clock is paused, not only installed: time that flows
+// while an assertion waits would let the next listing land and hide the race.
+test("a list reload that races a save keeps the saved title", async ({
+  page,
+}) => {
+  const start = new Date("2026-09-20T09:00:00Z");
+  await page.clock.install({ time: start });
+  await page.clock.pauseAt(start);
+  await page.goto("/?sync=busy&slow=list,sync");
+  await page.getByLabel("Passphrase").fill("password123");
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await page.clock.runFor(1200);
+  await expect(page.getByTestId("entry-row")).toHaveCount(2);
+
+  await page.getByRole("button", { name: "New entry" }).first().click();
+  await page.getByPlaceholder("Title").fill("First title");
+  await page.clock.runFor(800);
+  await expect(page.getByTestId("save-status")).toHaveText("Saved");
+
+  // The pass after that save starts a listing, which reads "First title". The
+  // next save lands 800 ms later, while that listing is still open.
+  await page.clock.runFor(1200);
+  await page.getByPlaceholder("Title").fill("Second title");
+  await page.clock.runFor(800);
+  await expect(page.getByTestId("save-status")).toHaveText("Saved");
+
+  // The listing lands; the pass after the second save has not started yet.
+  await page.clock.runFor(500);
+
+  await expect(row(page, "Second title")).toBeVisible();
+  await expect(row(page, "First title")).toHaveCount(0);
 });

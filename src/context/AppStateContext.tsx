@@ -50,6 +50,14 @@ function toHeader(entry: JournalEntry): EntryHeader {
   return { id: entry.id, title: entry.title, updated_at: entry.updated_at };
 }
 
+/// A local save or delete, as the list should show it: `header` is `null` for a
+/// delete. `settled` is the tick at which the backend answered, or `null` while
+/// it has not.
+interface Mutation {
+  header: EntryHeader | null;
+  settled: number | null;
+}
+
 /// Short on purpose, so the lock is easy to see working. It becomes a setting.
 const IDLE_LOCK_MS = 10_000;
 
@@ -104,6 +112,46 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   // after a newer status and put an older one back.
   const heardStatus = useRef(false);
   const flushes = useRef(new Set<Flush>());
+  // A listing reads the disk once, and a `sync://changed` reload can start
+  // while a save is in flight or land after one finished: replacing the list
+  // with what it read put the row's older title back. So every local save and
+  // delete is kept here, by id, until no listing that could have missed it is
+  // still open, and laid over each listing's result. `tick` orders the two: a
+  // listing notes it when it starts, and a mutation when the backend answers.
+  const tick = useRef(0);
+  const mutations = useRef(new Map<string, Mutation>());
+  const openListings = useRef(new Set<number>());
+
+  // A mutation matters to a listing that started before it settled. Once none
+  // of those is open, the disk has it and it can go.
+  const trimMutations = useCallback(() => {
+    const oldest = Math.min(...openListings.current);
+    for (const [id, m] of mutations.current) {
+      if (m.settled !== null && m.settled < oldest)
+        mutations.current.delete(id);
+    }
+  }, []);
+
+  // Returns a `settle(ok)` for when the backend answers: kept on success, and
+  // dropped on failure, where the caller's rollback already restored the row.
+  const recordMutation = useCallback(
+    (id: string, header: EntryHeader | null) => {
+      const mutation: Mutation = { header, settled: null };
+      mutations.current.set(id, mutation);
+      return (ok: boolean) => {
+        // A later save of the same entry has replaced this one; it is the
+        // one that counts.
+        if (mutations.current.get(id) !== mutation) return;
+        if (ok) {
+          mutation.settled = ++tick.current;
+        } else {
+          mutations.current.delete(id);
+        }
+        trimMutations();
+      };
+    },
+    [trimMutations],
+  );
 
   const registerFlush = useCallback((flush: Flush) => {
     flushes.current.add(flush);
@@ -127,6 +175,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     setAuthenticated(false);
     // Decrypted titles must not outlive the session in the webview heap.
     setEntries([]);
+    mutations.current.clear();
     lockVault().catch(() => {
       // Best-effort; nothing to lock into a UI state for.
     });
@@ -156,21 +205,37 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     // `logout`'s `setEntries([])` and puts the previous session's decrypted
     // titles back — on the login screen, and again on the next unlock.
     let cancelled = false;
+    const started = ++tick.current;
+    openListings.current.add(started);
+    const close = () => {
+      openListings.current.delete(started);
+      trimMutations();
+    };
     listEntries()
       .then((loaded) => {
         if (cancelled) return;
-        setEntries(loaded);
+        // Every save or delete the listing may have missed: one still in
+        // flight, or one that settled after it started.
+        const missed = [...mutations.current].filter(
+          ([, m]) => m.settled === null || m.settled > started,
+        );
+        const ids = new Set(missed.map(([id]) => id));
+        const merged = loaded.filter((header) => !ids.has(header.id));
+        for (const [, m] of missed) if (m.header) merged.push(m.header);
+        setEntries(merged.sort(byUpdatedAt));
       })
       .catch((err) => {
         if (cancelled) return;
         // No surface to show this on yet; without the log it would be an
         // unhandled rejection, which is how the failures P0-1 is about hid.
         console.error("Failed to list entries:", err);
-      });
+      })
+      .finally(close);
     return () => {
       cancelled = true;
+      close();
     };
-  }, [authenticated, listVersion]);
+  }, [authenticated, listVersion, trimMutations]);
 
   // Sync is not gated on the vault: it runs while locked, and connecting is
   // how a second device gets its key, so this is live from the first render.
@@ -312,6 +377,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       // whoever adds autosave.
       upsertEntry: async (entry) => {
         const header = toHeader(entry);
+        const settle = recordMutation(entry.id, header);
         // Read inside the updater, not from `entries` in this closure, so the
         // rollback restores the row as it actually was. Assigned rather than
         // returned because that is the only way out of a state updater; it is
@@ -325,7 +391,9 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         });
         try {
           await saveEntryBackend(entry);
+          settle(true);
         } catch (err) {
+          settle(false);
           setEntries((prev) => {
             const without = prev.filter((e) => e.id !== entry.id);
             return replaced
@@ -337,13 +405,16 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       },
       removeEntry: async (id) => {
         let removed: EntryHeader | undefined;
+        const settle = recordMutation(id, null);
         setEntries((prev) => {
           removed = prev.find((entry) => entry.id === id);
           return prev.filter((entry) => entry.id !== id);
         });
         try {
           await deleteEntryBackend(id);
+          settle(true);
         } catch (err) {
+          settle(false);
           setEntries((prev) => {
             if (!removed) return prev;
             // Filtered first, so a re-added entry cannot end up duplicated.
@@ -360,6 +431,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       flushAll,
       lockSession,
       registerFlush,
+      recordMutation,
       loadEntry,
       sync,
       syncLoaded,

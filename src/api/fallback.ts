@@ -48,7 +48,7 @@ function toHeader(entry: JournalEntry): EntryHeader {
 //                       connect, sync (see "simulated sync" below)
 //   ?failMessage=<text> the rejection message (default "Injected fault.")
 //   ?slow=<ops>         the named ops resolve after SLOW_MS
-//   ?sync=on|conflict   start connected to a provider (see below)
+//   ?sync=on|conflict|busy  start connected to a provider (see below)
 //
 // The app uses HashRouter, so the query string goes *before* the hash:
 // `page.goto("/?fail=save")`, not `/#/?fail=save`.
@@ -63,8 +63,11 @@ interface Faults {
   fail: Set<Op>;
   failMessage: string;
   slow: Set<Op>;
-  sync: "off" | "on" | "conflict";
+  sync: SyncMode;
 }
+
+type SyncMode = "off" | "on" | "conflict" | "busy";
+const SYNC_MODES: readonly SyncMode[] = ["off", "on", "conflict", "busy"];
 
 function parseFaults(search: string): Faults {
   const params = new URLSearchParams(search);
@@ -75,10 +78,7 @@ function parseFaults(search: string): Faults {
     fail: ops(params.get("fail")),
     failMessage: params.get("failMessage") ?? "Injected fault.",
     slow: ops(params.get("slow")),
-    sync:
-      params.get("sync") === "on" || params.get("sync") === "conflict"
-        ? (params.get("sync") as "on" | "conflict")
-        : "off",
+    sync: SYNC_MODES.find((mode) => mode === params.get("sync")) ?? "off",
   };
 }
 
@@ -137,9 +137,12 @@ export function listEntries(): Promise<EntryHeader[]> {
   // Sorted because `Vault::list_entries` sorts. The Playwright suite only ever
   // sees this fallback, so a fallback that returned `Map` insertion order
   // would let an ordering bug in the app test green.
-  return run("list", () =>
-    [...fallbackEntries.values()].map(toHeader).sort(byUpdatedAt),
-  );
+  //
+  // Read when the call starts, not when it answers: the real listing reads the
+  // disk while a save can still land after it, and a slow listing that read
+  // late would hide every race with one.
+  const headers = [...fallbackEntries.values()].map(toHeader).sort(byUpdatedAt);
+  return run("list", () => headers);
 }
 
 export function getEntry(id: string): Promise<JournalEntry | null> {
@@ -169,6 +172,9 @@ export function deleteEntry(id: string): Promise<void> {
 //
 //   ?sync=on          starts connected and synced
 //   ?sync=conflict    starts connected with one conflicted entry
+//   ?sync=busy        starts connected, and every pass reports that it brought
+//                     changes from another device (`sync://changed`), so the
+//                     list reloads after each one
 //   ?fail=sync        every pass fails: the ids stay pending, and the state is
 //                     `offline` with the fault message
 //   ?fail=connect     connecting is refused
@@ -246,6 +252,9 @@ function pass() {
     failure = null;
     pending.clear();
     lastSyncedAt = new Date().toISOString();
+    if (faults.sync === "busy") {
+      changedListeners.forEach((listener) => listener());
+    }
   }
   emitStatus();
 }
