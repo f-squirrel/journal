@@ -13,6 +13,7 @@ use dropbox_sdk::files::{
     ListFolderArg, ListFolderContinueArg, ListFolderContinueError, ListFolderResult, LookupError,
     Metadata, UploadArg, UploadError, WriteError, WriteMode,
 };
+use dropbox_sdk::types::auth::AuthError;
 use dropbox_sdk::Error;
 use journal_remote::{
     Change, ChangePage, Cursor, Precondition, RemoteError, RemoteStore, Revision,
@@ -252,15 +253,39 @@ fn lift<E: std::error::Error + 'static>(error: Error<E>) -> Failure<E> {
         } => RemoteError::RateLimited {
             retry_after: Duration::from_secs(retry_after_seconds.into()).max(MIN_RETRY_AFTER),
         },
-        // Whatever the token's trouble (invalid, expired past a refresh,
-        // missing scope), the fix is the same: connect again.
+        // The token was issued before the app gained a scope: reconnecting
+        // helps only once the app has it, which the error says.
+        Error::Authentication(AuthError::MissingScope(e)) => {
+            RemoteError::MissingPermission(e.required_scope)
+        }
+        // Whatever else the token's trouble (invalid, expired past a
+        // refresh), the fix is the same: connect again.
         Error::Authentication(_) => RemoteError::Unauthorized,
+        Error::BadRequest(message) => match missing_app_scope(&message) {
+            Some(scope) => RemoteError::MissingPermission(scope),
+            None => RemoteError::Other(Error::<E>::BadRequest(message).to_string()),
+        },
         other @ (Error::Json(_)
         | Error::UnexpectedResponse(_)
-        | Error::BadRequest(_)
         | Error::AccessDenied(_)
         | Error::UnexpectedHttpError { .. }) => RemoteError::Other(other.to_string()),
     })
+}
+
+/// The scope named in a 400 that Dropbox sends when the *app* (not only the
+/// token) lacks it, as plain text rather than JSON:
+///
+/// ```text
+/// Error in call to API function "files/upload": Your app is not permitted to
+/// access this endpoint because it does not have the required scope
+/// 'files.content.write'. The owner of the app can enable the scope for the
+/// app using the Permissions tab on the App Console.
+/// ```
+fn missing_app_scope(message: &str) -> Option<String> {
+    const MARK: &str = "does not have the required scope '";
+    let rest = &message[message.find(MARK)? + MARK.len()..];
+    let scope = &rest[..rest.find('\'')?];
+    (!scope.is_empty()).then(|| scope.to_owned())
 }
 
 #[cfg(test)]
@@ -801,6 +826,40 @@ mod tests {
             json!({ "error": wire::tag("expired_access_token") }),
         ));
         assert_eq!(err, RemoteError::Unauthorized);
+    }
+
+    #[test]
+    fn a_token_without_a_scope_names_the_missing_permission() {
+        let err = changes_error(Reply::status(
+            401,
+            json!({
+                "error_summary": "missing_scope/..",
+                "error": { ".tag": "missing_scope", "required_scope": "files.metadata.read" },
+            }),
+        ));
+        assert_eq!(
+            err,
+            RemoteError::MissingPermission("files.metadata.read".to_owned())
+        );
+    }
+
+    #[test]
+    fn an_app_without_a_scope_names_the_missing_permission() {
+        let err = changes_error(Reply::text(
+            400,
+            "Error in call to API function \"files/list_folder\": Your app is not \
+             permitted to access this endpoint because it does not have the required \
+             scope 'files.metadata.read'. The owner of the app can enable the scope \
+             for the app using the Permissions tab on the App Console.",
+        ));
+        assert_eq!(
+            err,
+            RemoteError::MissingPermission("files.metadata.read".to_owned())
+        );
+        assert!(
+            err.to_string().contains("`files.metadata.read`"),
+            "the message must name the permission: {err}"
+        );
     }
 
     #[test]

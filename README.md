@@ -11,17 +11,17 @@ The interface is built with React and runs in a native
 
 ## What works today
 
-- A responsive three-pane desktop interface
+- A three-pane desktop interface that collapses to one column at phone width
 - Markdown editing with syntax highlighting and rendered read mode
 - Inline autosave—there is no Save button
-- Passphrase-protected journals
+- Passphrase-protected journals that lock after 10 seconds without input
 - One independently encrypted blob per entry
 - Local filesystem storage
 - Light and dark themes
+- Dropbox sync, with per-entry upload and conflict marks; a second device
+  joins an existing journal by connecting Dropbox from the login screen
 
-The sync engine and Dropbox adapter are implemented and tested as backend
-crates, but they are not connected to the application yet. Google Drive,
-iCloud, iOS, and Android support are planned.
+Google Drive, iCloud, iOS, and Android support are planned.
 
 ## Run it
 
@@ -41,6 +41,23 @@ make run
 
 On first launch, entering a passphrase creates a new journal. Later launches
 require the same passphrase; there is no password recovery.
+
+### Enabling Dropbox sync
+
+Sync needs a Dropbox app key at build time. Create a Dropbox app with "App
+folder" access, allow the redirect URI `http://127.0.0.1:53682/`, and launch
+with its key:
+
+```sh
+DROPBOX_APP_KEY=your-app-key make run
+```
+
+A build without the key runs normally with sync unavailable.
+
+To use one journal on a second device, connect Dropbox from that device's login
+screen *before* creating a journal there. A device that creates its own journal
+first holds a different key, and sync stops with a key mismatch; see
+[`docs/known-issues.md`](docs/known-issues.md).
 
 ### Frontend-only development
 
@@ -77,18 +94,23 @@ Tauri command wiring without requiring network access.
 flowchart LR
     UI["React + TypeScript"] --> IPC["Tauri commands"]
     IPC --> Vault["journal-vault"]
+    IPC --> Sync["journal-sync"]
+    IPC --> Dropbox["journal-dropbox"]
+    IPC --> FS["journal-fs-store"]
     Vault --> Key["journal-key<br/>age + X25519"]
     Vault --> Store["journal-store"]
-    Store --> FS["journal-fs-store"]
+    Key --> Store
+    FS --> Store
 
-    Sync["journal-sync"] --> Store
+    Sync --> Store
     Sync --> Remote["journal-remote"]
-    Remote --> Dropbox["journal-dropbox"]
+    Dropbox --> Remote
     Dropbox --> Credential["journal-credential"]
 ```
 
-The application keeps platform glue in `src-tauri` and places backend behavior
-in small Rust workspace crates:
+Arrows point from a component to what it depends on. The application keeps
+platform glue in `src-tauri` and places backend behavior in small Rust
+workspace crates:
 
 | Path | Responsibility |
 | --- | --- |
@@ -115,13 +137,19 @@ generated from Rust with `ts-rs` and should not be edited by hand.
 Entries are serialized as JSON, encrypted with
 [`age`](https://github.com/FiloSottile/age) to an X25519 identity, and written
 as separate blobs in the platform's application-data directory. The identity
-is sealed with the journal passphrase using scrypt. The passphrase is never
-stored.
+is sealed with the journal passphrase using scrypt and stored as one more blob
+beside the entries. The passphrase is never stored.
+
+With sync connected, those same encrypted blobs, including the sealed key,
+are copied to the Dropbox app folder. Dropbox never sees plaintext or the
+passphrase. It does hold everything else an attacker would need to try
+guessing the passphrase offline.
 
 This design protects journal contents at rest, but it has not received an
 independent security audit. Losing either the passphrase or the sealed key
-means losing access to the journal. Backups and data migration are not
-implemented.
+means losing access to the journal. Sync is not a backup: deletions and edits
+propagate, and no earlier versions are kept. Backups and data migration are
+not implemented.
 
 ## Further reading
 

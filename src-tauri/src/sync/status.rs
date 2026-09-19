@@ -297,6 +297,27 @@ mod tests {
         );
     }
 
+    /// A missing permission halts sync like a revoked login, but its words are
+    /// the error's own: they name what to turn on before reconnecting, which
+    /// "connect again" alone would not fix.
+    #[test]
+    fn a_missing_permission_is_reauth_and_names_the_permission() {
+        let error = journal_sync::SyncError::from(journal_remote::RemoteError::MissingPermission(
+            "files.content.write".to_owned(),
+        ));
+        let status = SyncStatus {
+            last_error: Some(error.kind()),
+            ..SyncStatus::default()
+        };
+
+        let sent = payload(Some("Dropbox"), &status, Some(&error.to_string()));
+
+        assert_eq!(sent.state, SyncState::Reauth);
+        let message = sent.message.unwrap();
+        assert!(message.contains("`files.content.write`"), "{message}");
+        assert!(message.contains("connect again"), "{message}");
+    }
+
     #[test]
     fn the_default_words_name_the_connected_provider() {
         let status = SyncStatus {

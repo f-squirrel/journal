@@ -34,6 +34,17 @@ pub enum RemoteError {
     #[error("the remote rejected our credentials; reconnect to continue")]
     Unauthorized,
 
+    /// The app registered with the provider lacks a permission the call needs,
+    /// named here (Dropbox's `files.content.write`, say).
+    ///
+    /// Like [`Unauthorized`](RemoteError::Unauthorized) it stops sync until the
+    /// user reconnects, but reconnecting alone does not fix it: the owner of the
+    /// app has to grant the permission first, and a login issued before that
+    /// never gains it. The message says both, since the user cannot tell from
+    /// "reconnect" that anything else is needed.
+    #[error("the app is missing the permission `{0}`: turn it on in the app's settings with the provider (Dropbox: the Permissions tab), then connect again")]
+    MissingPermission(String),
+
     /// The provider asked us to slow down. Retry no sooner than `retry_after`.
     #[error("rate limited; retry in {retry_after:?}")]
     RateLimited { retry_after: Duration },

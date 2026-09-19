@@ -48,6 +48,15 @@ impl Reply {
         }
     }
 
+    /// A plain-text body, as Dropbox sends for a 400.
+    pub fn text(status: u16, body: &str) -> Self {
+        Reply::Http {
+            status,
+            body: body.as_bytes().to_vec(),
+            result_header: None,
+        }
+    }
+
     /// 409: the request was understood and the operation refused. Dropbox
     /// wraps the typed error in `{"error": ..}`.
     pub fn api_error(error: Value) -> Self {

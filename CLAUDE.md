@@ -140,8 +140,9 @@ field-name mismatches — a class of bug neither the Playwright suite nor
     faults) inside `fallback.ts`: a `new Map(...)` in `backend.ts` is not
     provably side-effect-free and drags the seed data back into the bundle.
     `make check-no-fallback` is what holds all of this.
-  - `theme.ts` provides `getTheme(mode)`, switched between light/dark based
-    on `prefers-color-scheme` in `App.tsx`.
+  - `theme.ts` provides `getTheme(mode)`. The mode is a manual light/dark
+    toggle held by `context/ColorModeContext.tsx`, saved to `localStorage`
+    and defaulting to dark; it does not follow `prefers-color-scheme`.
   - The UI is one screen, in the shape of Day One's: a sidebar, the entry
     list, and the entry pane. `components/` holds the shell
     (`JournalLayout`, `Sidebar`, `EntryList`) and `pages/` the route
@@ -324,7 +325,8 @@ field-name mismatches — a class of bug neither the Playwright suite nor
   `worker.rs` (the
   thread that owns the `SyncEngine` and its pure `Schedule`: a pass at
   startup, every 60 s, ~2 s after a save, on demand; exponential backoff after
-  a transient failure, a halt after `Unauthorized`/`KeyMismatch` until
+  a transient failure, a halt after `Unauthorized` (which a
+  `MissingPermission` counts as)/`KeyMismatch` until
   `sync_now`), `resolver.rs` (D1 — the newer entry keeps its id, the older
   becomes a "(conflicted copy)"; `Deferred` while the vault is locked, and
   `unlock` kicks a pass to settle those), `status.rs` (`derive_state`, the

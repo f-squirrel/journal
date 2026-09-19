@@ -47,7 +47,10 @@ no async runtime in the tree (`cargo tree -p journal-dropbox` shows no `tokio`,
   at connect time, and never rewritten. The SDK exposes only its own `save()`
   format to get it out; a test pins that format.
 - **Errors** map as: authentication failures (including a revoked refresh
-  token) → `Unauthorized`; 429 → `RateLimited` (never less than 1 s); network
+  token) → `Unauthorized`; a scope missing from the token (401
+  `missing_scope`) or from the app (a plain-text 400 naming it) →
+  `MissingPermission(scope)`, whose message says to grant it before
+  reconnecting; 429 → `RateLimited` (never less than 1 s); network
   failures and 5xx → `Transient`; `list_folder/continue`'s `reset` →
   `CursorExpired` (the engine then lists everything again); anything else →
   `Other` with the SDK's message.

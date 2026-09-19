@@ -44,7 +44,9 @@ impl SyncError {
         match self {
             SyncError::Remote(RemoteError::Transient(_)) => SyncErrorKind::Offline,
             SyncError::Remote(RemoteError::RateLimited { .. }) => SyncErrorKind::RateLimited,
-            SyncError::Remote(RemoteError::Unauthorized) => SyncErrorKind::Unauthorized,
+            SyncError::Remote(RemoteError::Unauthorized | RemoteError::MissingPermission(_)) => {
+                SyncErrorKind::Unauthorized
+            }
             SyncError::KeyMismatch => SyncErrorKind::KeyMismatch,
             SyncError::Remote(_) | SyncError::Store(_) | SyncError::State(_) => {
                 SyncErrorKind::Other
@@ -77,6 +79,10 @@ mod tests {
         );
         assert_eq!(
             kind(RemoteError::Unauthorized.into()),
+            SyncErrorKind::Unauthorized
+        );
+        assert_eq!(
+            kind(RemoteError::MissingPermission("files.content.write".into()).into()),
             SyncErrorKind::Unauthorized
         );
         assert_eq!(kind(SyncError::KeyMismatch), SyncErrorKind::KeyMismatch);
