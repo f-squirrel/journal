@@ -192,11 +192,22 @@ async fn delete_entry(state: State<'_, VaultState>, id: Id) -> Result<(), String
 /// `tauri-plugin-log` rather than a plain stderr subscriber because two of
 /// the three target platforms have no stderr a developer will ever see: it
 /// routes `Stderr` to logcat on Android and oslog on iOS.
+///
+/// The targets replace the plugin's defaults rather than add to them: those
+/// are `Stdout` and a log file, so adding `Stderr` on top printed every line
+/// twice. The log file is kept on purpose — a desktop app is rarely started
+/// from a terminal, and a sync failure reported by a user is only
+/// diagnosable from what the app wrote down at the time. The plugin caps it
+/// (40 kB, one rotated copy), and nothing logged at `Info` carries a secret:
+/// the Dropbox SDK's token-logging target stays below the level.
 fn logging_plugin<R: Runtime>() -> tauri::plugin::TauriPlugin<R> {
+    use tauri_plugin_log::{Target, TargetKind};
+
     tauri_plugin_log::Builder::new()
-        .target(tauri_plugin_log::Target::new(
-            tauri_plugin_log::TargetKind::Stderr,
-        ))
+        .targets([
+            Target::new(TargetKind::Stderr),
+            Target::new(TargetKind::LogDir { file_name: None }),
+        ])
         .level(log::LevelFilter::Info)
         .build()
 }

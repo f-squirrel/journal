@@ -378,8 +378,11 @@ field-name mismatches — a class of bug neither the Playwright suite nor
   - Logging goes through `tauri-plugin-log`, registered as
     `logging_plugin()` in `src/lib.rs`. Backend crates log with `log`
     (not `tracing`); the plugin routes `Stderr` to logcat on Android and
-    oslog on iOS, so one registration covers all three targets. Level is
-    fixed at `Info` — it does not read `RUST_LOG`.
+    oslog on iOS, so one registration covers all three targets. It also
+    writes a capped log file to the app's log directory. Its targets
+    *replace* the plugin's defaults (`Stdout` + file); adding to them
+    printed every line twice. Level is fixed at `Info` — it does not read
+    `RUST_LOG`.
 - Frontend and backend communicate via Tauri's `invoke()` bridge
   (`@tauri-apps/api`), wrapped in `src/api/entries.ts` for entry CRUD and
   `src/api/sync.ts` for sync.

@@ -4,6 +4,12 @@
 
 Accepted — 2026-09-09
 
+Amended 2026-09-20: the targets are `Stderr` plus the plugin's log file
+(`TargetKind::LogDir`), set with `targets([..])` so they replace the
+plugin's defaults instead of adding to them. Adding `Stderr` to the default
+`Stdout` printed every line twice. The file is kept so a desktop user, who
+rarely starts the app from a terminal, still has a record of a failure.
+
 ## Decision
 
 Route all backend logging through `tauri-plugin-log`, registered as
