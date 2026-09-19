@@ -55,6 +55,13 @@ DROPBOX_APP_KEY=your-app-key make run
 
 A build without the key runs normally with sync unavailable.
 
+Release builds use one production Dropbox app, registered and owned by the
+maintainer. Its key is public (the flow is PKCE, with no client secret), but
+a release job supplies it from a CI secret, `DROPBOX_APP_KEY`, so that forks
+do not ship under this app's name. Dropbox caps an app in development at 500
+linked users; it must pass Dropbox's production review before a release
+reaches more.
+
 To use one journal on a second device, connect Dropbox from that device's login
 screen *before* creating a journal there. A device that creates its own journal
 first holds a different key, and sync stops with a key mismatch; see
