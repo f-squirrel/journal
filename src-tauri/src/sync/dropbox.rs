@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use journal_credential::RefreshToken;
-use journal_dropbox::{authorize_url, finish, DropboxRemote};
+use journal_dropbox::{account_id, authorize_url, finish, DropboxRemote};
 use journal_remote::RemoteStore;
 
 use super::{Connection, Provider};
@@ -30,8 +30,10 @@ impl Dropbox {
 
     fn key(&self) -> Result<&'static str, String> {
         self.app_key.ok_or_else(|| {
-            "Dropbox is not set up in this build: register an app at dropbox.com/developers, \
-             allow the redirect URI http://127.0.0.1:53682/, and build with DROPBOX_APP_KEY set"
+            "Dropbox is not set up in this build: register an app at dropbox.com/developers \
+             (\"App folder\" access), allow the redirect URI http://127.0.0.1:53682/, tick the \
+             scopes files.metadata.read, files.content.read, files.content.write and \
+             account_info.read, and build with DROPBOX_APP_KEY set"
                 .to_owned()
         })
     }
@@ -53,6 +55,10 @@ impl Provider for Dropbox {
             state: pending.state().to_owned(),
             redeem: Box::new(move |code| finish(pending, code).map_err(|e| e.to_string())),
         })
+    }
+
+    fn account(&self, token: &RefreshToken) -> Result<String, String> {
+        account_id(self.key()?, token).map_err(|e| e.to_string())
     }
 
     fn remote(&self, token: &RefreshToken) -> Result<Arc<dyn RemoteStore>, String> {

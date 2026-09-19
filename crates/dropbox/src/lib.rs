@@ -28,6 +28,6 @@ mod fake;
 mod hash;
 mod remote;
 
-pub use auth::{authorize_url, finish, ConnectError, PendingAuth};
+pub use auth::{account_id, authorize_url, finish, ConnectError, PendingAuth};
 pub use client::RefreshingClient;
 pub use remote::DropboxRemote;

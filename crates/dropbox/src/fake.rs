@@ -249,6 +249,32 @@ pub(crate) mod wire {
         json!({ "entries": entries, "cursor": cursor, "has_more": has_more })
     }
 
+    /// `users/get_current_account`'s answer, with every field the SDK requires.
+    pub fn account(account_id: &str) -> Value {
+        json!({
+            "account_id": account_id,
+            "name": {
+                "given_name": "Ada",
+                "surname": "Lovelace",
+                "familiar_name": "Ada",
+                "display_name": "Ada Lovelace",
+                "abbreviated_name": "AL",
+            },
+            "email": "ada@example.com",
+            "email_verified": true,
+            "disabled": false,
+            "locale": "en",
+            "referral_link": "https://db.tt/x",
+            "is_paired": false,
+            "account_type": tag("basic"),
+            "root_info": {
+                ".tag": "user",
+                "root_namespace_id": "1",
+                "home_namespace_id": "1",
+            },
+        })
+    }
+
     /// `{".tag": tag}` — a Stone union with no payload.
     pub fn tag(tag: &str) -> Value {
         json!({ ".tag": tag })

@@ -224,14 +224,14 @@ fn blob_name(path_lower: Option<&str>, name: &str) -> Option<BlobName> {
 
 /// An SDK error split into what only the call can interpret (`Api`) and what
 /// means the same for every call (`Remote`).
-enum Failure<E> {
+pub(crate) enum Failure<E> {
     Api(E),
     Remote(RemoteError),
 }
 
 impl<E: std::fmt::Display> Failure<E> {
     /// The [`RemoteError`] for a failure the call has no special case for.
-    fn or_other(self, what: &str) -> RemoteError {
+    pub(crate) fn or_other(self, what: &str) -> RemoteError {
         match self {
             Failure::Api(api) => RemoteError::Other(format!("{what}: {api}")),
             Failure::Remote(remote) => remote,
@@ -239,7 +239,7 @@ impl<E: std::fmt::Display> Failure<E> {
     }
 }
 
-fn lift<E: std::error::Error + 'static>(error: Error<E>) -> Failure<E> {
+pub(crate) fn lift<E: std::error::Error + 'static>(error: Error<E>) -> Failure<E> {
     Failure::Remote(match error {
         Error::Api(api) => return Failure::Api(api),
         // The request never got an answer: the network, not the request.

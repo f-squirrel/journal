@@ -9,18 +9,24 @@
 //!
 //! This module never opens a browser and never listens on a socket. The caller
 //! shows the user [`authorize_url`], catches the redirect however its platform
-//! allows, and hands the `code` back to [`finish`].
+//! allows, and hands the `code` back to [`finish`]. [`account_id`] then names
+//! the account the login is for.
 
 use std::fmt;
 
-use dropbox_sdk::client_trait::NoauthClient;
+use dropbox_sdk::client_trait::{NoauthClient, UserAuthClient};
 use dropbox_sdk::default_client::NoauthDefaultClient;
 use dropbox_sdk::oauth2::{Authorization, AuthorizeUrlBuilder, Oauth2Type, PkceCode};
+use dropbox_sdk::users;
 use dropbox_sdk::Error;
 use journal_credential::RefreshToken;
+use journal_remote::RemoteError;
 use thiserror::Error;
 use url::Url;
 use uuid::Uuid;
+
+use crate::client::RefreshingClient;
+use crate::remote::lift;
 
 /// A connection that has been started and not finished: what [`finish`] needs
 /// to redeem the code, and what the redirect must be checked against.
@@ -54,8 +60,8 @@ impl fmt::Debug for PendingAuth {
 ///
 /// `redirect_uri` must be registered with the Dropbox app, and is sent again
 /// when the code is redeemed, where Dropbox requires it to match. The app must
-/// be allowed the scopes `files.metadata.read`, `files.content.read` and
-/// `files.content.write`; none is requested here, so Dropbox asks for
+/// be allowed the scopes `files.metadata.read`, `files.content.read`,
+/// `files.content.write` and `account_info.read`; none is requested here, so Dropbox asks for
 /// everything the app was registered with.
 pub fn authorize_url(app_key: &str, redirect_uri: &str) -> (Url, PendingAuth) {
     let verifier = PkceCode::new();
@@ -111,6 +117,26 @@ fn finish_with(
                 "Dropbox issued no refresh token; the app must allow offline access".to_owned(),
             )
         })
+}
+
+/// Dropbox's stable id for the account `refresh` acts as (`dbid:…`).
+///
+/// The app keeps it with the login: sync state describes one account's folder,
+/// and connecting a *different* account of the same provider must not inherit
+/// it. Needs the app's `account_info.read` scope; without it this fails with
+/// [`RemoteError::MissingPermission`]. Blocks on the network.
+pub fn account_id(app_key: &str, refresh: &RefreshToken) -> Result<String, RemoteError> {
+    account_id_with(&RefreshingClient::new(
+        NoauthDefaultClient::default(),
+        app_key,
+        refresh,
+    ))
+}
+
+fn account_id_with(client: &impl UserAuthClient) -> Result<String, RemoteError> {
+    users::get_current_account(client)
+        .map(|account| account.account_id)
+        .map_err(|e| lift(e).or_other("could not read the Dropbox account"))
 }
 
 /// Why a connection could not be completed.
@@ -263,6 +289,40 @@ mod tests {
         assert!(
             matches!(&err, ConnectError::Other(m) if m.contains("refresh token")),
             "{err:?}"
+        );
+    }
+
+    #[test]
+    fn the_account_id_comes_from_the_current_account() {
+        let http = FakeHttp::default().expect(
+            "2/users/get_current_account",
+            Reply::ok(crate::fake::wire::account("dbid:AAH4f99")),
+        );
+
+        let id = account_id_with(&RefreshingClient::seeded(http.clone(), None, "tok")).unwrap();
+
+        assert_eq!(id, "dbid:AAH4f99");
+        http.assert_finished();
+    }
+
+    #[test]
+    fn an_app_without_account_info_read_says_so() {
+        let http = FakeHttp::default().expect(
+            "2/users/get_current_account",
+            Reply::status(
+                401,
+                json!({
+                    "error_summary": "missing_scope/..",
+                    "error": { ".tag": "missing_scope", "required_scope": "account_info.read" },
+                }),
+            ),
+        );
+
+        let err = account_id_with(&RefreshingClient::seeded(http, None, "tok")).unwrap_err();
+
+        assert_eq!(
+            err,
+            RemoteError::MissingPermission("account_info.read".to_owned())
         );
     }
 

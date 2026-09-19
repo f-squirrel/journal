@@ -341,12 +341,13 @@ field-name mismatches — a class of bug neither the Playwright suite nor
   `Slot`, since a pass's resolver saves through the store whose callback locks
   it. Sync keeps running while the vault is locked. The app key is a build-time
   env var: `DROPBOX_APP_KEY=… make run` (without it, connecting reports how to
-  set it). The saved login (`remote-login`: provider id and token) lives in the
-  app config dir and the engine state in `sync-state.json` in the data dir,
-  both outside the synced `entries/`. The engine state is one provider's cursor
-  and revisions, so `install` keeps it only while the provider is the same one
-  as the saved login; connecting a different provider erases it, and a test
-  holds that.
+  set it). The saved login (`remote-login`: provider id, token and account
+  id) lives in the app config dir and the engine state in `sync-state.json` in
+  the data dir, both outside the synced `entries/`. The engine state is one
+  account's cursor and revisions, so `install` keeps it only while provider
+  *and* account (`Provider::account`, asked once per connect) match the saved
+  login; anything else erases it. Kept across accounts it is data loss — the
+  new folder's listing reads as every entry deleted — and a test holds that.
   A cursor the remote forgets (Dropbox's `reset`) is `RemoteError::CursorExpired`;
   the engine then lists from scratch, and a blob missing from that listing is a
   deletion.

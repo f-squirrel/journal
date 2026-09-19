@@ -7,8 +7,9 @@
 //! API: the adapters (`journal-dropbox`) mint and use the token, and
 //! `src-tauri` decides when to save it.
 //!
-//! The provider id is stored *with* the token, in one file, so that "which
-//! account is connected" and "what it is logged in with" cannot disagree.
+//! The provider id and the account id are stored *with* the token, in one
+//! file, so that "which account is connected" and "what it is logged in with"
+//! cannot disagree.
 
 use std::fmt;
 use std::fs;
@@ -42,13 +43,17 @@ impl fmt::Debug for RefreshToken {
     }
 }
 
-/// A [`RefreshToken`] and the provider that issued it.
+/// A [`RefreshToken`], the provider that issued it, and the account it is for.
 #[derive(Clone, Debug)]
 pub struct Credential {
     /// The issuing provider's id, e.g. `"dropbox"`. Whatever the app calls its
     /// providers; this crate only stores it. Never contains a newline.
     pub provider: String,
     pub token: RefreshToken,
+    /// The provider's stable id for the account the token acts as, when it is
+    /// known. `None` for a login saved before accounts were recorded; the app
+    /// treats that as "some other account". Never contains a newline.
+    pub account: Option<String>,
 }
 
 impl Credential {
@@ -59,11 +64,37 @@ impl Credential {
     pub fn new(provider: impl Into<String>, token: RefreshToken) -> Self {
         let provider = provider.into();
         assert!(
-            !provider.is_empty() && !provider.contains('\n'),
+            is_one_line(&provider),
             "a provider id is one non-empty line, not {provider:?}"
         );
-        Self { provider, token }
+        Self {
+            provider,
+            token,
+            account: None,
+        }
     }
+
+    /// The same credential, for the account the provider calls `account`.
+    ///
+    /// # Panics
+    ///
+    /// If `account` is empty or contains a newline. Providers' account ids are
+    /// neither, and either would make the stored file unreadable.
+    pub fn with_account(self, account: impl Into<String>) -> Self {
+        let account = account.into();
+        assert!(
+            is_one_line(&account),
+            "an account id is one non-empty line, not {account:?}"
+        );
+        Self {
+            account: Some(account),
+            ..self
+        }
+    }
+}
+
+fn is_one_line(s: &str) -> bool {
+    !s.trim().is_empty() && !s.contains(['\n', '\r'])
 }
 
 /// Where the credential is kept between runs.
@@ -88,7 +119,8 @@ pub trait CredentialStore: Send + Sync {
 pub struct CredentialStoreError(String);
 
 /// A [`CredentialStore`] that keeps the credential in one file, readable by its
-/// owner alone: the provider id on the first line, the token on the second.
+/// owner alone: the provider id on the first line, the token on the second,
+/// and the account id, when there is one, on the third.
 ///
 /// The refresh token is the only secret kept. The providers we know of do not
 /// rotate it, so there is nothing to save after a refresh.
@@ -133,11 +165,21 @@ impl CredentialStore for FileCredentialStore {
         if text.trim().is_empty() {
             return Ok(None);
         }
-        let credential = text
-            .split_once('\n')
-            .map(|(provider, token)| (provider.trim(), token.trim()))
-            .filter(|(provider, token)| !provider.is_empty() && !token.is_empty())
-            .map(|(provider, token)| Credential::new(provider, RefreshToken::new(token)));
+        let mut lines = text.lines().map(str::trim);
+        let provider = lines.next().filter(|line| !line.is_empty());
+        let token = lines.next().filter(|line| !line.is_empty());
+        let account = lines.next().filter(|line| !line.is_empty());
+        let rest = lines.find(|line| !line.is_empty());
+        let credential = match (provider, token, rest) {
+            (Some(provider), Some(token), None) => {
+                let credential = Credential::new(provider, RefreshToken::new(token));
+                Some(match account {
+                    Some(account) => credential.with_account(account),
+                    None => credential,
+                })
+            }
+            _ => None,
+        };
         credential.map(Some).ok_or_else(|| {
             CredentialStoreError(format!(
                 "the saved login at {} is not in a format this version reads; connect again",
@@ -165,6 +207,10 @@ impl CredentialStore for FileCredentialStore {
             file.write_all(credential.provider.as_bytes())?;
             file.write_all(b"\n")?;
             file.write_all(credential.token.expose().as_bytes())?;
+            if let Some(account) = &credential.account {
+                file.write_all(b"\n")?;
+                file.write_all(account.as_bytes())?;
+            }
             file.sync_all()?;
             fs::rename(&temp, &self.path)
         };
@@ -236,6 +282,33 @@ mod tests {
     }
 
     #[test]
+    fn the_account_loads_back_when_there_is_one() {
+        let store = store();
+        store
+            .save(&credential("dropbox", "refresh-1").with_account("dbid:A"))
+            .unwrap();
+
+        let loaded = store.load().unwrap().unwrap();
+
+        assert_eq!(loaded.provider, "dropbox");
+        assert_eq!(loaded.token.expose(), "refresh-1");
+        assert_eq!(loaded.account.as_deref(), Some("dbid:A"));
+    }
+
+    #[test]
+    fn a_login_saved_without_an_account_still_loads() {
+        let store = store();
+        store.save(&credential("dropbox", "refresh-1")).unwrap();
+        // What a build from before accounts were recorded wrote.
+        fs::write(store.path(), "dropbox\nrefresh-1\n").unwrap();
+
+        let loaded = store.load().unwrap().unwrap();
+
+        assert_eq!(loaded.token.expose(), "refresh-1");
+        assert_eq!(loaded.account, None);
+    }
+
+    #[test]
     fn saving_again_replaces_the_credential_and_leaves_no_scratch_file() {
         let store = store();
         store.save(&credential("dropbox", "refresh-1")).unwrap();
@@ -282,6 +355,10 @@ mod tests {
 
         assert!(error.contains("connect again"), "{error}");
         assert!(!error.contains("just-a-token"), "{error}");
+
+        // Nor is a file with more lines than any version wrote.
+        fs::write(store.path(), "dropbox\ntoken\naccount\nmore").unwrap();
+        assert!(store.load().is_err());
     }
 
     #[cfg(unix)]

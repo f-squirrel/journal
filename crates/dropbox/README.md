@@ -8,7 +8,8 @@ own mechanisms: `list_folder` / `list_folder/continue` for "what changed"
 without clobbering someone".
 
 It moves ciphertext only and holds no key. Built on Dropbox's official
-`dropbox-sdk` with just `dbx_files` and its blocking `ureq` client, so there is
+`dropbox-sdk` with just `dbx_files`, `dbx_users` (one route, to name the
+account) and its blocking `ureq` client, so there is
 no async runtime in the tree (`cargo tree -p journal-dropbox` shows no `tokio`,
 `reqwest` or `hyper`), which is what the synchronous trait wants.
 
@@ -24,6 +25,16 @@ no async runtime in the tree (`cargo tree -p journal-dropbox` shows no `tokio`,
   no socket: the app shows the URL, catches the redirect, checks that the
   redirect's `state` equals `PendingAuth::state()`, and passes the `code` to
   `finish`.
+- `account_id(app_key, &refresh)` — the connected account's stable id
+  (`users/get_current_account`), which the app saves with the login so that
+  another account of the same provider does not inherit the first one's sync
+  state. Needs the `account_info.read` scope.
+
+The app registered with Dropbox needs "App folder" access, the redirect URI
+the app listens on (`http://127.0.0.1:53682/`), and four scopes ticked in its
+Permissions tab: `files.metadata.read`, `files.content.read`,
+`files.content.write` and `account_info.read`. Tokens issued before a scope
+was ticked never gain it: reconnect after changing them.
 - The refresh token is a `journal_credential::RefreshToken`. Keeping it is
   `journal-credential`'s job, not this crate's: nothing here is Dropbox-specific
   about a saved login.

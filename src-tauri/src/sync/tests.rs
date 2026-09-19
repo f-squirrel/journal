@@ -63,15 +63,27 @@ impl Events for Recorder {
 }
 
 /// A provider that needs no network: the "browser" answers with a fixed code,
-/// and the remote is whatever it was given.
+/// and the account and its remote are whatever it was last given.
 struct Fake {
     id: &'static str,
-    remote: Arc<dyn RemoteStore>,
+    account: Mutex<(&'static str, Arc<dyn RemoteStore>)>,
 }
 
 impl Fake {
+    fn new(id: &'static str, remote: Arc<dyn RemoteStore>) -> Arc<Self> {
+        Arc::new(Self {
+            id,
+            account: Mutex::new(("account-1", remote)),
+        })
+    }
+
     fn provider(id: &'static str, remote: Arc<dyn RemoteStore>) -> Arc<dyn Provider> {
-        Arc::new(Self { id, remote })
+        Self::new(id, remote)
+    }
+
+    /// The user signs in to the provider as someone else next time.
+    fn sign_in_as(&self, account: &'static str, remote: Arc<dyn RemoteStore>) {
+        *self.account.lock().unwrap() = (account, remote);
     }
 }
 
@@ -99,8 +111,61 @@ impl Provider for Fake {
         })
     }
 
+    fn account(&self, _: &RefreshToken) -> Result<String, String> {
+        Ok(self.account.lock().unwrap().0.to_owned())
+    }
+
     fn remote(&self, _: &RefreshToken) -> Result<Arc<dyn RemoteStore>, String> {
-        Ok(self.remote.clone())
+        Ok(self.account.lock().unwrap().1.clone())
+    }
+}
+
+/// A remote that answers a cursor it did not issue the way Dropbox does, with
+/// `reset` (`CursorExpired`), where `MemoryRemote` reports an error. It counts
+/// the listings made from scratch, which is how a test sees that the engine
+/// started over: a kept state starts from its cursor.
+struct Forgetful(Arc<MemoryRemote>, AtomicUsize);
+
+impl Forgetful {
+    fn new(inner: Arc<MemoryRemote>) -> Arc<Self> {
+        Arc::new(Self(inner, AtomicUsize::new(0)))
+    }
+
+    fn full_listings(&self) -> usize {
+        self.1.load(Ordering::SeqCst)
+    }
+}
+
+impl RemoteStore for Forgetful {
+    fn changes(&self, since: Option<&Cursor>) -> Result<ChangePage, RemoteError> {
+        if since.is_none() {
+            self.1.fetch_add(1, Ordering::SeqCst);
+        }
+        match self.0.changes(since) {
+            Err(RemoteError::Other(_)) if since.is_some() => Err(RemoteError::CursorExpired),
+            other => other,
+        }
+    }
+
+    fn get(&self, name: &BlobName) -> Result<Option<(Vec<u8>, Revision)>, RemoteError> {
+        self.0.get(name)
+    }
+
+    fn put(
+        &self,
+        name: &BlobName,
+        bytes: &[u8],
+        pre: Precondition,
+    ) -> Result<Revision, RemoteError> {
+        self.0.put(name, bytes, pre)
+    }
+
+    fn delete(&self, name: &BlobName, pre: Precondition) -> Result<(), RemoteError> {
+        self.0.delete(name, pre)
+    }
+
+    fn content_hash(&self, bytes: &[u8]) -> Option<String> {
+        self.0.content_hash(bytes)
     }
 }
 
@@ -521,28 +586,71 @@ fn connecting_another_provider_starts_from_a_clean_state() {
     assert_eq!(rig.titles(), ["Today"]);
 }
 
+/// The regression for connecting a second account of the same provider: kept,
+/// the first account's state made the engine read the second's empty folder
+/// as "everything was deleted", and delete the journal on this device.
 #[test]
-fn reconnecting_the_same_provider_keeps_the_state() {
-    let remote = Arc::new(MemoryRemote::new());
+fn connecting_another_account_starts_clean_and_deletes_nothing() {
+    let first = Forgetful::new(Arc::new(MemoryRemote::new()));
+    let second = Arc::new(MemoryRemote::new());
+    let fake = Fake::new("fake", first.clone());
+    let rig = Rig::with_providers(vec![fake.clone()]);
+    rig.unlock();
+    rig.save(ID, "Today", "words", "2026-03-01T10:00:00Z");
+    rig.connect();
+    assert!(remote_has(&first.0, &format!("{ID}.json")));
+
+    fake.sign_in_as("account-2", Forgetful::new(second.clone()));
+    rig.connect();
+
+    assert_eq!(rig.titles(), ["Today"], "nothing deleted on this device");
+    assert!(
+        remote_has(&second, &format!("{ID}.json")),
+        "uploaded afresh"
+    );
+    assert_eq!(rig.status()["state"], "synced");
+    let saved = FileCredentialStore::new(rig.dir.join("config").join("login"))
+        .load()
+        .unwrap()
+        .unwrap();
+    assert_eq!(saved.account.as_deref(), Some("account-2"));
+}
+
+/// A login saved before accounts were recorded cannot be told to be the same
+/// account, so it is taken to be another one.
+#[test]
+fn a_saved_login_without_an_account_counts_as_another_account() {
+    let remote = Forgetful::new(Arc::new(MemoryRemote::new()));
     let rig = Rig::new(remote.clone());
     rig.unlock();
     rig.save(ID, "Today", "words", "2026-03-01T10:00:00Z");
     rig.connect();
-    // The revisions the engine recorded. (Not the whole file: its cursor moves
-    // as each pass reads back its own uploads.)
-    let bases = || -> Value {
-        let file = std::fs::read(rig.dir.join("sync-state.json")).unwrap();
-        serde_json::from_slice::<Value>(&file).unwrap()["blobs"].clone()
-    };
-    let before = bases();
-    assert!(before.as_object().is_some_and(|blobs| !blobs.is_empty()));
+    let before = remote.full_listings();
+    FileCredentialStore::new(rig.dir.join("config").join("login"))
+        .save(&Credential::new("fake", RefreshToken::new("refresh")))
+        .unwrap();
 
-    // What a revoked login and a fresh grant look like: same provider, worker
-    // running. Erased state would be rebuilt as new revisions of the same
-    // bytes; kept state is exactly what it was.
     rig.connect();
 
-    assert_eq!(bases(), before);
+    assert!(remote.full_listings() > before, "the state was erased");
+    assert_eq!(rig.titles(), ["Today"]);
+    assert_eq!(rig.status()["state"], "synced");
+}
+
+#[test]
+fn reconnecting_the_same_account_keeps_the_state() {
+    let remote = Forgetful::new(Arc::new(MemoryRemote::new()));
+    let rig = Rig::new(remote.clone());
+    rig.unlock();
+    rig.save(ID, "Today", "words", "2026-03-01T10:00:00Z");
+    rig.connect();
+    let before = remote.full_listings();
+
+    // What a revoked login and a fresh grant look like: same provider and
+    // account, worker running. The pass after it goes on from the cursor.
+    rig.connect();
+
+    assert_eq!(remote.full_listings(), before, "the state was kept");
     assert_eq!(rig.status()["state"], "synced");
 }
 

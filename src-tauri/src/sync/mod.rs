@@ -109,6 +109,12 @@ pub trait Provider: Send + Sync {
     /// browser back to.
     fn begin(&self, redirect_uri: &str) -> Result<Connection, String>;
 
+    /// The provider's stable id for the account `token` acts as. Called once
+    /// per connection, after the code is redeemed, and saved with the login:
+    /// sync state describes one account's remote, so a different account of
+    /// the same provider must start from a clean state. Blocks on the network.
+    fn account(&self, token: &RefreshToken) -> Result<String, String>;
+
     /// The remote for an account that has been connected.
     fn remote(&self, token: &RefreshToken) -> Result<Arc<dyn RemoteStore>, String>;
 }
@@ -233,7 +239,7 @@ impl SyncControl {
             Ok(Some(credential)) => {
                 let resumed = self
                     .provider(&credential.provider)
-                    .and_then(|provider| self.install(provider, &credential.token, Login::Saved));
+                    .and_then(|provider| self.install(provider, &credential, Login::Saved));
                 if let Err(e) = resumed {
                     log::warn!("could not resume sync: {e}");
                 }
@@ -295,8 +301,10 @@ impl SyncControl {
         let code = oauth::await_code(&listener, &state, LOGIN_TIMEOUT, provider.name())?;
         drop(listener);
         let token = redeem(&code)?;
+        let account = provider.account(&token)?;
+        let credential = Credential::new(provider.id(), token).with_account(account);
 
-        let worker = self.install(provider, &token, Login::New)?;
+        let worker = self.install(provider, &credential, Login::New)?;
         if let Err(e) = worker.sync_now() {
             log::warn!("the first sync after connecting failed: {e}");
         }
@@ -326,20 +334,22 @@ impl SyncControl {
             .unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Starts a worker for `token`, replacing one that is running.
+    /// Starts a worker for `credential`, replacing one that is running.
     ///
-    /// The engine's state — a cursor and revisions — describes one provider's
-    /// remote, so it is kept only while that provider stays the one. Replacing
-    /// a running worker (reconnecting after a revoked login) and `resuming` in
-    /// a new run of an account that was already connected keep it. Connecting
-    /// from nothing throws away whatever is lying around, because it describes
-    /// some earlier account's remote and the engine would compare this one
-    /// against it; so does connecting to a different provider, which would
-    /// otherwise be handed the first one's cursor.
+    /// The engine's state — a cursor and revisions — describes one account's
+    /// remote, so it is kept only while that account stays the one: the same
+    /// provider *and* the same account id. Replacing a running worker
+    /// (reconnecting after a revoked login) and `resuming` in a new run of an
+    /// account that was already connected keep it. Anything else throws it
+    /// away: connecting from nothing, to a different provider, or as a
+    /// different account of the same one. Kept, another account's state is
+    /// data loss, not only a wrong status: its cursor is refused, the engine
+    /// lists the new remote from scratch, and every blob it has a base for and
+    /// does not find there reads as deleted remotely — and is deleted here.
     fn install(
         &self,
         provider: &Arc<dyn Provider>,
-        token: &RefreshToken,
+        credential: &Credential,
         login: Login,
     ) -> Result<Arc<Worker>, String> {
         let cfg = &self.config;
@@ -348,13 +358,16 @@ impl SyncControl {
         let keep_state = match login {
             Login::Saved => true,
             Login::New => {
-                // Unreadable counts as different: losing the state is safe.
+                // Unreadable counts as different, and so does a saved login
+                // with no account recorded: losing the state is safe.
                 let same = matches!(
                     cfg.credentials.load(),
-                    Ok(Some(saved)) if saved.provider == provider.id()
+                    Ok(Some(saved)) if saved.provider == credential.provider
+                        && saved.account.is_some()
+                        && saved.account == credential.account
                 );
                 cfg.credentials
-                    .save(&Credential::new(provider.id(), token.clone()))
+                    .save(credential)
                     .map_err(|e| e.to_string())?;
                 same
             }
@@ -367,7 +380,7 @@ impl SyncControl {
                 .map_err(|e| format!("could not clear the old sync state: {e}"))?;
         }
 
-        let remote = provider.remote(token)?;
+        let remote = provider.remote(&credential.token)?;
         let poke = self.coalescer.poker();
         let on_status = {
             let poke = poke.clone();
