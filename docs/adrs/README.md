@@ -13,3 +13,4 @@
 | [0009](0009-blob-store-seam-and-local-first-sync.md) | Layer entry storage over a blob store, and sync local-first | Accepted |
 | [0010](0010-name-crates-after-what-they-hold.md) | Name the storage crates after what they hold | Accepted |
 | [0011](0011-content-security-policy-and-no-global-tauri.md) | Set a Content-Security-Policy, and stop exposing `window.__TAURI__` | Accepted |
+| [0012](0012-cloud-sync-remote-store-and-engine.md) | Sync through a separate `RemoteStore` trait and a base-state engine | Accepted |
