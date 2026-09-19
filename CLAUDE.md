@@ -340,8 +340,9 @@ field-name mismatches — a class of bug neither the Playwright suite nor
   becomes a "(conflicted copy)"; `Deferred` while the vault is locked, and
   `unlock` kicks a pass to settle those), `status.rs` (`derive_state`, the
   payload, and the 250 ms coalescer behind `sync://status`) and `oauth.rs`
-  (the loopback listener on `127.0.0.1:53682` the browser is redirected to;
-  register `http://127.0.0.1:53682/` with the Dropbox app). `sync://changed`
+  (the loopback listener the browser is redirected to, on the port
+  `Provider::redirect_port` asks for or any free one; Dropbox asks for
+  53682, so register `http://127.0.0.1:53682/` with the Dropbox app). `sync://changed`
   fires when a pass pulled, deleted or merged entries. Three things to keep:
   the vault is given a `NotifyingStore` over the `FsStore` while the engine
   gets the bare `FsStore` (its own pulls are not edits); the `Slot` that

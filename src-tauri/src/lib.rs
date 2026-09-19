@@ -273,7 +273,6 @@ pub fn run() {
                         .open_url(url.as_str(), None::<&str>)
                         .map_err(|e| e.to_string())
                 }),
-                redirect_port: sync::oauth::REDIRECT_PORT,
                 timing: sync::worker::Timing::default(),
             }));
             app.manage(control.clone());

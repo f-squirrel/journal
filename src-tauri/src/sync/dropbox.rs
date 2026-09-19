@@ -9,6 +9,12 @@ use journal_remote::RemoteStore;
 
 use super::{Connection, Provider};
 
+/// The port the redirect URI names. A fixed one, because Dropbox matches the
+/// redirect against URIs registered with the app (register
+/// `http://127.0.0.1:53682/` there). (rclone uses the same port for the same
+/// purpose, so the two cannot connect at once.)
+const REDIRECT_PORT: u16 = 53682;
+
 /// Dropbox, under the app key this build was made with.
 ///
 /// The key is public — PKCE means the app carries no secret — but it names an
@@ -30,11 +36,13 @@ impl Dropbox {
 
     fn key(&self) -> Result<&'static str, String> {
         self.app_key.ok_or_else(|| {
-            "Dropbox is not set up in this build: register an app at dropbox.com/developers \
-             (\"App folder\" access), allow the redirect URI http://127.0.0.1:53682/, tick the \
-             scopes files.metadata.read, files.content.read, files.content.write and \
-             account_info.read, and build with DROPBOX_APP_KEY set"
-                .to_owned()
+            format!(
+                "Dropbox is not set up in this build: register an app at \
+                 dropbox.com/developers (\"App folder\" access), allow the redirect URI \
+                 http://127.0.0.1:{REDIRECT_PORT}/, tick the scopes files.metadata.read, \
+                 files.content.read, files.content.write and account_info.read, and build \
+                 with DROPBOX_APP_KEY set"
+            )
         })
     }
 }
@@ -46,6 +54,13 @@ impl Provider for Dropbox {
 
     fn name(&self) -> &'static str {
         "Dropbox"
+    }
+
+    /// The registered port, once there is an app to register it with. A build
+    /// without a key has nothing to connect, and `begin` says so; it need not
+    /// hold a fixed port (possibly in use) to get there.
+    fn redirect_port(&self) -> Option<u16> {
+        self.app_key.map(|_| REDIRECT_PORT)
     }
 
     fn begin(&self, redirect_uri: &str) -> Result<Connection, String> {

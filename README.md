@@ -45,8 +45,9 @@ require the same passphrase; there is no password recovery.
 ### Enabling Dropbox sync
 
 Sync needs a Dropbox app key at build time. Create a Dropbox app with "App
-folder" access, allow the redirect URI `http://127.0.0.1:53682/`, and launch
-with its key:
+folder" access, allow the redirect URI `http://127.0.0.1:53682/`, tick the
+scopes `files.metadata.read`, `files.content.read`, `files.content.write` and
+`account_info.read` in its Permissions tab, and launch with its key:
 
 ```sh
 DROPBOX_APP_KEY=your-app-key make run

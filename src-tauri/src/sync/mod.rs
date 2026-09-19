@@ -105,6 +105,14 @@ pub trait Provider: Send + Sync {
     /// What the user calls it, for the words the app says about it.
     fn name(&self) -> &'static str;
 
+    /// The loopback port the redirect must come back to, for a provider that
+    /// matches it against the URIs registered with the app (Dropbox). `None`,
+    /// the default, takes any free port, which is what a provider that
+    /// accepts any loopback port should do.
+    fn redirect_port(&self) -> Option<u16> {
+        None
+    }
+
     /// Starts connecting. `redirect_uri` is where the provider will send the
     /// browser back to.
     fn begin(&self, redirect_uri: &str) -> Result<Connection, String>;
@@ -183,7 +191,6 @@ pub struct SyncConfig {
     pub state_path: PathBuf,
     /// Shows the user the provider's page.
     pub open_url: OpenUrl,
-    pub redirect_port: u16,
     pub timing: Timing,
 }
 
@@ -295,7 +302,8 @@ impl SyncControl {
     pub fn connect(&self, provider_id: &str) -> Result<(), String> {
         let cfg = &self.config;
         let provider = self.provider(provider_id)?;
-        let (listener, redirect_uri) = oauth::bind(cfg.redirect_port, provider.name())?;
+        let port = provider.redirect_port().unwrap_or(0);
+        let (listener, redirect_uri) = oauth::bind(port, provider.name())?;
         let Connection { url, state, redeem } = provider.begin(&redirect_uri)?;
         (cfg.open_url)(&url).map_err(|e| format!("could not open the browser: {e}"))?;
         let code = oauth::await_code(&listener, &state, LOGIN_TIMEOUT, provider.name())?;

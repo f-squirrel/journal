@@ -335,7 +335,6 @@ impl Rig {
             credentials: Arc::new(FileCredentialStore::new(dir.join("config").join("login"))),
             state_path: dir.join("sync-state.json"),
             open_url: Arc::new(browser),
-            redirect_port: 0,
             timing,
         }));
         app.manage(control.clone());
@@ -486,6 +485,17 @@ fn a_build_without_an_app_key_says_how_to_get_one() {
         "{error}"
     );
     assert_eq!(rig.status()["state"], "off");
+}
+
+/// Dropbox matches the redirect against the URI registered with the app, so it
+/// asks for that port; a provider that says nothing gets any free one.
+#[test]
+fn only_a_provider_that_needs_a_fixed_redirect_port_asks_for_one() {
+    assert_eq!(Dropbox::new(Some("key")).redirect_port(), Some(53682));
+    assert_eq!(
+        Fake::provider("fake", Arc::new(MemoryRemote::new())).redirect_port(),
+        None
+    );
 }
 
 #[test]

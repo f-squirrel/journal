@@ -15,19 +15,13 @@ use std::time::{Duration, Instant};
 
 use url::Url;
 
-/// The port the redirect URI names. A fixed one, because Dropbox matches the
-/// redirect against URIs registered with the app (register
-/// `http://127.0.0.1:53682/` there), and a provider that accepts any loopback
-/// port would not mind it. (rclone uses the same port for the same
-/// purpose, so the two cannot connect at once.)
-pub const REDIRECT_PORT: u16 = 53682;
-
 /// How long a request line may take to arrive.
 const READ_TIMEOUT: Duration = Duration::from_secs(2);
 /// More than any redirect needs, and less than a hostile client could send.
 const MAX_REQUEST_LINE: u64 = 8 * 1024;
 
-/// Listens on `port` (0 for any free one) and returns the redirect URI that
+/// Listens on `port` (0 for any free one; see `Provider::redirect_port`) and
+/// returns the redirect URI that
 /// names the socket. `provider` is the name the user knows it by, for the
 /// messages here and on the page the browser lands on.
 pub fn bind(port: u16, provider: &str) -> Result<(TcpListener, String), String> {
