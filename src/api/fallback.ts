@@ -48,7 +48,8 @@ function toHeader(entry: JournalEntry): EntryHeader {
 //                       connect, sync, resolve (see "simulated sync" below)
 //   ?failMessage=<text> the rejection message (default "Injected fault.")
 //   ?slow=<ops>         the named ops resolve after SLOW_MS
-//   ?sync=on|conflict|busy  start connected to a provider (see below)
+//   ?sync=<mode>        start connected to a provider: on, conflict, busy,
+//                       reauth, key_mismatch (see below)
 //
 // The app uses HashRouter, so the query string goes *before* the hash:
 // `page.goto("/?fail=save")`, not `/#/?fail=save`.
@@ -74,8 +75,15 @@ interface Faults {
   sync: SyncMode;
 }
 
-type SyncMode = "off" | "on" | "conflict" | "busy";
-const SYNC_MODES: readonly SyncMode[] = ["off", "on", "conflict", "busy"];
+type SyncMode = "off" | "on" | "conflict" | "busy" | "reauth" | "key_mismatch";
+const SYNC_MODES: readonly SyncMode[] = [
+  "off",
+  "on",
+  "conflict",
+  "busy",
+  "reauth",
+  "key_mismatch",
+];
 
 function parseFaults(search: string): Faults {
   const params = new URLSearchParams(search);
@@ -189,6 +197,10 @@ export function deleteEntry(id: string): Promise<void> {
 //   ?sync=busy        starts connected, and every pass reports that it brought
 //                     changes from another device (`sync://changed`), so the
 //                     list reloads after each one
+//   ?sync=reauth      starts connected with a login the provider refuses: sync
+//                     is halted until connecting again succeeds
+//   ?sync=key_mismatch  starts connected to a cloud holding another journal's
+//                     key: halted, and only disconnecting ends it
 //   ?fail=sync        every pass fails: the ids stay pending, and the state is
 //                     `offline` with the fault message
 //   ?fail=connect     connecting is refused
@@ -224,6 +236,17 @@ const theirVersion: JournalEntry = {
 let connected: ProviderInfo | null = null;
 const pending = new Set<string>();
 const conflicted = new Set<string>();
+/// What halts sync until the user acts, with the words the backend would send
+/// (`RemoteError::Unauthorized` and `SyncError::KeyMismatch`). A halted worker
+/// runs no pass on its own; `sync_now` tries one, which fails the same way.
+type Halt = "reauth" | "key_mismatch";
+const HALT_MESSAGES: Record<Halt, string> = {
+  reauth: "the remote rejected our credentials; reconnect to continue",
+  key_mismatch:
+    "the journal key on this device differs from the one in the cloud; sync is stopped until you choose which to keep",
+};
+let halted: Halt | null = null;
+
 /// A pass is running, and a save during it asks for another.
 let running = false;
 let rerun = false;
@@ -238,6 +261,9 @@ if (faults.sync !== "off") {
   connected = providers[0];
   lastSyncedAt = new Date().toISOString();
   if (faults.sync === "conflict") conflicted.add(seedEntries[0].id);
+  if (faults.sync === "reauth" || faults.sync === "key_mismatch") {
+    halted = faults.sync;
+  }
 }
 
 /// The status, derived in the order `derive_state` does in Rust (minus the
@@ -246,15 +272,17 @@ if (faults.sync !== "off") {
 function status(): SyncStatusPayload {
   const state = !connected
     ? "off"
-    : running
-      ? "syncing"
-      : failure
-        ? "offline"
-        : conflicted.size > 0
-          ? "conflicts"
-          : pending.size > 0
-            ? "pending"
-            : "synced";
+    : halted
+      ? halted
+      : running
+        ? "syncing"
+        : failure
+          ? "offline"
+          : conflicted.size > 0
+            ? "conflicts"
+            : pending.size > 0
+              ? "pending"
+              : "synced";
   return {
     state,
     provider: connected?.name ?? null,
@@ -262,7 +290,11 @@ function status(): SyncStatusPayload {
     conflicted_ids: [...conflicted],
     pending_other: 0,
     last_synced_at: lastSyncedAt,
-    message: state === "offline" ? failure : null,
+    message: halted
+      ? HALT_MESSAGES[halted]
+      : state === "offline"
+        ? failure
+        : null,
   };
 }
 
@@ -301,7 +333,7 @@ function resolveConflicts(): number {
 /// One pass: uploads everything pending and settles what conflicts it can, or
 /// fails, leaving all of it as it was. `syncing` for as long as it runs.
 async function pass() {
-  if (!connected) return;
+  if (!connected || halted) return;
   if (running) {
     rerun = true;
     return;
@@ -360,12 +392,15 @@ export function listProviders(): Promise<ProviderInfo[]> {
   return Promise.resolve(providers);
 }
 
-export function connectRemote(providerId: string): Promise<void> {
-  return run("connect", () => {
+export async function connectRemote(providerId: string): Promise<void> {
+  await run("connect", () => {
     const provider = providers.find((p) => p.id === providerId);
     if (!provider) throw `unknown sync provider "${providerId}"`;
     connected = provider;
     failure = null;
+    // A new login is what `reauth` waits for. A key mismatch is not about
+    // the login, and a reconnect finds the same foreign key.
+    if (halted === "reauth") halted = null;
     lastSyncedAt = new Date().toISOString();
     // The first pass, which pulls what another device left in the cloud: the
     // journal's key on a device that has none, and its entries.
@@ -376,11 +411,16 @@ export function connectRemote(providerId: string): Promise<void> {
     }
     emitStatus();
   });
+  // Then a pass for what this device holds, as `connect` runs one before it
+  // returns. Its failure is in the status; the connection itself succeeded.
+  clearTimeout(pushTimer);
+  await pass();
 }
 
 export function disconnectRemote(): Promise<void> {
   clearTimeout(pushTimer);
   rerun = false;
+  halted = null;
   connected = null;
   failure = null;
   lastSyncedAt = null;
@@ -392,6 +432,7 @@ export function disconnectRemote(): Promise<void> {
 
 export async function syncNow(): Promise<void> {
   if (!connected) throw "sync is not connected";
+  if (halted) throw HALT_MESSAGES[halted];
   clearTimeout(pushTimer);
   await pass();
   if (failure) throw failure;

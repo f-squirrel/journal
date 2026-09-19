@@ -127,8 +127,9 @@ field-name mismatches — a class of bug neither the Playwright suite nor
     in-memory vault in `src/api/fallback.ts`. That module also carries the
     fault-injection hook it parses once at load: `?fail=<ops>` (the ops
     include `connect`, `sync` and `resolve`), `?failMessage=<text>`, `?slow=<ops>`,
-    `?vault=new` and `?sync=on|conflict|busy` (`busy`: every pass fires
-    `sync://changed`). Its listing reads the vault when called, not when it
+    `?vault=new` and `?sync=on|conflict|busy|reauth|key_mismatch` (`busy`:
+    every pass fires `sync://changed`; the last two start halted, with the
+    message the backend sends). Its listing reads the vault when called, not when it
     answers, as the real one does, so `?slow=list` exposes races with it.
     It simulates sync too, in the
     sequence the backend produces — a save marks its entry pending at once,

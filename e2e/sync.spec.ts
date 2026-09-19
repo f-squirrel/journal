@@ -9,6 +9,8 @@ import { test, expect, type Page } from "@playwright/test";
 //                               that unlocking settles
 //   ?sync=busy                  every pass also fires `sync://changed`
 //   ?fail=resolve               a conflict stays parked
+//   ?sync=reauth                start with a login the provider refuses
+//   ?sync=key_mismatch          start against a cloud holding another journal
 //   ?fail=sync                  every pass fails
 //   ?fail=connect               connecting is refused
 //   ?slow=sync                  a pass starts after 1.2 s, long enough to see
@@ -178,6 +180,55 @@ test("unlocking settles a parked conflict into a conflicted copy", async ({
   await expect(page.getByTestId("entry-body")).toContainText(
     "Written on the phone",
   );
+});
+
+test("a refused login says so and signing in again recovers", async ({
+  page,
+}) => {
+  await login(page, "?sync=reauth");
+  await expectRail(page, "Sign in to Dropbox again");
+
+  // A save while halted waits: it is not uploaded, and nothing retries it.
+  await writeEntry(page, "Written meanwhile");
+  await expect(marks(page)).toHaveCount(1);
+  await expectRail(page, "Sign in to Dropbox again");
+
+  await rail(page).click();
+  await expect(dialog(page)).toContainText("reconnect to continue");
+  await dialog(page)
+    .getByRole("button", { name: "Sign in to Dropbox" })
+    .click();
+
+  await expect(dialog(page)).not.toContainText("reconnect to continue");
+  await expect(
+    dialog(page).getByRole("button", { name: "Sync now" }),
+  ).toBeVisible();
+  // Its first pass uploads what waited.
+  await expect(marks(page)).toHaveCount(0);
+  await expectRail(page, /^Synced/);
+});
+
+test("a cloud holding another journal says why and offers to disconnect", async ({
+  page,
+}) => {
+  await login(page, "?sync=key_mismatch");
+  await expectRail(
+    page,
+    "This device and the cloud have different journal keys",
+  );
+
+  await rail(page).click();
+  await expect(dialog(page)).toContainText(
+    "the journal key on this device differs from the one in the cloud",
+  );
+  // Retrying cannot help, and says so rather than looking like it worked.
+  await dialog(page).getByRole("button", { name: "Sync now" }).click();
+  await expect(dialog(page).getByRole("alert")).toHaveCount(2);
+
+  await dialog(page).getByRole("button", { name: "Disconnect" }).click();
+  await dialog(page).getByRole("button", { name: "Disconnect" }).click();
+  await expectRail(page, "Sync is off");
+  await expect(page.getByTestId("entry-row")).toHaveCount(2);
 });
 
 test("disconnecting warns about what has not been uploaded", async ({
