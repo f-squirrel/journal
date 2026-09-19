@@ -105,6 +105,7 @@ in small Rust workspace crates:
 | `crates/dropbox` | Dropbox remote store and OAuth PKCE flow |
 | `e2e/` | Playwright UI tests |
 | `docs/adrs/` | Architecture decision records |
+| `docs/known-issues.md` | Known problems deliberately left unfixed |
 
 Rust owns the wire format. TypeScript definitions in `src/bindings/` are
 generated from Rust with `ts-rs` and should not be edited by hand.
@@ -126,5 +127,7 @@ implemented.
 
 - [`CLAUDE.md`](CLAUDE.md) — detailed architecture and contributor guidance
 - [`docs/adrs/`](docs/adrs/README.md) — decisions and their trade-offs
+- [`docs/known-issues.md`](docs/known-issues.md) — known problems left
+  unfixed, with workarounds
 - [`crates/sync/README.md`](crates/sync/README.md) — synchronization model
 - [`crates/dropbox/README.md`](crates/dropbox/README.md) — Dropbox integration
