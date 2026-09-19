@@ -45,7 +45,7 @@ function toHeader(entry: JournalEntry): EntryHeader {
 //
 //   ?vault=new          hasVault() resolves false, giving the create-vault UI
 //   ?fail=<ops>         comma-separated: has, unlock, list, get, save, delete,
-//                       connect, sync (see "simulated sync" below)
+//                       connect, sync, resolve (see "simulated sync" below)
 //   ?failMessage=<text> the rejection message (default "Injected fault.")
 //   ?slow=<ops>         the named ops resolve after SLOW_MS
 //   ?sync=on|conflict|busy  start connected to a provider (see below)
@@ -54,7 +54,15 @@ function toHeader(entry: JournalEntry): EntryHeader {
 // `page.goto("/?fail=save")`, not `/#/?fail=save`.
 
 type Op =
-  "has" | "unlock" | "list" | "get" | "save" | "delete" | "connect" | "sync";
+  | "has"
+  | "unlock"
+  | "list"
+  | "get"
+  | "save"
+  | "delete"
+  | "connect"
+  | "sync"
+  | "resolve";
 
 const SLOW_MS = 1200;
 
@@ -125,6 +133,8 @@ export function hasVault(): Promise<boolean> {
 export function unlockVault(_passphrase: string): Promise<void> {
   return run("unlock", () => {
     locked = false;
+    // As `unlock` kicks a pass in Rust: a parked conflict waits for the key.
+    if (connected && conflicted.size > 0) schedulePass();
   });
 }
 
@@ -171,15 +181,20 @@ export function deleteEntry(id: string): Promise<void> {
 // connected. From the URL:
 //
 //   ?sync=on          starts connected and synced
-//   ?sync=conflict    starts connected with one conflicted entry
+//   ?sync=conflict    starts connected with one conflict parked, which the pass
+//                     that unlocking starts settles as `resolver.rs` does: the
+//                     newer version keeps the id, the older becomes a
+//                     "(conflicted copy)"; ?fail=resolve keeps it parked, as
+//                     the real resolver does with a version it cannot read
 //   ?sync=busy        starts connected, and every pass reports that it brought
 //                     changes from another device (`sync://changed`), so the
 //                     list reloads after each one
 //   ?fail=sync        every pass fails: the ids stay pending, and the state is
 //                     `offline` with the fault message
 //   ?fail=connect     connecting is refused
-//   ?slow=sync        a pass takes SLOW_MS to start, long enough to look at a
-//                     pending mark; ?slow=connect slows connecting the same way
+//   ?slow=sync        a pass starts SLOW_MS after a save, long enough to look
+//                     at a pending mark, and then takes SLOW_MS, showing
+//                     `syncing`; ?slow=connect slows connecting
 //
 // A pass also fails for `sync_now`, which then rejects as the real one does.
 
@@ -198,9 +213,20 @@ const cloudEntry: JournalEntry = {
   markdown: "# Written on the laptop\n\nThis one came from another device.",
 };
 
+/// The other device's version of the entry `?sync=conflict` parks: older than
+/// the seed's, so the seed keeps the id and this becomes the copy.
+const theirVersion: JournalEntry = {
+  ...seedEntries[0],
+  updated_at: "2026-08-31T20:00:00.000Z",
+  markdown: "# First day back\n\nWritten on the phone, offline.",
+};
+
 let connected: ProviderInfo | null = null;
 const pending = new Set<string>();
 const conflicted = new Set<string>();
+/// A pass is running, and a save during it asks for another.
+let running = false;
+let rerun = false;
 let lastSyncedAt: string | null = null;
 /// Why the last pass failed, if it did.
 let failure: string | null = null;
@@ -215,18 +241,20 @@ if (faults.sync !== "off") {
 }
 
 /// The status, derived in the order `derive_state` does in Rust (minus the
-/// states this simulation never reaches): failure, then conflicts, then
-/// pending, and `synced` when none applies.
+/// states this simulation never reaches): a running pass, then failure, then
+/// conflicts, then pending, and `synced` when none applies.
 function status(): SyncStatusPayload {
   const state = !connected
     ? "off"
-    : failure
-      ? "offline"
-      : conflicted.size > 0
-        ? "conflicts"
-        : pending.size > 0
-          ? "pending"
-          : "synced";
+    : running
+      ? "syncing"
+      : failure
+        ? "offline"
+        : conflicted.size > 0
+          ? "conflicts"
+          : pending.size > 0
+            ? "pending"
+            : "synced";
   return {
     state,
     provider: connected?.name ?? null,
@@ -243,29 +271,85 @@ function emitStatus() {
   statusListeners.forEach((listener) => listener(current));
 }
 
-/// One pass: uploads everything pending, or fails, leaving it pending.
-function pass() {
+/// Settles each parked conflict, as `VaultResolver` does, unless the vault is
+/// locked (it needs the key) or `?fail=resolve` says it cannot read them.
+/// Returns how many it settled.
+function resolveConflicts(): number {
+  if (locked || faults.fail.has("resolve")) return 0;
+  let settled = 0;
+  for (const id of conflicted) {
+    const ours = fallbackEntries.get(id);
+    if (ours) {
+      const [winner, loser] =
+        theirVersion.updated_at > ours.updated_at
+          ? [theirVersion, ours]
+          : [ours, theirVersion];
+      const copy: JournalEntry = {
+        ...loser,
+        id: crypto.randomUUID(),
+        title: `${loser.title} (conflicted copy)`,
+      };
+      fallbackEntries.set(copy.id, copy);
+      fallbackEntries.set(id, winner);
+    }
+    conflicted.delete(id);
+    settled += 1;
+  }
+  return settled;
+}
+
+/// One pass: uploads everything pending and settles what conflicts it can, or
+/// fails, leaving all of it as it was. `syncing` for as long as it runs.
+async function pass() {
+  if (!connected) return;
+  if (running) {
+    rerun = true;
+    return;
+  }
+  running = true;
+  emitStatus();
+  if (faults.slow.has("sync")) {
+    await new Promise((resolve) => setTimeout(resolve, SLOW_MS));
+  }
+  running = false;
   if (!connected) return;
   if (faults.fail.has("sync")) {
     failure = faults.failMessage;
   } else {
     failure = null;
-    pending.clear();
+    // A save during the pass is uploaded by the next one.
+    if (!rerun) pending.clear();
     lastSyncedAt = new Date().toISOString();
-    if (faults.sync === "busy") {
+    const settled = resolveConflicts();
+    if (settled > 0 || faults.sync === "busy") {
       changedListeners.forEach((listener) => listener());
     }
   }
   emitStatus();
+  if (rerun) {
+    rerun = false;
+    schedulePass();
+  }
+}
+
+/// Debounced, as the real one is: another save pushes the pass back.
+function schedulePass() {
+  clearTimeout(pushTimer);
+  pushTimer = setTimeout(
+    () => void pass(),
+    faults.slow.has("sync") ? SLOW_MS : PUSH_MS,
+  );
 }
 
 function markPending(id: string) {
   if (!connected) return;
   pending.add(id);
   emitStatus();
-  // Debounced, as the real one is: another save pushes the pass back.
-  clearTimeout(pushTimer);
-  pushTimer = setTimeout(pass, faults.slow.has("sync") ? SLOW_MS : PUSH_MS);
+  if (running) {
+    rerun = true;
+  } else {
+    schedulePass();
+  }
 }
 
 export function syncStatus(): Promise<SyncStatusPayload> {
@@ -296,6 +380,7 @@ export function connectRemote(providerId: string): Promise<void> {
 
 export function disconnectRemote(): Promise<void> {
   clearTimeout(pushTimer);
+  rerun = false;
   connected = null;
   failure = null;
   lastSyncedAt = null;
@@ -307,11 +392,8 @@ export function disconnectRemote(): Promise<void> {
 
 export async function syncNow(): Promise<void> {
   if (!connected) throw "sync is not connected";
-  if (faults.slow.has("sync")) {
-    await new Promise((resolve) => setTimeout(resolve, SLOW_MS));
-  }
   clearTimeout(pushTimer);
-  pass();
+  await pass();
   if (failure) throw failure;
 }
 

@@ -126,13 +126,15 @@ field-name mismatches — a class of bug neither the Playwright suite nor
     (`npm run dev`, Playwright) a **development** build serves the seeded
     in-memory vault in `src/api/fallback.ts`. That module also carries the
     fault-injection hook it parses once at load: `?fail=<ops>` (the ops
-    include `connect` and `sync`), `?failMessage=<text>`, `?slow=<ops>`,
+    include `connect`, `sync` and `resolve`), `?failMessage=<text>`, `?slow=<ops>`,
     `?vault=new` and `?sync=on|conflict|busy` (`busy`: every pass fires
     `sync://changed`). Its listing reads the vault when called, not when it
     answers, as the real one does, so `?slow=list` exposes races with it.
     It simulates sync too, in the
     sequence the backend produces — a save marks its entry pending at once,
-    a debounced pass clears it — and connecting from it plays a second
+    a debounced pass (`syncing` while it runs) clears it, and the pass that
+    unlocking starts settles a `?sync=conflict` into a "(conflicted copy)"
+    the way `resolver.rs` does — and connecting from it plays a second
     device joining: the vault "arrives" and an entry from another device
     reaches the list through `sync://changed`. The app uses `HashRouter`, so
     the query string goes *before* the hash (`/?fail=save`, not

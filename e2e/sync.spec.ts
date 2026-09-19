@@ -6,11 +6,13 @@ import { test, expect, type Page } from "@playwright/test";
 // the URL can ask for:
 //
 //   ?sync=on / ?sync=conflict   start connected, or connected with a conflict
+//                               that unlocking settles
 //   ?sync=busy                  every pass also fires `sync://changed`
+//   ?fail=resolve               a conflict stays parked
 //   ?fail=sync                  every pass fails
 //   ?fail=connect               connecting is refused
 //   ?slow=sync                  a pass starts after 1.2 s, long enough to see
-//                               a pending mark before it clears
+//                               a pending mark, then syncs for 1.2 s more
 
 async function login(page: Page, query = "") {
   await page.goto(`/${query}`);
@@ -114,6 +116,10 @@ test("a saved entry is marked until it is uploaded, on its row and on the rail",
   await expect(mark).toBeVisible();
   await expectRail(page, /not uploaded yet/);
 
+  // The pass runs; the mark stays until it has uploaded.
+  await expectRail(page, "Syncing…");
+  await expect(mark).toBeVisible();
+
   // The simulated pass lands and both clear.
   await expect(mark).toHaveCount(0);
   await expectRail(page, /^Synced/);
@@ -145,7 +151,8 @@ test("a failing pass leaves the mark and says offline", async ({ page }) => {
 test("an entry with conflicting versions is marked as one", async ({
   page,
 }) => {
-  await login(page, "?sync=conflict");
+  // Kept parked: unlocking would otherwise settle it at once.
+  await login(page, "?sync=conflict&fail=resolve");
 
   await expect(
     row(page, "First day back").getByRole("img", {
@@ -154,6 +161,23 @@ test("an entry with conflicting versions is marked as one", async ({
   ).toBeVisible();
   await expect(marks(page)).toHaveCount(1);
   await expectRail(page, "Conflicting versions to resolve");
+});
+
+test("unlocking settles a parked conflict into a conflicted copy", async ({
+  page,
+}) => {
+  await login(page, "?sync=conflict");
+
+  // The newer version keeps the entry; the older sits beside it as a copy.
+  await expect(row(page, "First day back (conflicted copy)")).toBeVisible();
+  await expect(marks(page)).toHaveCount(0);
+  await expectRail(page, /^Synced/);
+  await expect(page.getByTestId("entry-row")).toHaveCount(3);
+
+  await row(page, "First day back (conflicted copy)").click();
+  await expect(page.getByTestId("entry-body")).toContainText(
+    "Written on the phone",
+  );
 });
 
 test("disconnecting warns about what has not been uploaded", async ({
@@ -258,10 +282,11 @@ test("on a phone the rail lives in the drawer, and a mark costs a row no height"
 // A `sync://changed` reload reads the disk once; a save that lands while it is
 // in flight is not in what it returns. Replacing the list with that result put
 // the row's old title back until the next save. The fake clock pins the order:
-// with `?sync=busy` every pass fires `sync://changed`, `?slow=sync` starts a
-// pass 1.2 s after a save, and `?slow=list` holds the listing it starts open
-// for 1.2 s more. The clock is paused, not only installed: time that flows
-// while an assertion waits would let the next listing land and hide the race.
+// with `?sync=busy` every pass fires `sync://changed` as it ends, `?slow=sync`
+// starts a pass 1.2 s after a save and runs it for 1.2 s, and `?slow=list`
+// holds the listing it starts open for 1.2 s more. The clock is paused, not
+// only installed: time that flows while an assertion waits would let the next
+// listing land and hide the race.
 test("a list reload that races a save keeps the saved title", async ({
   page,
 }) => {
@@ -279,9 +304,9 @@ test("a list reload that races a save keeps the saved title", async ({
   await page.clock.runFor(800);
   await expect(page.getByTestId("save-status")).toHaveText("Saved");
 
-  // The pass after that save starts a listing, which reads "First title". The
-  // next save lands 800 ms later, while that listing is still open.
-  await page.clock.runFor(1200);
+  // The pass after that save ends 2.4 s later and starts a listing, which
+  // reads "First title". The next save lands while that listing is open.
+  await page.clock.runFor(2400);
   await page.getByPlaceholder("Title").fill("Second title");
   await page.clock.runFor(800);
   await expect(page.getByTestId("save-status")).toHaveText("Saved");
