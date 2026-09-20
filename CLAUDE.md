@@ -392,6 +392,16 @@ field-name mismatches — a class of bug neither the Playwright suite nor
     directory when the format changes under you in development, and per
     the alpha note above, confirm with the user first when it would drop
     their local data.
+    The rule is about the *read* path: what is banned is a second shape
+    alive at once, with every reader branching on which one it got. A
+    field that gains a `#[serde(default)]` (as `entry_date` did) is not
+    that, and neither is a separate one-shot tool that rewrites blobs into
+    the current shape and is then deleted. `crates/vault/src/backfill.rs`
+    plus `crates/vault/examples/backfill.rs` are the only such tool, added
+    with the user's explicit say-so to date entries written before
+    `entry_date` existed; nothing in the app calls either. **Both are
+    meant to be deleted once the user has run them** — if they are still
+    here and the user has already backfilled, offer to remove them.
   - `tauri.conf.json` — app identifier, window config, build hooks
     (`beforeDevCommand`/`beforeBuildCommand` run the npm scripts above),
     and the webview's Content-Security-Policy (ADR 0011, which also
