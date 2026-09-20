@@ -100,9 +100,23 @@ coverage-web:
 	npx nyc report
 	cp coverage/web-html/lcov.info coverage/web.lcov
 
-# Both reports, then one summary line each and for the total. Nothing opens:
-# safe to run in a script. `coverage-open` is the viewing half.
-coverage: coverage-rust coverage-web
+# Both reports, then the summary (`scripts/coverage-summary.sh`). Quiet: the
+# two halves run in a sub-make with everything sent to $(COV_LOG), and only the
+# summary reaches the terminal; a failed run prints the last 40 log lines and
+# exits non-zero. `V=1` streams the full output instead. The halves are not
+# prerequisites, and run one after the other, so `make -j coverage` cannot run
+# cargo and Playwright at once.
+# Nothing opens: safe to run in a script. `coverage-open` is the viewing half.
+COV_LOG := coverage/run.log
+
+coverage:
+	@mkdir -p coverage
+ifeq ($(V),1)
+	@$(MAKE) --no-print-directory coverage-rust && $(MAKE) --no-print-directory coverage-web
+else
+	@{ $(MAKE) --no-print-directory coverage-rust && $(MAKE) --no-print-directory coverage-web; } >$(COV_LOG) 2>&1 \
+	  || { echo "coverage run failed; last 40 lines of $(COV_LOG):"; tail -n 40 $(COV_LOG); exit 1; }
+endif
 	@$(MAKE) --no-print-directory coverage-summary
 
 coverage-summary:
