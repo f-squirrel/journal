@@ -15,3 +15,4 @@
 | [0011](0011-content-security-policy-and-no-global-tauri.md) | Set a Content-Security-Policy, and stop exposing `window.__TAURI__` | Accepted |
 | [0012](0012-cloud-sync-remote-store-and-engine.md) | Sync through a separate `RemoteStore` trait and a base-state engine | Accepted |
 | [0013](0013-mui-x-date-pickers-for-the-entry-date.md) | Use `@mui/x-date-pickers` for the entry date control | Accepted |
+| [0014](0014-search-by-decrypting-on-demand.md) | Search by decrypting on demand, with no persistent index | Accepted |
