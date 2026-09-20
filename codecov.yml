@@ -1,0 +1,34 @@
+# Coverage is reported, not enforced: there is no threshold yet, so a drop
+# shows on the pull request but never fails it. Make a status required here
+# (drop `informational`) once there is a number worth defending.
+coverage:
+  status:
+    project:
+      default:
+        informational: true
+    patch:
+      default:
+        informational: true
+
+# The two uploads (coverage.yml) are merged into one total; the flags let the
+# dashboard show each on its own too.
+flags:
+  rust:
+    paths:
+      - crates/
+      - src-tauri/
+  web:
+    paths:
+      - src/
+
+# Test and build support, not the app's own code. The reports are already
+# generated without these (`make coverage-rust`, vite.config.ts); this repeats
+# the list so a stray entry in a report cannot count.
+ignore:
+  - "**/tests/**"
+  - "**/examples/**"
+  - "**/build.rs"
+  - "crates/remote/src/memory.rs"
+  - "src-tauri/src/main.rs"
+  - "src/api/fallback.ts"
+  - "src/bindings/**"

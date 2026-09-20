@@ -1,0 +1,79 @@
+name: Coverage
+
+# Reports line coverage to Codecov, which adds the two uploads (flags `rust`
+# and `web`) into the one total the README badge shows. Kept out of ci.yml on
+# purpose: this job builds on nightly and instruments the code, so a coverage
+# failure must not be mistaken for a failing test suite. It needs the
+# CODECOV_TOKEN repository secret; without it the upload step fails on purpose
+# rather than quietly reporting nothing.
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    name: rust coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Nightly, because the test modules opt out of the report with
+      # `#[coverage(off)]`, which is unstable. Only this job uses it: the
+      # tests in ci.yml stay on stable.
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@cargo-llvm-cov
+
+      # Only `src-tauri` needs these; see the same step in ci.yml.
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            libssl-dev \
+            build-essential \
+            curl wget file
+
+      - run: make coverage-rust
+
+      - uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage/rust.lcov
+          flags: rust
+          fail_ci_if_error: true
+
+  web:
+    name: web coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+
+      # The Playwright suite against an instrumented dev server (see
+      # e2e/coverage.ts): the front end's coverage is what the e2e tests reach.
+      - run: make coverage-web
+
+      - uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage/web.lcov
+          flags: web
+          fail_ci_if_error: true
