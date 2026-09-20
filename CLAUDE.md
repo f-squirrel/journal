@@ -55,7 +55,11 @@ the user rather than assuming a migration must be written.
 - `make coverage` — line coverage of both languages, written as lcov (what
   `.github/workflows/coverage.yml` uploads to Codecov, whose badge in the
   README is the combined total) and as HTML; prints the Rust, web and total
-  percentages. `make coverage-open` opens the two HTML reports;
+  percentages. Codecov gates the combined total (`codecov.yml`): it must stay
+  at or above 85% and not fall below the base commit's. Those are commit
+  statuses, so they block a merge only once `codecov/project/floor` and
+  `codecov/project/no-drop` are required in branch protection.
+  `make coverage-open` opens the two HTML reports;
   `coverage-rust` and `coverage-web` run one half. Output lands in
   `coverage/` (gitignored). Test code is left out of every report:
   - **Rust** uses `cargo llvm-cov` on **nightly** (needs `cargo binstall

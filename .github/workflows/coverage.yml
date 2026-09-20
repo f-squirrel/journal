@@ -1,7 +1,8 @@
 name: Coverage
 
 # Reports line coverage to Codecov, which adds the two uploads (flags `rust`
-# and `web`) into the one total the README badge shows. Kept out of ci.yml on
+# and `web`) into the one total the README badge shows; the floor and the
+# no-drop check on that total live in codecov.yml. Kept out of ci.yml on
 # purpose: this job builds on nightly and instruments the code, so a coverage
 # failure must not be mistaken for a failing test suite. It needs the
 # CODECOV_TOKEN repository secret; without it the upload step fails on purpose

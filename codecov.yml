@@ -1,14 +1,31 @@
-# Coverage is reported, not enforced: there is no threshold yet, so a drop
-# shows on the pull request but never fails it. Make a status required here
-# (drop `informational`) once there is a number worth defending.
+# Two project-wide checks on the total (Rust and web added together, the number
+# on the README badge):
+#   - `floor`: fails below 85%.
+#   - `no-drop`: fails if the total is lower than on the commit the pull
+#     request branched from (`target: auto`; `threshold: 0%` allows no slack,
+#     so raise it, say to 0.2%, if a flaky e2e run makes this cry wolf).
+# Codecov only reports these as commit statuses. To make a failure block a
+# merge, require `codecov/project/floor` and `codecov/project/no-drop` in the
+# branch protection rules (Settings > Branches). The patch check stays
+# informational: it judges only the changed lines, which is too noisy to gate.
 coverage:
   status:
     project:
-      default:
-        informational: true
+      floor:
+        target: 85%
+      no-drop:
+        target: auto
+        threshold: 0%
     patch:
       default:
         informational: true
+
+# The two uploads (coverage.yml) come from separate jobs. Without this, Codecov
+# would judge the first one to arrive on its own: the Rust report alone, or
+# the web one alone, is not the total and could trip the floor.
+codecov:
+  notify:
+    after_n_builds: 2
 
 # The two uploads (coverage.yml) are merged into one total; the flags let the
 # dashboard show each on its own too.
