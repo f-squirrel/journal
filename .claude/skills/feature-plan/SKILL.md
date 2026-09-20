@@ -96,8 +96,10 @@ command names and signatures, file paths, make targets, env vars, event
 names, error strings the UI matches on — goes in one "Contract" section and is
 declared not to change. That is what lets WPs run in parallel without drifting.
 
-Finish with a **docs WP**: the `claude-md-check` skill for `CLAUDE.md`, and
-whether an ADR is warranted (ask the user first).
+Finish with a **docs WP**: the `claude-md-check` skill for `CLAUDE.md`,
+whether an ADR is warranted (ask the user first), and — when the plan added or
+changed Rust or TS/TSX code — the `coverage-check` skill, run once by the
+coordinator after the WPs are merged, not by each parallel agent.
 
 Use this repo's own verification commands in "Done when", not generic ones.
 Pick what actually applies:
@@ -110,6 +112,7 @@ Pick what actually applies:
 | UI behaviour | `make test-e2e`; new spec under `e2e/`, using the fallback's `?fail=`/`?slow=` hooks where a failure path needs seeing |
 | Formatting | `make format` |
 | Bundle hygiene (fallback code) | `make check-no-fallback` |
+| Any Rust or TS/TSX code | `make coverage` (the `coverage-check` skill) |
 
 UI work also gets "check at phone width" (the layout collapses below `md`).
 
