@@ -4,6 +4,12 @@
 
 Accepted — 2026-09-20
 
+Amended 2026-09-21: `DateCalendar` has a second entry point. The Calendar
+view (`pages/CalendarPage.tsx`) renders it on the page, not in a `Popover`,
+with a custom `slots.day` that marks days with entries. The Decision's "no
+other entry point" no longer holds; `reduceAnimations` applies there for the
+same reason, and the adapter and dependencies are unchanged.
+
 ## Context
 
 `Header` grew an `entry_date`: the day an entry is *about*, which the list
