@@ -52,6 +52,33 @@ the user rather than assuming a migration must be written.
   Runs in CI next to `npm run build`; see `src/api/fallback.ts` below.
 - `make rust-test` — `cargo test` over the whole workspace.
 - `make test` — the whole suite: `rust-test` then `test-e2e`, in that order.
+- `make coverage` — line coverage of both languages, written as lcov (what
+  `.github/workflows/coverage.yml` uploads to Codecov, whose badge in the
+  README is the combined total) and as HTML; prints the Rust, web and total
+  percentages. `make coverage-open` opens the two HTML reports;
+  `coverage-rust` and `coverage-web` run one half. Output lands in
+  `coverage/` (gitignored). Test code is left out of every report:
+  - **Rust** uses `cargo llvm-cov` on **nightly** (needs `cargo binstall
+    cargo-llvm-cov` and the `llvm-tools-preview` component), because the
+    inline test modules opt out with `#[coverage(off)]`, which is unstable.
+    Every `#[cfg(test)]` module (or test-only item) therefore carries
+    `#[cfg_attr(coverage_nightly, coverage(off))]` under it, and a crate
+    root that has one starts with `#![cfg_attr(all(test, coverage_nightly),
+    feature(coverage_attribute))]`. A new crate gets `[lints] workspace =
+    true` in its manifest, which is what declares `coverage_nightly` to
+    stable builds. `tests/`, `examples/`, `build.rs`, `MemoryRemote` and
+    `main.rs` are dropped by the `COV_IGNORE` regex in the `Makefile`
+    instead. Plain `cargo test` stays on stable and never sees any of it.
+  - **Web** has no unit tests, so its number is what the Playwright suite
+    reaches. `COVERAGE=1` makes the dev server instrument `src/`
+    (`vite-plugin-istanbul` in `vite.config.ts`, excluding
+    `src/api/fallback.ts` and `src/bindings/`), and `e2e/coverage.ts`
+    saves each page's counters to `.nyc_output/` for `nyc report`
+    (`.nycrc.json`). **Specs import `test`, `expect` and `Page` from
+    `./coverage`, not `@playwright/test`** — without it their coverage is
+    silently not collected. Counters die with the document, so the fixture
+    saves them just before `page.goto`/`page.reload`; a navigation the page
+    starts itself would be missed (the app starts none).
 - `make format` — `rust-format` (`cargo fmt --all`, whole workspace) then
   `ts-format` (`npm run format`, Prettier over every `.ts`/`.tsx` file).
   `src/bindings/` is excluded via `.prettierignore` since it's ts-rs's own

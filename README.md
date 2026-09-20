@@ -1,5 +1,7 @@
 # Journal
 
+[![codecov](https://codecov.io/gh/f-squirrel/journal/graph/badge.svg?token=REPLACE_ME)](https://codecov.io/gh/f-squirrel/journal)
+
 A private, local-first journal with Markdown editing and encrypted storage.
 The interface is built with React and runs in a native
 [Tauri 2](https://v2.tauri.app/) shell backed by Rust.
@@ -86,6 +88,8 @@ when testing real application behavior.
 | `make test` | Run all Rust and Playwright tests |
 | `make rust-test` | Run the Rust workspace tests |
 | `make test-e2e` | Run the browser-based Playwright suite |
+| `make coverage` | Measure line coverage of the Rust and front-end tests and print the totals |
+| `make coverage-open` | Open the HTML coverage reports in the browser |
 | `npm run build` | Type-check and build the frontend |
 | `make bindings` | Regenerate TypeScript types from Rust wire types |
 | `make check-bindings` | Fail if generated bridge types are stale |
@@ -95,6 +99,12 @@ when testing real application behavior.
 The end-to-end tests use the browser's in-memory backend. Rust tests cover the
 vault, encryption, storage, synchronization, Dropbox protocol behavior, and
 Tauri command wiring without requiring network access.
+
+The coverage badge is the total over both languages. Test code is left out of
+it. The front end has no unit tests, so its share is what the Playwright suite
+reaches. `make coverage` needs a nightly toolchain with `llvm-tools-preview`
+and `cargo-llvm-cov` (`cargo binstall cargo-llvm-cov`), and writes
+`coverage/rust-html/` and `coverage/web-html/`.
 
 ## Architecture
 
