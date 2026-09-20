@@ -13,6 +13,7 @@ import { getTheme } from "./theme";
 import { AppStateProvider, useAppState } from "./context/AppStateContext";
 import { ColorModeProvider, useColorMode } from "./context/ColorModeContext";
 import JournalLayout from "./components/JournalLayout";
+import CalendarPage from "./pages/CalendarPage";
 import LoginPage from "./pages/LoginPage";
 import EntryPaneRoute, { NoEntrySelected } from "./pages/EntryPane";
 
@@ -50,6 +51,7 @@ function AppRoutes() {
       >
         <Route path="/entries" element={<NoEntrySelected />} />
         <Route path="/entries/:id" element={<EntryPaneRoute />} />
+        <Route path="/calendar" element={<CalendarPage />} />
       </Route>
       <Route path="/entries/:id/edit" element={<RedirectToEntry />} />
       <Route path="*" element={<NotFoundRedirect />} />

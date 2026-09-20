@@ -115,7 +115,9 @@ field-name mismatches — a class of bug neither the Playwright suite nor
     authenticated routes sit under one layout route
     (`components/JournalLayout.tsx`), so the sidebar and entry list mount
     once and keep their scroll position as entries are opened; `/entries`
-    renders the empty pane and `/entries/:id` the entry. There is no
+    renders the empty pane, `/entries/:id` the entry and `/calendar` the
+    calendar (`JournalLayout` counts either of the last two as "pane open",
+    which is what makes them replace the list below `md`). There is no
     editor route — `/entries/:id/edit` only redirects (see the UI section
     below).
   - `context/AppStateContext.tsx` is the single source of app state right
@@ -191,9 +193,11 @@ field-name mismatches — a class of bug neither the Playwright suite nor
     and defaulting to dark; it does not follow `prefers-color-scheme`.
   - The UI is one screen, in the shape of Day One's: a sidebar, the entry
     list, and the entry pane. `components/` holds the shell
-    (`JournalLayout`, `Sidebar`, `EntryList`) and `pages/` the route
-    elements (`LoginPage`, `EntryPane`). The sidebar is an icon rail one
-    button wide (`SIDEBAR_WIDTH` in `components/chrome.ts`): each control
+    (`JournalLayout`, `Sidebar`, `EntryList`, and `EntryRow`, the one row
+    the list, its search results and the calendar all draw) and `pages/`
+    the route elements (`LoginPage`, `EntryPane`, `CalendarPage`). The
+    sidebar is an icon rail one button wide (`SIDEBAR_WIDTH` in
+    `components/chrome.ts`): each control
     is an `IconButton` whose label lives in a `Tooltip` on hover and in
     `aria-label`, which is what keeps it addressable by name (the
     Playwright suite clicks "New entry" and "Log out"). The sync button's
@@ -242,6 +246,22 @@ field-name mismatches — a class of bug neither the Playwright suite nor
     `autosave.noteChange` like a title edit, so the draft shape
     (`hooks/useAutosave.ts` `Draft`) carries `entryDate` alongside
     `title` and `markdown`.
+    The rail's **Calendar** button opens `pages/CalendarPage.tsx` in the
+    pane: a `DateCalendar` whose custom day (`slots.day`) dots every day
+    with entries, the selected day's entries below it, and an **On this
+    day** section for earlier years. It is all derived from `entries` (the
+    helpers are `dayKey`/`entriesByDay`/`onThisDay` in `utils/date.ts`), so
+    it decrypts nothing and needs no clearing on lock. The button's label
+    carries the count of today's earlier-year entries ("Calendar — 1 entry
+    on this day") and a dot marks the icon, the same label-is-the-status
+    trick as the sync button. The grid needs `reduceAnimations`, as the
+    entry pane's picker does (ADR 0013): the slide transition keeps the
+    outgoing month mounted beside the one on screen. Marked days reach the
+    day component through a context rather than a prop, because the slot
+    is a component type and one defined inside the page would remount
+    every day on each render. `e2e/calendar.spec.ts` pins the zone
+    (`timezoneId`) and "now" (`page.clock.setFixedTime`, which fixes
+    `Date` and leaves timers running).
   - **Editing is inline and autosaved** (`hooks/useAutosave.ts`): there is
     no Save button and no separate editor page. The hook keeps the live draft in a ref so its unmount cleanup can
     flush what was typed — which is also what a switch to another entry is,

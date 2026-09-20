@@ -88,6 +88,90 @@ export function groupByMonth(entries: EntryHeader[]): EntryMonth[] {
   return months;
 }
 
+function pad(n: number): string {
+  return String(n).padStart(2, "0");
+}
+
+/// The local calendar day of a `Date`, as "YYYY-MM-DD" — what the calendar
+/// grid hands back, keyed the same way as `dayKey` so the two meet.
+export function dayKeyOf(date: Date): string {
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+/// The local calendar day of a timestamp, or null if it will not parse. Local,
+/// like the list's month sections and the pane's heading: the day an entry is
+/// *about* is the one on the reader's wall clock.
+export function dayKey(timestamp: string): string | null {
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return null;
+  return dayKeyOf(date);
+}
+
+/// Every day that has entries, each list in the input order (newest first, as
+/// the context holds them).
+///
+/// An entry whose timestamp will not parse is left out — the opposite of
+/// `groupByMonth`, which keeps it. A list can show an "Unknown date" row; a
+/// month grid has no cell to put one in, and inventing a day would be worse
+/// than the entry being absent from a view that is not the only way to it.
+export function entriesByDay(
+  entries: EntryHeader[],
+): Map<string, EntryHeader[]> {
+  const days = new Map<string, EntryHeader[]>();
+  for (const entry of entries) {
+    const key = dayKey(entry.entry_date);
+    if (key === null) continue;
+    const day = days.get(key);
+    if (day) {
+      day.push(entry);
+    } else {
+      days.set(key, [entry]);
+    }
+  }
+  return days;
+}
+
+export interface OnThisDayGroup {
+  year: number;
+  /// Always at least 1: this year's own entries are in the list, not memories.
+  yearsAgo: number;
+  entries: EntryHeader[];
+}
+
+/// The entries written on `now`'s local month and day in earlier years,
+/// grouped by year, nearest year first. Future-dated entries and unparseable
+/// ones are skipped. It is an exact month-and-day match, so a Feb 29 entry
+/// only resurfaces on Feb 29.
+export function onThisDay(entries: EntryHeader[], now: Date): OnThisDayGroup[] {
+  const groups = new Map<number, EntryHeader[]>();
+  for (const entry of entries) {
+    const date = new Date(entry.entry_date);
+    if (Number.isNaN(date.getTime())) continue;
+    if (date.getMonth() !== now.getMonth()) continue;
+    if (date.getDate() !== now.getDate()) continue;
+    if (date.getFullYear() >= now.getFullYear()) continue;
+    const year = date.getFullYear();
+    const group = groups.get(year);
+    if (group) {
+      group.push(entry);
+    } else {
+      groups.set(year, [entry]);
+    }
+  }
+  return [...groups.entries()]
+    .sort(([a], [b]) => b - a)
+    .map(([year, entries]) => ({
+      year,
+      yearsAgo: now.getFullYear() - year,
+      entries,
+    }));
+}
+
+/// "1 year ago" / "3 years ago", for an On this day group's heading.
+export function formatYearsAgo(yearsAgo: number): string {
+  return yearsAgo === 1 ? "1 year ago" : `${yearsAgo} years ago`;
+}
+
 /// How long ago, for a tooltip: "just now", "5 min ago", "3 h ago", "2 d ago".
 /// `now` is a parameter so the caller decides when it re-reads the clock.
 export function formatAgo(timestamp: string, now: number): string {

@@ -1,7 +1,8 @@
 import { useState, type ReactElement } from "react";
-import { Box, IconButton, Stack, Tooltip } from "@mui/material";
+import { Badge, Box, IconButton, Stack, Tooltip } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
 import BookIcon from "@mui/icons-material/AutoStories";
+import CalendarIcon from "@mui/icons-material/CalendarMonthOutlined";
 import CloudDoneIcon from "@mui/icons-material/CloudDone";
 import CloudOffIcon from "@mui/icons-material/CloudOff";
 import CloudSyncIcon from "@mui/icons-material/CloudSync";
@@ -11,12 +12,13 @@ import ExportIcon from "@mui/icons-material/FileDownload";
 import LightModeIcon from "@mui/icons-material/LightMode";
 import LogoutIcon from "@mui/icons-material/Logout";
 import SyncProblemIcon from "@mui/icons-material/SyncProblem";
-import { useNavigate } from "react-router-dom";
+import { useMatch, useNavigate } from "react-router-dom";
 import { useAppState } from "../context/AppStateContext";
 import { useColorMode } from "../context/ColorModeContext";
 import { useNewEntry } from "../hooks/useNewEntry";
 import { useNow } from "../hooks/useNow";
 import type { SyncState } from "../types";
+import { onThisDay } from "../utils/date";
 import { syncSummary } from "../utils/sync";
 import ExportDialog from "./ExportDialog";
 import SyncDialog from "./SyncDialog";
@@ -30,6 +32,8 @@ function RailButton({
   icon,
   onClick,
   filled,
+  active,
+  badge,
   tone,
   testId,
 }: {
@@ -37,6 +41,11 @@ function RailButton({
   icon: ReactElement;
   onClick: () => void;
   filled?: boolean;
+  /// The view this button opens is the one on screen. A quieter mark than
+  /// `filled`, which belongs to "New entry".
+  active?: boolean;
+  /// A dot on the icon: there is something behind this button worth a look.
+  badge?: boolean;
   /// Colours the icon for a state that needs the user; plain otherwise.
   tone?: "warning" | "error";
   testId?: string;
@@ -45,6 +54,7 @@ function RailButton({
     <Tooltip title={label} placement="right" arrow>
       <IconButton
         aria-label={label}
+        aria-current={active ? "page" : undefined}
         data-testid={testId}
         onClick={onClick}
         sx={{
@@ -54,14 +64,24 @@ function RailButton({
             : tone
               ? `${tone}.main`
               : "text.secondary",
-          bgcolor: filled ? "tonal.primaryContainer" : "transparent",
+          bgcolor: filled
+            ? "tonal.primaryContainer"
+            : active
+              ? "action.selected"
+              : "transparent",
           "&:hover": {
             bgcolor: filled ? "tonal.primaryContainer" : "action.hover",
             ...(filled && { filter: "brightness(0.96)" }),
           },
         }}
       >
-        {icon}
+        {badge ? (
+          <Badge color="primary" variant="dot">
+            {icon}
+          </Badge>
+        ) : (
+          icon
+        )}
       </IconButton>
     </Tooltip>
   );
@@ -112,10 +132,38 @@ function SyncButton({ onClick }: { onClick: () => void }) {
   );
 }
 
-/// The leftmost column: the journal's identity, the one view there is, and the
-/// session controls, collapsed to an icon rail one button wide — each button
-/// names itself in a tooltip on hover. It lists no Calendar/Media/Map rows,
-/// because there is nothing behind them yet.
+/// The rail's calendar button. Its label carries the one thing worth knowing
+/// before opening it — how many entries the journal holds for today's date in
+/// earlier years — and a dot on the icon says the same to the eye, so the
+/// feature shows itself on the day it has something to show.
+function CalendarButton({ onClick }: { onClick: () => void }) {
+  const { entries } = useAppState();
+  const active = useMatch("/calendar") !== null;
+  // Re-read each minute so the dot survives midnight in a window left open.
+  const now = useNow(true, 60_000);
+  const count = onThisDay(entries, new Date(now)).reduce(
+    (total, group) => total + group.entries.length,
+    0,
+  );
+  return (
+    <RailButton
+      label={
+        count === 0
+          ? "Calendar"
+          : `Calendar — ${count} ${count === 1 ? "entry" : "entries"} on this day`
+      }
+      icon={<CalendarIcon fontSize="small" />}
+      active={active}
+      badge={count > 0}
+      onClick={onClick}
+    />
+  );
+}
+
+/// The leftmost column: the journal's identity, its views, and the session
+/// controls, collapsed to an icon rail one button wide — each button names
+/// itself in a tooltip on hover. It lists no Media/Map rows, because there is
+/// nothing behind them yet.
 export default function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const { logout } = useAppState();
   const { mode, toggleMode } = useColorMode();
@@ -159,6 +207,12 @@ export default function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
           icon={<AddIcon fontSize="small" />}
           onClick={() => {
             newEntry();
+            onNavigate?.();
+          }}
+        />
+        <CalendarButton
+          onClick={() => {
+            navigate("/calendar");
             onNavigate?.();
           }}
         />
