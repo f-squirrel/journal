@@ -1,4 +1,4 @@
-.PHONY: run build test rust-test test-e2e bindings check-bindings check-no-fallback format rust-format ts-format coverage-rust coverage-web
+.PHONY: run build test rust-test test-e2e bindings check-bindings check-no-fallback format rust-format ts-format coverage-rust coverage-web coverage coverage-summary coverage-open
 
 # Regenerate first: launching the app against stale bindings is how a broken
 # `invoke` bridge stays invisible (`tsc` passes, the command fails at runtime).
@@ -99,3 +99,22 @@ coverage-web:
 	COVERAGE=1 npm run test:e2e
 	npx nyc report
 	cp coverage/web-html/lcov.info coverage/web.lcov
+
+# Both reports, then one summary line each and for the total. Nothing opens:
+# safe to run in a script. `coverage-open` is the viewing half.
+coverage: coverage-rust coverage-web
+	@$(MAKE) --no-print-directory coverage-summary
+
+coverage-summary:
+	@scripts/coverage-summary.sh
+
+# Open the two HTML reports in the browser (`open` on macOS, `xdg-open`
+# elsewhere; override with `make coverage-open OPEN=...`).
+OPEN ?= $(shell if [ "$$(uname -s)" = Darwin ]; then echo open; else echo xdg-open; fi)
+COV_REPORTS := coverage/rust-html/html/index.html coverage/web-html/index.html
+
+coverage-open:
+	@for report in $(COV_REPORTS); do \
+	  test -f $$report || { echo "$$report is missing; run 'make coverage' first" >&2; exit 1; }; \
+	done
+	@for report in $(COV_REPORTS); do $(OPEN) $$report; done
