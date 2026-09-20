@@ -50,7 +50,12 @@ jobs:
       - uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
+          # Only the named file: `files` is otherwise added to whatever the
+          # action finds, which included the copy under coverage/web-html/.
+          disable_search: true
           files: coverage/rust.lcov
+          # Required with an org-level token, harmless with a repo one.
+          slug: ${{ github.repository }}
           flags: rust
           fail_ci_if_error: true
 
@@ -74,6 +79,11 @@ jobs:
       - uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
+          # Only the named file: `files` is otherwise added to whatever the
+          # action finds, which included the copy under coverage/web-html/.
+          disable_search: true
           files: coverage/web.lcov
+          # Required with an org-level token, harmless with a repo one.
+          slug: ${{ github.repository }}
           flags: web
           fail_ci_if_error: true
