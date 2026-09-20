@@ -154,16 +154,46 @@ test("switching entries flushes what was typed", async ({ page }) => {
   await expect(body(page)).toContainText("Flushed on switch");
 });
 
-test("an edited entry moves to the top of the list", async ({ page }) => {
+test("an edited entry keeps its place in the list", async ({ page }) => {
   await login(page);
-  // The older of the two seeded entries, so it starts second in the list the
-  // backend's order (most-recently-updated first) puts them in.
+  // The seeds sort by `entry_date`, not `updated_at`: "First day back" is
+  // about a day in June and so is the last row, however recently it was
+  // written. Editing it is a write, not a re-dating — it must not jump.
+  await expect(page.getByTestId("entry-row").last()).toContainText(
+    "First day back",
+  );
+
   await page.getByText("First day back").click();
   await openEditor(page);
   await editor(page).fill("# Edited just now");
 
   await expect(page.getByTestId("save-status")).toHaveText("Saved");
-  await expect(page.getByTestId("entry-row").first()).toContainText(
+  await expect(page.getByTestId("entry-row").last()).toContainText(
     "First day back",
+  );
+  await expect(page.getByTestId("entry-row").first()).toContainText(
+    "Project ideas",
+  );
+});
+
+test("an entry's date can be changed from the pane heading", async ({
+  page,
+}) => {
+  await login(page);
+  await page.getByText("Project ideas").click();
+  // The heading is the entry's date, and it is the control that changes it.
+  await page.getByRole("button", { name: /Change entry date/ }).click();
+  // From September back to May, before the other seed's June date.
+  for (let i = 0; i < 4; i += 1) {
+    await page.getByRole("button", { name: "Previous month" }).click();
+  }
+  await page.getByRole("gridcell", { name: "14", exact: true }).click();
+
+  await expect(page.getByTestId("save-status")).toHaveText("Saved");
+  await expect(page.getByTestId("entry-heading")).toContainText("May 14, 2026");
+  // Re-dated behind "First day back", it takes the last row — the list is
+  // chronology, so changing the date changes the order.
+  await expect(page.getByTestId("entry-row").last()).toContainText(
+    "Project ideas",
   );
 });

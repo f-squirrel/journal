@@ -101,6 +101,9 @@ fn merge(vault: &Vault, name: &BlobName, ours: &[u8], theirs: &[u8]) -> Result<(
             title: format!("{}{COPY_SUFFIX}", loser.header.title),
             // The copy sorts where the version it holds was written.
             updated_at: loser.header.updated_at,
+            // The same day the losing version was about: a conflicted copy is
+            // another take on one entry, not a new one written today.
+            entry_date: loser.header.entry_date,
         },
         markdown: loser.markdown,
     };
@@ -146,6 +149,7 @@ mod tests {
                 id,
                 title: title.to_owned(),
                 updated_at: Utc::now() - Duration::minutes(age_minutes),
+                entry_date: Utc::now() - Duration::minutes(age_minutes),
             },
             markdown: markdown.to_owned(),
         }

@@ -62,7 +62,31 @@ impl FromStr for Id {
 pub struct Header {
     pub id: Id,
     pub title: String,
+    /// When the entry was last written. The list does not sort by this.
     pub updated_at: DateTime<Utc>,
+    // Doc comments on these fields reach `src/bindings/` verbatim, so the
+    // reasoning stays here where ts-rs will not copy it.
+    //
+    // `entry_date` is the moment the entry is *about*, and is what the list
+    // sorts and groups by. Fixing a typo in a three-month-old entry moves
+    // `updated_at` and leaves this alone, so the entry keeps its place in the
+    // journal's chronology.
+    //
+    // An entry written before this field existed has no value on disk and
+    // takes `default_entry_date`. That is not the compatibility shim
+    // `CLAUDE.md` forbids: there is no format detection and no second code
+    // path, only the one current struct, and the entry's next save writes the
+    // field for good.
+    /// The day the entry is about, which is what the journal sorts by.
+    #[serde(default = "default_entry_date")]
+    pub entry_date: DateTime<Utc>,
+}
+
+/// serde cannot default one field from another, so an entry predating
+/// `entry_date` gets "now" rather than its `updated_at`. Backfilling the
+/// exact value would be a migration, which this app deliberately does not do.
+fn default_entry_date() -> DateTime<Utc> {
+    Utc::now()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -88,12 +112,31 @@ mod tests {
     #[test]
     fn frontend_json_deserializes_into_entry() {
         let json = r##"{"id":"5c1f7c9e-6e8b-4a2f-9c1a-1f6b9b6b0a01","title":"t",
-                       "updated_at":"2026-09-07T20:17:50Z","markdown":"# h"}"##;
+                       "updated_at":"2026-09-07T20:17:50Z",
+                       "entry_date":"2026-06-01T09:00:00Z","markdown":"# h"}"##;
 
         let entry: Entry = serde_json::from_str(json).unwrap();
 
         assert_eq!(entry.header.title, "t");
         assert_eq!(entry.markdown, "# h");
+        assert_eq!(
+            entry.header.entry_date,
+            "2026-06-01T09:00:00Z".parse::<DateTime<Utc>>().unwrap()
+        );
+    }
+
+    /// An entry blob written before `entry_date` existed. It parses into the
+    /// one current struct and takes a default rather than meeting a second
+    /// code path — see the field's doc comment.
+    #[test]
+    fn entry_without_entry_date_still_deserializes() {
+        let json = r##"{"id":"5c1f7c9e-6e8b-4a2f-9c1a-1f6b9b6b0a01","title":"t",
+                       "updated_at":"2026-09-07T20:17:50Z","markdown":"# h"}"##;
+
+        let before = Utc::now();
+        let entry: Entry = serde_json::from_str(json).unwrap();
+
+        assert!(entry.header.entry_date >= before);
     }
 
     /// The `list_entries`/`get_entry` direction. Rust names the wire
@@ -105,11 +148,14 @@ mod tests {
             id: "5c1f7c9e-6e8b-4a2f-9c1a-1f6b9b6b0a01".parse().unwrap(),
             title: "t".to_string(),
             updated_at: "2026-09-07T20:17:50Z".parse().unwrap(),
+            entry_date: "2026-06-01T09:00:00Z".parse().unwrap(),
         };
 
         let value = serde_json::to_value(&header).unwrap();
 
         assert!(value.get("updated_at").and_then(|v| v.as_str()).is_some());
         assert!(value.get("updatedAt").is_none());
+        assert!(value.get("entry_date").and_then(|v| v.as_str()).is_some());
+        assert!(value.get("entryDate").is_none());
     }
 }

@@ -44,17 +44,18 @@ export function formatWeekday(timestamp: string): string {
   return date.toLocaleDateString(undefined, { weekday: "short" });
 }
 
-/// Most-recently-updated first: the order `Vault::list_entries` returns, and
-/// the order `EntryList` renders.
+/// Most-recent entry date first: the order `Vault::list_entries` returns, and
+/// the order `EntryList` renders. Deliberately not `updated_at` — the list is
+/// the journal's chronology, so fixing a typo in an old entry must not move it.
 ///
-/// Parsed rather than compared as text. `Header.updated_at` is a chrono
+/// Parsed rather than compared as text. `Header.entry_date` is a chrono
 /// `DateTime<Utc>` serialized with `SecondsFormat::AutoSi`, so a whole-second
 /// timestamp emits `...:00Z` and a sub-second one `...:00.123Z` — and `"."`
 /// sorts before `"Z"`, making the later instant compare *less*. It is a
 /// one-in-a-thousand collision, which is what makes it worth avoiding: it
 /// would present as one entry stuck in the wrong place and never reproduce.
-export function byUpdatedAt(a: EntryHeader, b: EntryHeader): number {
-  return Date.parse(b.updated_at) - Date.parse(a.updated_at);
+export function byEntryDate(a: EntryHeader, b: EntryHeader): number {
+  return Date.parse(b.entry_date) - Date.parse(a.entry_date);
 }
 
 export interface EntryMonth {
@@ -71,7 +72,7 @@ export interface EntryMonth {
 export function groupByMonth(entries: EntryHeader[]): EntryMonth[] {
   const months: EntryMonth[] = [];
   for (const entry of entries) {
-    const date = new Date(entry.updated_at);
+    const date = new Date(entry.entry_date);
     const valid = !Number.isNaN(date.getTime());
     const key = valid ? `${date.getFullYear()}-${date.getMonth()}` : "unknown";
     const label = valid

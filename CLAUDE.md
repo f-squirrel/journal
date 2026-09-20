@@ -176,9 +176,19 @@ field-name mismatches — a class of bug neither the Playwright suite nor
     List rows carry a title and a time but no excerpt on purpose:
     `list_entries` returns headers without `markdown`, and filling
     excerpts would decrypt the whole journal to draw the list. Rows sort
-    and group by `updated_at`, the only timestamp an entry has, so an
-    edited entry moves to the top as it is typed; an entry date of its own
-    is the fix, and would be a model change.
+    and group by `entry_date` — the day the entry is *about* — and not by
+    `updated_at`, so fixing a typo in a three-month-old entry leaves it
+    where it belongs instead of dragging it to the top as it is typed.
+    `updated_at` is still the last write, which is what sync and the
+    resolver compare; it is no longer shown in the pane beyond a "last
+    edited" tooltip on the save status. The pane's date heading *is* the
+    date control: clicking it opens a `DateCalendar`
+    (`@mui/x-date-pickers`, with `date-fns` as its adapter, wired up as a
+    `LocalizationProvider` in `App.tsx`) and picking a day changes the day
+    while keeping the entry's time of day. A change there goes through
+    `autosave.noteChange` like a title edit, so the draft shape
+    (`hooks/useAutosave.ts` `Draft`) carries `entryDate` alongside
+    `title` and `markdown`.
   - **Editing is inline and autosaved** (`hooks/useAutosave.ts`): there is
     no Save button and no separate editor page. The hook keeps the live draft in a ref so its unmount cleanup can
     flush what was typed — which is also what a switch to another entry is,
@@ -226,7 +236,10 @@ field-name mismatches — a class of bug neither the Playwright suite nor
   under `crates/<name>/` as workspace members; `src-tauri` stays thin
   Tauri glue that wires up commands and manages app state (`src/lib.rs`).
   `crates/entry` (`journal-entry`) defines the `Entry` type — an
-  `id`/`title`/`updated_at` `Header` (flattened when serialized) plus
+  `id`/`title`/`updated_at`/`entry_date` `Header` (flattened when
+  serialized; `entry_date` takes a `#[serde(default)]` of "now", so an
+  entry written before the field existed parses into the one current
+  struct rather than meeting a migration) plus
   `markdown` — used by `journal-vault` and the Tauri commands.
   Rust names the wire format and the generated TypeScript follows, so
   these types stay `snake_case` on both sides (`updated_at`, not

@@ -7,6 +7,10 @@
 //! a [`BlobStore`] knows only where bytes live, and a
 //! [`Keyring`](journal_key::Keyring) only how to encrypt them (ADR 0009).
 
+mod backfill;
+
+pub use backfill::{BackfillMode, BackfillReport};
+
 use std::sync::Arc;
 
 use journal_entry::{Entry, Header, Id};
@@ -106,7 +110,10 @@ impl Vault {
         Self { store, cipher }
     }
 
-    /// Lists all entry headers, most recently updated first.
+    /// Lists all entry headers, most recent entry date first.
+    ///
+    /// By `entry_date`, not `updated_at`: the list is the journal's
+    /// chronology, so editing an old entry must not move it to the top.
     ///
     /// Entries that fail to decrypt or parse are skipped and logged rather
     /// than failing the whole call.
@@ -132,7 +139,7 @@ impl Vault {
                 }
             }
         }
-        headers.sort_by_key(|header| std::cmp::Reverse(header.updated_at));
+        headers.sort_by_key(|header| std::cmp::Reverse(header.entry_date));
         Ok(headers)
     }
 
@@ -191,7 +198,7 @@ mod tests {
     use std::sync::Mutex;
 
     /// A store in a directory no other test in this process will pick.
-    fn temp_store() -> Arc<FsStore> {
+    pub(crate) fn temp_store() -> Arc<FsStore> {
         static COUNTER: AtomicUsize = AtomicUsize::new(0);
         let n = COUNTER.fetch_add(1, Ordering::SeqCst);
         Arc::new(FsStore::new(
@@ -199,7 +206,7 @@ mod tests {
         ))
     }
 
-    fn discard(store: &FsStore) {
+    pub(crate) fn discard(store: &FsStore) {
         fs::remove_dir_all(store.dir()).ok();
     }
 
@@ -212,7 +219,7 @@ mod tests {
     /// Reversible without a key, so these tests cost no scrypt: a `Vault` over
     /// a real keyring pays ~0.4s to open, for coverage of entry naming,
     /// listing and serde that has nothing to do with cryptography.
-    struct FakeCipher;
+    pub(crate) struct FakeCipher;
 
     /// What makes `decrypt` fail for bytes this cipher did not write. Without a
     /// marker, XOR would happily "decrypt" a corrupt blob into garbage and the
@@ -235,16 +242,17 @@ mod tests {
     }
 
     /// A `Vault` whose entries are cheaply reversible rather than encrypted.
-    fn fake_vault(store: Arc<FsStore>) -> Vault {
+    pub(crate) fn fake_vault(store: Arc<FsStore>) -> Vault {
         Vault::with_cipher(store, Box::new(FakeCipher))
     }
 
-    fn sample(id: Id) -> Entry {
+    pub(crate) fn sample(id: Id) -> Entry {
         Entry {
             header: Header {
                 id,
                 title: "Test entry".to_string(),
                 updated_at: Utc::now(),
+                entry_date: Utc::now(),
             },
             markdown: "# hello".to_string(),
         }
@@ -346,14 +354,14 @@ mod tests {
     }
 
     #[test]
-    fn list_entries_is_most_recently_updated_first() {
+    fn list_entries_is_most_recent_entry_date_first() {
         let store = temp_store();
         let vault = fake_vault(store.clone());
 
         let old = Id::new();
         let new = Id::new();
         let mut older = sample(old);
-        older.header.updated_at = Utc::now() - chrono::Duration::hours(1);
+        older.header.entry_date = Utc::now() - chrono::Duration::hours(1);
         older.header.title = "older".to_string();
         let mut newer = sample(new);
         newer.header.title = "newer".to_string();
@@ -368,6 +376,61 @@ mod tests {
             .map(|h| h.title)
             .collect();
         assert_eq!(titles, ["newer", "older"]);
+        discard(&store);
+    }
+
+    /// The defect `entry_date` exists to fix: editing a months-old entry must
+    /// not drag it to the top of the journal.
+    #[test]
+    fn list_entries_ignores_updated_at() {
+        let store = temp_store();
+        let vault = fake_vault(store.clone());
+
+        let mut old = sample(Id::new());
+        old.header.title = "old".to_string();
+        old.header.entry_date = Utc::now() - chrono::Duration::days(90);
+        // Written a moment ago — the typo fix — but about a day in June.
+        old.header.updated_at = Utc::now();
+
+        let mut recent = sample(Id::new());
+        recent.header.title = "recent".to_string();
+        recent.header.entry_date = Utc::now();
+        recent.header.updated_at = Utc::now() - chrono::Duration::days(1);
+
+        vault.save_entry(&old).unwrap();
+        vault.save_entry(&recent).unwrap();
+
+        let titles: Vec<_> = vault
+            .list_entries()
+            .unwrap()
+            .into_iter()
+            .map(|h| h.title)
+            .collect();
+        assert_eq!(titles, ["recent", "old"]);
+        discard(&store);
+    }
+
+    /// Saving is a write, not a re-dating: the vault stores what it is given,
+    /// and what it is given keeps its `entry_date`.
+    #[test]
+    fn saving_an_entry_leaves_its_entry_date_alone() {
+        let store = temp_store();
+        let vault = fake_vault(store.clone());
+
+        let id = Id::new();
+        let mut entry = sample(id);
+        let entry_date = Utc::now() - chrono::Duration::days(30);
+        entry.header.entry_date = entry_date;
+        entry.header.updated_at = entry_date;
+        vault.save_entry(&entry).unwrap();
+
+        entry.markdown = "# edited".to_string();
+        entry.header.updated_at = Utc::now();
+        vault.save_entry(&entry).unwrap();
+
+        let stored = vault.get_entry(&id).unwrap().unwrap();
+        assert_eq!(stored.header.entry_date, entry_date);
+        assert!(stored.header.updated_at > entry_date);
         discard(&store);
     }
 

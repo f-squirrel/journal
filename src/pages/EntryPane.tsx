@@ -13,6 +13,7 @@ import {
   InputBase,
   Menu,
   MenuItem,
+  Popover,
   Stack,
   Typography,
   useMediaQuery,
@@ -25,6 +26,7 @@ import DeleteIcon from "@mui/icons-material/Delete";
 import EditIcon from "@mui/icons-material/Edit";
 import MoreHorizIcon from "@mui/icons-material/MoreHoriz";
 import VisibilityIcon from "@mui/icons-material/Visibility";
+import { DateCalendar } from "@mui/x-date-pickers/DateCalendar";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { HEADER_HEIGHT } from "../components/chrome";
@@ -32,7 +34,7 @@ import MarkdownEditor from "../components/MarkdownEditor";
 import { useAppState } from "../context/AppStateContext";
 import { useAutosave, type SaveStatus } from "../hooks/useAutosave";
 import { useNewEntry } from "../hooks/useNewEntry";
-import { formatEntryHeading, formatTime } from "../utils/date";
+import { formatAgo, formatEntryHeading, formatTime } from "../utils/date";
 import { errorMessage } from "../utils/errors";
 
 const STATUS_TEXT: Record<SaveStatus, string> = {
@@ -97,11 +99,15 @@ function EntryPane({ id, draft }: { id: string; draft: boolean }) {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState("");
-  // Stands in for `updated_at` until the draft's first save, so the date
-  // heading reads as today rather than as nothing.
+  // A new entry is about today until the user says otherwise. Computed once,
+  // so it is stable for the life of the pane.
   const [openedAt] = useState(() => new Date().toISOString());
+  // The entry's own date: what the heading shows, what the list sorts by, and
+  // the one field here the user edits without typing.
+  const [entryDate, setEntryDate] = useState(openedAt);
+  const [dateAnchor, setDateAnchor] = useState<HTMLElement | null>(null);
 
-  const autosave = useAutosave(id);
+  const autosave = useAutosave(id, { title: "", markdown: "", entryDate });
 
   useEffect(() => {
     if (draft) return;
@@ -118,6 +124,7 @@ function EntryPane({ id, draft }: { id: string; draft: boolean }) {
           setTitle(loaded.title);
           setMarkdown(loaded.markdown);
           setLoadedAt(loaded.updated_at);
+          setEntryDate(loaded.entry_date);
         }
         setLoading(false);
       })
@@ -157,12 +164,25 @@ function EntryPane({ id, draft }: { id: string; draft: boolean }) {
 
   function changeTitle(next: string) {
     setTitle(next);
-    autosave.noteChange({ title: next, markdown });
+    autosave.noteChange({ title: next, markdown, entryDate });
   }
 
   function changeMarkdown(next: string) {
     setMarkdown(next);
-    autosave.noteChange({ title, markdown: next });
+    autosave.noteChange({ title, markdown: next, entryDate });
+  }
+
+  /// Takes the day from the picker and keeps the time of day the entry
+  /// already had, so re-dating an entry does not also move it to midnight.
+  function changeEntryDate(day: Date | null) {
+    setDateAnchor(null);
+    if (!day || Number.isNaN(day.getTime())) return;
+    const next = new Date(entryDate);
+    next.setFullYear(day.getFullYear(), day.getMonth(), day.getDate());
+    const iso = next.toISOString();
+    setEntryDate(iso);
+    // The same path a title edit takes: an edit is an edit.
+    autosave.noteChange({ title, markdown, entryDate: iso });
   }
 
   function startEditing() {
@@ -190,7 +210,7 @@ function EntryPane({ id, draft }: { id: string; draft: boolean }) {
       // The entry is still on disk, so keep the dialog open and usable — and
       // re-arm the save that was cancelled on the way in.
       setDeleteError(errorMessage(err));
-      if (hadPendingSave) autosave.noteChange({ title, markdown });
+      if (hadPendingSave) autosave.noteChange({ title, markdown, entryDate });
       return;
     } finally {
       setDeleting(false);
@@ -198,7 +218,10 @@ function EntryPane({ id, draft }: { id: string; draft: boolean }) {
     navigate("/entries");
   }
 
-  const timestamp = autosave.savedAt ?? (loadedAt || openedAt);
+  // `updated_at`, which the heading no longer shows: the heading is the
+  // entry's date now, and when it was last written is a different fact. Kept
+  // as a tooltip on the save status rather than dropped.
+  const writtenAt = autosave.savedAt ?? loadedAt;
 
   return (
     <Stack sx={{ height: "100%", minHeight: 0 }}>
@@ -223,6 +246,9 @@ function EntryPane({ id, draft }: { id: string; draft: boolean }) {
         <Typography
           data-testid="save-status"
           variant="caption"
+          title={
+            writtenAt ? `Last edited ${formatAgo(writtenAt, Date.now())}` : ""
+          }
           color={autosave.status === "error" ? "error" : "text.secondary"}
         >
           {STATUS_TEXT[autosave.status]}
@@ -258,12 +284,47 @@ function EntryPane({ id, draft }: { id: string; draft: boolean }) {
             py: { xs: 3, sm: 5 },
           }}
         >
-          <Typography variant="h5" component="h1">
-            {formatEntryHeading(timestamp)}
-          </Typography>
+          {/* The heading is the entry's date, so it is also the control that
+              changes it — there is nowhere else in the pane it would belong. */}
+          <Button
+            data-testid="entry-heading"
+            aria-label={`Change entry date (${formatEntryHeading(entryDate)})`}
+            onClick={(event) => setDateAnchor(event.currentTarget)}
+            sx={{
+              p: 0,
+              minWidth: 0,
+              textAlign: "left",
+              display: "block",
+              color: "text.primary",
+              typography: "h5",
+              textTransform: "none",
+              "&:hover": {
+                bgcolor: "transparent",
+                textDecoration: "underline",
+              },
+            }}
+          >
+            {formatEntryHeading(entryDate)}
+          </Button>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-            {formatTime(timestamp)}
+            {formatTime(entryDate)}
           </Typography>
+
+          <Popover
+            open={dateAnchor !== null}
+            anchorEl={dateAnchor}
+            onClose={() => setDateAnchor(null)}
+            anchorOrigin={{ vertical: "bottom", horizontal: "left" }}
+          >
+            {/* No slide transition between months: it is noise in a popover
+                this small, and it keeps the month being left behind in the
+                DOM, where it shadows the one actually on screen. */}
+            <DateCalendar
+              value={new Date(entryDate)}
+              onChange={changeEntryDate}
+              reduceAnimations
+            />
+          </Popover>
 
           {mode === "edit" ? (
             <>

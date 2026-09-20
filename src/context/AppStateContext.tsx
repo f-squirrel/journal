@@ -15,7 +15,7 @@ import type {
   SyncStatusPayload,
 } from "../types";
 import { useIdleLock } from "../hooks/useIdleLock";
-import { byUpdatedAt } from "../utils/date";
+import { byEntryDate } from "../utils/date";
 import {
   deleteEntry as deleteEntryBackend,
   getEntry,
@@ -47,7 +47,12 @@ const SYNC_OFF: SyncStatusPayload = {
 };
 
 function toHeader(entry: JournalEntry): EntryHeader {
-  return { id: entry.id, title: entry.title, updated_at: entry.updated_at };
+  return {
+    id: entry.id,
+    title: entry.title,
+    updated_at: entry.updated_at,
+    entry_date: entry.entry_date,
+  };
 }
 
 /// A local save or delete, as the list should show it: `header` is `null` for a
@@ -222,7 +227,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         const ids = new Set(missed.map(([id]) => id));
         const merged = loaded.filter((header) => !ids.has(header.id));
         for (const [, m] of missed) if (m.header) merged.push(m.header);
-        setEntries(merged.sort(byUpdatedAt));
+        setEntries(merged.sort(byEntryDate));
       })
       .catch((err) => {
         if (cancelled) return;
@@ -386,7 +391,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         setEntries((prev) => {
           replaced = prev.find((e) => e.id === entry.id);
           return [header, ...prev.filter((e) => e.id !== entry.id)].sort(
-            byUpdatedAt,
+            byEntryDate,
           );
         });
         try {
@@ -397,7 +402,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
           setEntries((prev) => {
             const without = prev.filter((e) => e.id !== entry.id);
             return replaced
-              ? [replaced, ...without].sort(byUpdatedAt)
+              ? [replaced, ...without].sort(byEntryDate)
               : without;
           });
           throw err;
@@ -419,7 +424,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
             if (!removed) return prev;
             // Filtered first, so a re-added entry cannot end up duplicated.
             const without = prev.filter((entry) => entry.id !== id);
-            return [removed, ...without].sort(byUpdatedAt);
+            return [removed, ...without].sort(byEntryDate);
           });
           throw err;
         }

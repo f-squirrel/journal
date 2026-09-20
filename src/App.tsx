@@ -1,5 +1,7 @@
 import type { ReactNode } from "react";
 import { CssBaseline, ThemeProvider } from "@mui/material";
+import { LocalizationProvider } from "@mui/x-date-pickers/LocalizationProvider";
+import { AdapterDateFns } from "@mui/x-date-pickers/AdapterDateFns";
 import {
   HashRouter,
   Navigate,
@@ -61,11 +63,17 @@ function ThemedApp() {
   return (
     <ThemeProvider theme={getTheme(mode)}>
       <CssBaseline />
-      <AppStateProvider>
-        <HashRouter>
-          <AppRoutes />
-        </HashRouter>
-      </AppStateProvider>
+      {/* The entry pane's date picker needs this. date-fns is the adapter
+          because it is the one `@mui/x-date-pickers` supports that is plain
+          `Date` in and out — the app's timestamps are ISO strings, so no other
+          date type ever enters the codebase. */}
+      <LocalizationProvider dateAdapter={AdapterDateFns}>
+        <AppStateProvider>
+          <HashRouter>
+            <AppRoutes />
+          </HashRouter>
+        </AppStateProvider>
+      </LocalizationProvider>
     </ThemeProvider>
   );
 }

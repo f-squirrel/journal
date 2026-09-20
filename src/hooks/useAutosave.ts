@@ -15,8 +15,9 @@ export interface Autosave {
   /// follows the entry rather than showing what it said when it opened.
   /// Null until this pane has saved anything.
   savedAt: string | null;
-  /// Records an edit and schedules the write.
-  noteChange: (draft: { title: string; markdown: string }) => void;
+  /// Records an edit and schedules the write. `entryDate` travels with the
+  /// draft because changing the date is an edit like any other.
+  noteChange: (draft: Draft) => void;
   /// Writes now, without waiting out the debounce: the Retry action on a
   /// failed save, and the switch back to the rendered view, which must not
   /// show text the vault has not been given yet.
@@ -28,6 +29,15 @@ export interface Autosave {
   cancel: () => boolean;
 }
 
+/// What the pane holds and what a save writes, minus `updated_at` — that is
+/// the moment of the write itself, so `save` stamps it rather than the caller.
+export interface Draft {
+  title: string;
+  markdown: string;
+  /// ISO 8601, as it is on the wire and on disk.
+  entryDate: string;
+}
+
 /// Saves the draft as the user types, the way Day One does: there is no Save
 /// button, so no part of a session is lost by navigating away.
 ///
@@ -36,13 +46,17 @@ export interface Autosave {
 /// captured when the effect ran. The timers reach `save` through a ref for the
 /// same reason: `upsertEntry`'s identity changes with every `entries` update,
 /// so a timer keyed on it would be torn down by unrelated saves.
-export function useAutosave(id: string): Autosave {
+export function useAutosave(id: string, initialDraft: Draft): Autosave {
   const { upsertEntry, registerFlush } = useAppState();
   const [status, setStatus] = useState<SaveStatus>("idle");
   const [error, setError] = useState("");
   const [savedAt, setSavedAt] = useState<string | null>(null);
 
-  const draft = useRef({ title: "", markdown: "", dirty: false });
+  // Seeded rather than blank: a save triggered before the pane ever calls
+  // `noteChange` — the idle lock's flush, say — must still write the entry's
+  // own date and not an empty one. Only the first render's value is kept; the
+  // pane owns the draft from then on.
+  const draft = useRef({ ...initialDraft, dirty: false });
   const saving = useRef(false);
   /// Settles when the write in flight does; null when there is none. What
   /// `flush` waits on, since `save` itself returns at once if one is running.
@@ -61,7 +75,7 @@ export function useAutosave(id: string): Autosave {
     // reschedule, rather than racing two writes of the same entry.
     if (saving.current) return;
 
-    const { title, markdown } = draft.current;
+    const { title, markdown, entryDate } = draft.current;
     // An untouched draft is not an entry. Without this, opening "New entry"
     // and navigating away would leave an empty row in the journal.
     if (!title.trim() && !markdown.trim()) return;
@@ -78,6 +92,7 @@ export function useAutosave(id: string): Autosave {
         id,
         title: title.trim() || "Untitled entry",
         updated_at: updatedAt,
+        entry_date: entryDate,
         markdown,
       });
       setSavedAt(updatedAt);
@@ -107,7 +122,7 @@ export function useAutosave(id: string): Autosave {
   });
 
   const noteChange = useCallback(
-    (next: { title: string; markdown: string }) => {
+    (next: Draft) => {
       draft.current = { ...next, dirty: true };
       // "Saved" must not stay up over text that is not saved yet.
       setStatus((prev) => (prev === "saved" ? "idle" : prev));

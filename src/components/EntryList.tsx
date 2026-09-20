@@ -190,7 +190,7 @@ export default function EntryList({
                     <Typography
                       sx={{ fontSize: 20, fontWeight: 700, lineHeight: 1.15 }}
                     >
-                      {formatDayNumber(entry.updated_at)}
+                      {formatDayNumber(entry.entry_date)}
                     </Typography>
                     <Typography
                       sx={{
@@ -200,7 +200,7 @@ export default function EntryList({
                         opacity: 0.7,
                       }}
                     >
-                      {formatWeekday(entry.updated_at)}
+                      {formatWeekday(entry.entry_date)}
                     </Typography>
                   </Box>
                   <Box sx={{ minWidth: 0, flex: 1 }}>
@@ -209,7 +209,7 @@ export default function EntryList({
                     </Typography>
                     <Stack direction="row" alignItems="center" spacing={0.75}>
                       <Typography sx={{ fontSize: 12, opacity: 0.7 }}>
-                        {formatTime(entry.updated_at)}
+                        {formatTime(entry.entry_date)}
                       </Typography>
                       <SyncMark id={entry.id} />
                     </Stack>

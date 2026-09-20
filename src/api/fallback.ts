@@ -4,7 +4,7 @@ import type {
   ProviderInfo,
   SyncStatusPayload,
 } from "../types";
-import { byUpdatedAt } from "../utils/date";
+import { byEntryDate } from "../utils/date";
 
 // The browser fallback: an in-memory vault for `npm run dev` and the
 // Playwright suite, where there is no Rust backend to talk to.
@@ -22,6 +22,9 @@ const seedEntries: JournalEntry[] = [
     id: "5c1f7c9e-6e8b-4a2f-9c1a-1f6b9b6b0a01",
     title: "First day back",
     updated_at: "2026-09-01T08:15:00.000Z",
+    // Written up in September, but about a day in June: the pair that proves
+    // the list sorts and groups by `entry_date` and not by `updated_at`.
+    entry_date: "2026-06-12T07:30:00.000Z",
     markdown:
       "# First day back\n\nStarted journaling again. Feels good to write things down.\n\n- Coffee\n- Long walk\n- Read a chapter",
   },
@@ -29,13 +32,19 @@ const seedEntries: JournalEntry[] = [
     id: "8a2e4d3b-2b7a-4f1e-8c3d-2e7a4b1d0a02",
     title: "Project ideas",
     updated_at: "2026-09-03T19:42:00.000Z",
+    entry_date: "2026-09-02T21:05:00.000Z",
     markdown:
       "# Project ideas\n\nSome things I want to build:\n\n1. A journaling app\n2. A recipe tracker\n\n> Ideas are cheap, execution is everything.",
   },
 ];
 
 function toHeader(entry: JournalEntry): EntryHeader {
-  return { id: entry.id, title: entry.title, updated_at: entry.updated_at };
+  return {
+    id: entry.id,
+    title: entry.title,
+    updated_at: entry.updated_at,
+    entry_date: entry.entry_date,
+  };
 }
 
 // --- fault injection -------------------------------------------------------
@@ -159,7 +168,7 @@ export function listEntries(): Promise<EntryHeader[]> {
   // Read when the call starts, not when it answers: the real listing reads the
   // disk while a save can still land after it, and a slow listing that read
   // late would hide every race with one.
-  const headers = [...fallbackEntries.values()].map(toHeader).sort(byUpdatedAt);
+  const headers = [...fallbackEntries.values()].map(toHeader).sort(byEntryDate);
   return run("list", () => headers);
 }
 
@@ -222,6 +231,7 @@ const cloudEntry: JournalEntry = {
   id: "c3d9a1f4-7b2e-4c8a-9e5d-3f1a6b2c0d03",
   title: "Written on the laptop",
   updated_at: "2026-09-05T21:10:00.000Z",
+  entry_date: "2026-09-05T21:10:00.000Z",
   markdown: "# Written on the laptop\n\nThis one came from another device.",
 };
 
