@@ -1,6 +1,8 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
+mod export;
 mod sync;
 
+use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -198,6 +200,29 @@ async fn search_entries(
     blocking(move || vault.search(&query)).await
 }
 
+/// Writes every entry to `directory` as a plaintext markdown file
+/// (`export::to_directory`, which holds the rules about what folders it will
+/// take). The one command that deliberately puts unencrypted journal content on
+/// disk, so the frontend says so before it calls this.
+///
+/// Generic over the runtime only for the `AppHandle`, which is where the app's
+/// data directory — the one place an export must not land — is asked for.
+#[tauri::command]
+async fn export_entries<R: Runtime>(
+    app: tauri::AppHandle<R>,
+    state: State<'_, VaultState>,
+    directory: String,
+) -> Result<usize, String> {
+    let vault = vault(&state)?;
+    let app_data = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let count =
+        blocking(move || export::to_directory(&vault, Path::new(&directory), &app_data)).await?;
+    // The count and nothing else: not the folder, not a title. Nothing logged at
+    // `Info` may carry the journal, and the log file outlives the export.
+    log::info!("exported {count} entries as plaintext");
+    Ok(count)
+}
+
 /// The app's log sink. Without one installed, `log::warn!` anywhere in the
 /// workspace compiles down to nothing — notably the "skipped an entry that
 /// would not decrypt" warning in `journal_vault::list_entries`, which is
@@ -231,6 +256,9 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(logging_plugin())
         .plugin(tauri_plugin_opener::init())
+        // The folder picker for `export_entries`; see `capabilities/default.json`
+        // for the one command of it the webview may call.
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             has_vault,
             unlock,
@@ -240,6 +268,7 @@ pub fn run() {
             save_entry,
             delete_entry,
             search_entries,
+            export_entries,
             sync::list_providers,
             sync::connect_remote,
             sync::disconnect_remote,
@@ -400,14 +429,22 @@ mod tests {
     /// before `unlock` has to say so in words the user can act on — and over
     /// the real IPC wire, which is the half `Vault`'s own tests cannot see.
     ///
-    /// Search is in here with the listing because it is the one command that
-    /// reads *every* entry: a search answering over a locked vault would be
-    /// the whole journal, not one entry.
+    /// Search and export are in here with the listing because they are the
+    /// commands that read *every* entry: an export answering over a locked vault
+    /// would be the whole journal, in plaintext, on disk.
     #[test]
     fn commands_before_unlock_report_the_vault_as_locked() {
         let app = tauri::test::mock_builder()
-            .invoke_handler(tauri::generate_handler![list_entries, search_entries])
-            .build(context_allowing(&["list_entries", "search_entries"]))
+            .invoke_handler(tauri::generate_handler![
+                list_entries,
+                search_entries,
+                export_entries
+            ])
+            .build(context_allowing(&[
+                "list_entries",
+                "search_entries",
+                "export_entries",
+            ]))
             .expect("mock app builds");
         app.manage(VaultState {
             store: Arc::new(FsStore::new(
@@ -423,6 +460,10 @@ mod tests {
         for request in [
             request("list_entries", serde_json::json!({})),
             request("search_entries", serde_json::json!({ "query": "anything" })),
+            request(
+                "export_entries",
+                serde_json::json!({ "directory": "/nowhere" }),
+            ),
         ] {
             let cmd = request.cmd.clone();
             let response = tauri::test::get_ipc_response(&webview, request);
@@ -531,6 +572,73 @@ mod tests {
         assert_eq!(found.as_array().map(Vec::len), Some(0), "got {found}");
 
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// The wire contract of `export_entries`, as `src/api/entries.ts` calls it —
+    /// `invoke("export_entries", { directory })` — and the same reason for it as
+    /// the search test above: the argument name is hand-written on the frontend
+    /// and nothing else in the build checks it.
+    #[test]
+    fn export_entries_writes_into_the_directory_the_frontend_names() {
+        let app = tauri::test::mock_builder()
+            .invoke_handler(tauri::generate_handler![export_entries])
+            .build(context_allowing(&["export_entries"]))
+            .expect("mock app builds");
+
+        let (state, dir) = unlocked_state();
+        vault(&state)
+            .expect("the state is unlocked")
+            .save_entry(&Entry {
+                header: Header {
+                    id: Id::new(),
+                    title: "Tuesday".to_string(),
+                    updated_at: chrono::Utc::now(),
+                    entry_date: chrono::Utc::now(),
+                },
+                markdown: "A long walk by the river.".to_string(),
+            })
+            .expect("the entry saves");
+        app.manage(state);
+        let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("mock webview builds");
+
+        // Outside `dir`, which stands in for the app's data.
+        let out = std::env::temp_dir().join(format!("journal-export-cmd-{}", std::process::id()));
+        std::fs::create_dir_all(&out).unwrap();
+
+        let count = answered(tauri::test::get_ipc_response(
+            &webview,
+            request(
+                "export_entries",
+                serde_json::json!({ "directory": out.to_str().unwrap() }),
+            ),
+        ));
+
+        assert_eq!(count, 1);
+        let files: Vec<_> = std::fs::read_dir(&out).unwrap().collect();
+        assert_eq!(files.len(), 1);
+        let text = std::fs::read_to_string(files[0].as_ref().unwrap().path()).unwrap();
+        assert!(text.contains("A long walk by the river."), "got {text:?}");
+        assert!(text.contains("title: \"Tuesday\""), "got {text:?}");
+
+        // A second export into the now non-empty folder is refused, and the
+        // refusal reaches the frontend as the message the dialog shows.
+        let refused = tauri::test::get_ipc_response(
+            &webview,
+            request(
+                "export_entries",
+                serde_json::json!({ "directory": out.to_str().unwrap() }),
+            ),
+        )
+        .expect_err("a non-empty folder is refused");
+        assert!(
+            refused.as_str().is_some_and(|m| m.contains("not empty")),
+            "got {refused}"
+        );
+
+        std::fs::remove_dir_all(dir).ok();
+        std::fs::remove_dir_all(out).ok();
     }
 
     /// R1-2: `unlock` opens the vault with the guard free, so a `lock` — an

@@ -7,6 +7,7 @@ import CloudOffIcon from "@mui/icons-material/CloudOff";
 import CloudSyncIcon from "@mui/icons-material/CloudSync";
 import CloudUploadIcon from "@mui/icons-material/CloudUpload";
 import DarkModeIcon from "@mui/icons-material/DarkMode";
+import ExportIcon from "@mui/icons-material/FileDownload";
 import LightModeIcon from "@mui/icons-material/LightMode";
 import LogoutIcon from "@mui/icons-material/Logout";
 import SyncProblemIcon from "@mui/icons-material/SyncProblem";
@@ -17,6 +18,7 @@ import { useNewEntry } from "../hooks/useNewEntry";
 import { useNow } from "../hooks/useNow";
 import type { SyncState } from "../types";
 import { syncSummary } from "../utils/sync";
+import ExportDialog from "./ExportDialog";
 import SyncDialog from "./SyncDialog";
 import { HEADER_HEIGHT, SIDEBAR_WIDTH } from "./chrome";
 
@@ -120,6 +122,7 @@ export default function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const navigate = useNavigate();
   const newEntry = useNewEntry();
   const [syncOpen, setSyncOpen] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
 
   return (
     <Stack
@@ -165,6 +168,11 @@ export default function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
         <Stack alignItems="center" spacing={0.5}>
           <SyncButton onClick={() => setSyncOpen(true)} />
           <RailButton
+            label="Export journal"
+            icon={<ExportIcon fontSize="small" />}
+            onClick={() => setExportOpen(true)}
+          />
+          <RailButton
             label={mode === "dark" ? "Light mode" : "Dark mode"}
             icon={
               mode === "dark" ? (
@@ -186,6 +194,7 @@ export default function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
         </Stack>
       </Box>
       <SyncDialog open={syncOpen} onClose={() => setSyncOpen(false)} />
+      <ExportDialog open={exportOpen} onClose={() => setExportOpen(false)} />
     </Stack>
   );
 }

@@ -21,11 +21,13 @@ tauri-build = { workspace = true }
 tauri = { workspace = true }
 tauri-plugin-log = { workspace = true }
 tauri-plugin-opener = { workspace = true }
+tauri-plugin-dialog = { workspace = true }
 chrono = { workspace = true }
 log = { workspace = true }
 secrecy = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+thiserror = { workspace = true }
 url = { workspace = true }
 journal-entry = { path = "../crates/entry" }
 journal-vault = { path = "../crates/vault" }

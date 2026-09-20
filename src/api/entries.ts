@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
 import type { EntryHeader, JournalEntry, SearchMatch } from "../types";
 import { backend, fallback } from "./backend";
 
@@ -48,4 +49,29 @@ export async function deleteEntry(id: string): Promise<void> {
 export async function searchEntries(query: string): Promise<SearchMatch[]> {
   if (backend) return invoke("search_entries", { query });
   return (await fallback()).searchEntries(query);
+}
+
+/// The folder the user picks for an export, or `null` if they cancelled. The
+/// native picker is a Tauri plugin (`dialog:allow-open` is the only permission
+/// it is granted); outside Tauri the fallback answers with a made-up path,
+/// since a browser has no folder to hand back.
+export async function chooseExportDirectory(): Promise<string | null> {
+  if (backend) {
+    return open({
+      directory: true,
+      multiple: false,
+      title: "Choose an empty folder for the export",
+    });
+  }
+  return (await fallback()).chooseExportDirectory();
+}
+
+/// Writes every entry to `directory` as plaintext markdown and resolves to how
+/// many were written. **Unencrypted** — the one call here that puts the journal
+/// on disk in the clear — so callers say so before making it. Rejects with why
+/// the folder was refused (not empty, inside the app's data) or the write
+/// failed.
+export async function exportEntries(directory: string): Promise<number> {
+  if (backend) return invoke("export_entries", { directory });
+  return (await fallback()).exportEntries(directory);
 }

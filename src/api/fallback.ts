@@ -55,8 +55,8 @@ function toHeader(entry: JournalEntry): EntryHeader {
 //
 //   ?vault=new          hasVault() resolves false, giving the create-vault UI
 //   ?fail=<ops>         comma-separated: has, unlock, list, get, save, delete,
-//                       search, connect, sync, resolve (see "simulated sync"
-//                       below)
+//                       search, export, connect, sync, resolve (see
+//                       "simulated sync" below)
 //   ?failMessage=<text> the rejection message (default "Injected fault.")
 //   ?slow=<ops>         the named ops resolve after SLOW_MS
 //   ?sync=<mode>        start connected to a provider: on, conflict, busy,
@@ -73,6 +73,7 @@ type Op =
   | "save"
   | "delete"
   | "search"
+  | "export"
   | "connect"
   | "sync"
   | "resolve";
@@ -214,6 +215,32 @@ export function searchEntries(query: string): Promise<SearchMatch[]> {
           snippet: snippet(entry.markdown, needle),
         }));
   return run("search", () => matches);
+}
+
+/// What the native folder picker cannot be in a browser: a path to show, and
+/// nothing behind it.
+const EXPORT_DIRECTORY = "/home/you/Journal export";
+
+export function chooseExportDirectory(): Promise<string | null> {
+  return Promise.resolve(EXPORT_DIRECTORY);
+}
+
+/// Folders `exportEntries` was asked to write to, oldest first. Nothing is
+/// written anywhere; this is how the Playwright suite tells an export that
+/// ran from one that did not (`e2e/export.spec.ts`), which no page text can.
+const exportedTo: string[] = [];
+
+export function exportedDirectories(): readonly string[] {
+  return exportedTo;
+}
+
+/// Resolves the count `export_entries` would: every entry there is, since it
+/// writes the whole journal.
+export function exportEntries(directory: string): Promise<number> {
+  return run("export", () => {
+    exportedTo.push(directory);
+    return fallbackEntries.size;
+  });
 }
 
 /// SNIPPET_CHARS characters of the body around the first match, whitespace

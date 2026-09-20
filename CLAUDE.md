@@ -126,7 +126,7 @@ field-name mismatches — a class of bug neither the Playwright suite nor
     (`npm run dev`, Playwright) a **development** build serves the seeded
     in-memory vault in `src/api/fallback.ts`. That module also carries the
     fault-injection hook it parses once at load: `?fail=<ops>` (the ops
-    include `connect`, `sync` and `resolve`), `?failMessage=<text>`, `?slow=<ops>`,
+    include `export`, `connect`, `sync` and `resolve`), `?failMessage=<text>`, `?slow=<ops>`,
     `?vault=new` and `?sync=on|conflict|busy|reauth|key_mismatch` (`busy`:
     every pass fires `sync://changed`; the last two start halted, with the
     message the backend sends). Its listing reads the vault when called, not when it
@@ -163,7 +163,10 @@ field-name mismatches — a class of bug neither the Playwright suite nor
     label *is* the status ("2 changes not uploaded yet", `utils/sync.ts`)
     and it opens `components/SyncDialog.tsx`, where the account is
     connected, retried and disconnected (with a warning naming what has not
-    been uploaded). List rows carry a mark only when sync is connected and
+    been uploaded). The rail's "Export journal" button opens
+    `components/ExportDialog.tsx`: pick a folder with the native picker,
+    then a confirmation that names it and says the files are unencrypted,
+    and only then the write. List rows carry a mark only when sync is connected and
     the row is the exception — "Not uploaded yet", or a conflict — never on
     a synced row, and it must not make a row taller. `LoginPage` offers
     "Connect <provider>" to someone with no vault, which is how a second
@@ -362,6 +365,19 @@ field-name mismatches — a class of bug neither the Playwright suite nor
   their only caller — keep it that way, since a fresh key written over
   existing entries orphans all of them. `Keyring::exists` is public only
   so `has_vault` (and thus `LoginPage`) can pick its copy.
+  `src-tauri/src/export.rs` backs `export_entries(directory)`: one plaintext
+  `YYYY-MM-DD-slug.md` per entry (the *local* day of `entry_date`, the id
+  spliced in when two entries would share a name) with a YAML front matter
+  block of `id`, `title`, `entry_date` and `updated_at`, so a later import
+  can round-trip. It is the one place the app writes the journal
+  unencrypted, so: it takes only an existing, **empty** folder outside the
+  app's data directory, never overwrites (`create_new`), removes what it
+  wrote if it fails part-way (or the empty-folder rule would turn one
+  failed run into a permanent refusal), and its command logs a count and
+  nothing else — never a path or a title. It reads through `list_entries` +
+  `get_entry`, one entry's plaintext in memory at a time. A module, not a
+  crate: glue over the vault with no reusable core. The folder picker is
+  `tauri-plugin-dialog`, granted `dialog:allow-open` alone.
   `src-tauri/src/sync/` is the sync wiring, in six files: `mod.rs`
   (`SyncControl`, the connect/disconnect flow, the `list_providers`,
   `connect_remote(provider)`, `disconnect_remote`, `sync_now` and
@@ -436,7 +452,10 @@ field-name mismatches — a class of bug neither the Playwright suite nor
     which load Vite's `devUrl` — do not exercise it: check a CSP change
     against a packaged build, or a dev build with `devUrl` unset.
   - `capabilities/default.json` — Tauri's permission/capability grants for
-    the webview; extend this when adding new Tauri plugins or commands.
+    the webview; extend this when adding new Tauri plugins or commands. It
+    grants `core:default`, `opener:default` and `dialog:allow-open` (the
+    export folder picker — not the plugin's save, message or confirm
+    dialogs).
   - Logging goes through `tauri-plugin-log`, registered as
     `logging_plugin()` in `src/lib.rs`. Backend crates log with `log`
     (not `tracing`); the plugin routes `Stderr` to logcat on Android and

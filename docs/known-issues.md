@@ -75,7 +75,10 @@ happened:
 It does not happen in normal use. A device that connects from the login
 screen before creating a journal downloads the cloud's key.
 
-**Workaround.** Disconnect. To have this device join the cloud's journal
+**Workaround.** First, if this device's journal holds anything you want to
+keep, use "Export journal" in the rail to save it as plain markdown files
+(the sync button opens the sync dialog, so it is not blocked by the
+mismatch). Then disconnect. To have this device join the cloud's journal
 instead, quit the app, move this device's `entries/` directory out of the
 app's data directory (keep it: it is the only copy of anything written
 there), start the app, and connect from the login screen. Then unlock with the
