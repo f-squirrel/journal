@@ -1,4 +1,4 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "./coverage";
 
 // The export flow, over the fallback (`src/api/fallback.ts`), which has no
 // filesystem: choosing a folder answers with a made-up path and exporting

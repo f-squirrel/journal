@@ -34,3 +34,4 @@ yarn-error.log*
 
 # Coverage reports (make coverage)
 /coverage/
+/.nyc_output/

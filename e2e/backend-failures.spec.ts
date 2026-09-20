@@ -1,4 +1,4 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "./coverage";
 
 // Backend failures are invisible to the browser fallback by construction, so
 // these tests inject them from the URL (see the fault-injection block in

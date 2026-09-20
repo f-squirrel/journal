@@ -1,4 +1,4 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "./coverage";
 
 // The idle lock (`useIdleLock`, wired up in `AppStateProvider`) runs on a
 // 10 s timer, so these tests drive it with Playwright's fake clock rather than

@@ -1,4 +1,4 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "./coverage";
 
 // The sync UI, over the fallback's simulation of it (`src/api/fallback.ts`):
 // the same sequence the real backend produces — a save marks its entry

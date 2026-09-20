@@ -1,4 +1,4 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "./coverage";
 
 // The create-vault form is only reachable when there is no vault yet, which
 // never happens under the browser fallback on its own — so every case here

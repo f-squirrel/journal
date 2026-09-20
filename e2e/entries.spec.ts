@@ -1,4 +1,4 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "./coverage";
 
 // These tests run against the Vite dev server without Tauri's `invoke` bridge,
 // so the app falls back to its seeded in-memory entries (see

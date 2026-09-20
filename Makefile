@@ -1,4 +1,4 @@
-.PHONY: run build test rust-test test-e2e bindings check-bindings check-no-fallback format rust-format ts-format coverage-rust
+.PHONY: run build test rust-test test-e2e bindings check-bindings check-no-fallback format rust-format ts-format coverage-rust coverage-web
 
 # Regenerate first: launching the app against stale bindings is how a broken
 # `invoke` bridge stays invisible (`tsc` passes, the command fails at runtime).
@@ -85,3 +85,17 @@ coverage-rust:
 	  && mv coverage/rust.lcov.tmp coverage/rust.lcov
 	cargo $(COV_TOOLCHAIN) llvm-cov report --html \
 	  --output-dir coverage/rust-html --ignore-filename-regex '$(COV_IGNORE)'
+
+# Front-end line coverage of the Playwright suite, as lcov (for Codecov) and
+# HTML (for `coverage-open`). There are no front-end unit tests, so this is
+# what the e2e run exercises against the browser fallback, not the Rust
+# backend. `COVERAGE=1` makes the dev server instrument `src/` and
+# `e2e/coverage.ts` save each page's counters into .nyc_output/, which the
+# `nyc report` (configured in .nycrc.json) merges. Never instrument a build
+# for `check-no-fallback`: coverage only ever runs against the dev server.
+coverage-web:
+	rm -rf .nyc_output coverage/web-html coverage/web.lcov
+	mkdir -p coverage
+	COVERAGE=1 npm run test:e2e
+	npx nyc report
+	cp coverage/web-html/lcov.info coverage/web.lcov

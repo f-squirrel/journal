@@ -1,4 +1,4 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "./coverage";
 
 // Search runs against the browser fallback (`src/api/fallback.ts`), which
 // matches titles and bodies the way `Vault::search` does — so what these tests

@@ -1,0 +1,5 @@
+{
+  "reporter": ["lcovonly", "html", "text-summary"],
+  "report-dir": "coverage/web-html",
+  "temp-dir": ".nyc_output"
+}
