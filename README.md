@@ -88,7 +88,7 @@ when testing real application behavior.
 | `make test` | Run all Rust and Playwright tests |
 | `make rust-test` | Run the Rust workspace tests |
 | `make test-e2e` | Run the browser-based Playwright suite |
-| `make coverage` | Measure line coverage of the Rust and front-end tests and print the totals |
+| `make coverage` | Measure line coverage of the Rust and front-end tests and print the totals and the changed lines no test ran; quiet by default, `V=1` for the full output |
 | `make coverage-open` | Open the HTML coverage reports in the browser |
 | `npm run build` | Type-check and build the frontend |
 | `make bindings` | Regenerate TypeScript types from Rust wire types |

@@ -54,11 +54,17 @@ the user rather than assuming a migration must be written.
 - `make test` — the whole suite: `rust-test` then `test-e2e`, in that order.
 - `make coverage` — line coverage of both languages, written as lcov (what
   `.github/workflows/coverage.yml` uploads to Codecov, whose badge in the
-  README is the combined total) and as HTML; prints the Rust, web and total
-  percentages. Codecov gates the combined total (`codecov.yml`): it must stay
-  at or above 85% and not fall below the base commit's. Those are commit
-  statuses, so they block a merge only once `codecov/project/floor` and
-  `codecov/project/no-drop` are required in branch protection.
+  README is the combined total) and as HTML. **Quiet:** it prints only the
+  Rust, web and total percentages (with the change since the last local run),
+  the patch coverage, and the changed lines no test executed
+  (`scripts/coverage-summary.sh`; working tree against `COV_BASE`, default
+  `HEAD`). The full output is in `coverage/run.log`; `V=1` streams it. The
+  `coverage-check` skill runs it once after a feature — never two runs at
+  once, since the web half holds port 5183. Codecov gates the combined total
+  (`codecov.yml`): it must stay at or above 85% and not fall below the base
+  commit's. Those are commit statuses, so they block a merge only once
+  `codecov/project/floor` and `codecov/project/no-drop` are required in
+  branch protection.
   `make coverage-open` opens the two HTML reports;
   `coverage-rust` and `coverage-web` run one half. Output lands in
   `coverage/` (gitignored). Test code is left out of every report:
