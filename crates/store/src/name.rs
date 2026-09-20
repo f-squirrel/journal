@@ -83,6 +83,7 @@ impl fmt::Display for BlobName {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 

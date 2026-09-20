@@ -12,3 +12,6 @@ thiserror = { workspace = true }
 [dev-dependencies]
 # Only the tests need a concrete store; the crate itself speaks `BlobStore`.
 journal-fs-store = { path = "../fs-store" }
+
+[lints]
+workspace = true

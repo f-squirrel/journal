@@ -38,6 +38,8 @@
 //! [`SyncEngine::status`] reports which local changes have not reached the
 //! remote yet, for the UI's per-entry marks.
 
+#![cfg_attr(all(test, coverage_nightly), feature(coverage_attribute))]
+
 mod digest;
 mod engine;
 mod error;

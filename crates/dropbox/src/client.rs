@@ -50,6 +50,7 @@ impl<T: HttpClient> RefreshingClient<T> {
     /// A client that already holds an access token, with or without the means
     /// to renew it. Tests only: production always starts from a refresh token.
     #[cfg(test)]
+    #[cfg_attr(coverage_nightly, coverage(off))]
     pub(crate) fn seeded(transport: T, auth: Option<Authorization>, access: &str) -> Self {
         Self {
             transport,
@@ -136,6 +137,7 @@ impl<T: HttpClient> HttpClient for Unauthenticated<'_, T> {
 impl<T: HttpClient> NoauthClient for Unauthenticated<'_, T> {}
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use journal_remote::{RemoteError, RemoteStore};
     use serde_json::json;

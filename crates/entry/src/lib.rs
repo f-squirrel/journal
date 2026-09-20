@@ -1,3 +1,5 @@
+#![cfg_attr(all(test, coverage_nightly), feature(coverage_attribute))]
+
 mod sync;
 
 pub use sync::{ProviderInfo, SyncState, SyncStatusPayload};
@@ -124,6 +126,7 @@ pub struct SearchMatch {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 

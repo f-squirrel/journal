@@ -11,6 +11,8 @@
 //! file, so that "which account is connected" and "what it is logged in with"
 //! cannot disagree.
 
+#![cfg_attr(all(test, coverage_nightly), feature(coverage_attribute))]
+
 use std::fmt;
 use std::fs;
 use std::io::{self, Write};
@@ -239,6 +241,7 @@ fn restrict_to_owner(_file: &fs::File) -> io::Result<()> {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 

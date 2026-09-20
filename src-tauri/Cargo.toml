@@ -45,3 +45,6 @@ journal-dropbox = { path = "../crates/dropbox" }
 tauri = { workspace = true, features = ["test"] }
 # `MemoryRemote`, standing in for Dropbox in the sync wiring's tests.
 journal-remote = { path = "../crates/remote", features = ["testing"] }
+
+[lints]
+workspace = true

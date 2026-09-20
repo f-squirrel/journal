@@ -20,3 +20,6 @@ journal-remote = { path = "../remote", features = ["testing"] }
 # Only to check that `KEY_BLOB` still names the blob the key crate writes.
 journal-key = { path = "../key" }
 secrecy = { workspace = true }
+
+[lints]
+workspace = true

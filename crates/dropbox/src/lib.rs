@@ -21,9 +21,12 @@
 //! from its `dropbox_sdk::oauth2` target, so a logger configured for `debug`
 //! must keep that target at `info` or above.
 
+#![cfg_attr(all(test, coverage_nightly), feature(coverage_attribute))]
+
 mod auth;
 mod client;
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod fake;
 mod hash;
 mod remote;

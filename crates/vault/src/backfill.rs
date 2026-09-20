@@ -142,12 +142,14 @@ fn entry_date_missing_from(plaintext: &[u8]) -> Result<bool, ()> {
 
 /// The id a repaired blob belongs to, for tests that need to read one back.
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn parse_id(plaintext: &[u8]) -> Option<journal_entry::Id> {
     let value: Value = serde_json::from_slice(plaintext).ok()?;
     value.get("id")?.as_str()?.parse().ok()
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
     use crate::tests::{discard, fake_vault, temp_store, FakeCipher};

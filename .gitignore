@@ -31,3 +31,6 @@ yarn-error.log*
 !.vscode/extensions.json
 .idea/
 .DS_Store
+
+# Coverage reports (make coverage)
+/coverage/

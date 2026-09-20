@@ -29,6 +29,13 @@ url = "2"
 ts-rs = { version = "12", features = ["chrono-impl", "uuid-impl"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 
+# `coverage_nightly` is set by `cargo llvm-cov` on nightly, where the test
+# modules opt out of the report with `#[coverage(off)]` (unstable, so it sits
+# behind this cfg). Declaring it keeps stable builds from warning that the cfg
+# is unknown. Each member opts in with `[lints] workspace = true`.
+[workspace.lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage_nightly)'] }
+
 # scrypt is the vault's key-file KDF, and its cost is deliberately calibrated
 # in release (see `crates/vault`). Unoptimized it is ~40x slower, which turns a
 # 0.4s unlock into 17s in `cargo test` and `make run`. Optimize just the KDF's

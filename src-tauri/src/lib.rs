@@ -1,3 +1,5 @@
+#![cfg_attr(all(test, coverage_nightly), feature(coverage_attribute))]
+
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 mod export;
 mod sync;
@@ -334,6 +336,7 @@ pub fn run() {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
     use serde_json::Value;

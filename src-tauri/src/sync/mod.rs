@@ -22,6 +22,7 @@ pub mod status;
 pub mod worker;
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests;
 
 use std::path::PathBuf;

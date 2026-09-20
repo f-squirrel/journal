@@ -219,6 +219,7 @@ fn render(entry: &Entry) -> String {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};

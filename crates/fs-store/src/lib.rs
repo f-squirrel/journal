@@ -5,6 +5,8 @@
 //! concrete store, and a cloud backend arrives as a sibling crate rather than
 //! as a variant inside this one (ADR 0009).
 
+#![cfg_attr(all(test, coverage_nightly), feature(coverage_attribute))]
+
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -176,6 +178,7 @@ impl BlobStore for FsStore {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};

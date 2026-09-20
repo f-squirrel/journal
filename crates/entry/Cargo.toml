@@ -17,3 +17,6 @@ serde_json = { workspace = true }
 # so the codegen crate stays out of the shipped app binary; the generation
 # itself runs as `cargo test -p journal-entry --features ts`.
 ts = ["dep:ts-rs"]
+
+[lints]
+workspace = true

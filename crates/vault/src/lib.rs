@@ -7,6 +7,8 @@
 //! a [`BlobStore`] knows only where bytes live, and a
 //! [`Keyring`](journal_key::Keyring) only how to encrypt them (ADR 0009).
 
+#![cfg_attr(all(test, coverage_nightly), feature(coverage_attribute))]
+
 mod backfill;
 mod search;
 
@@ -258,6 +260,7 @@ fn holds_entries(store: &dyn BlobStore) -> Result<bool, VaultError> {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
     use chrono::Utc;

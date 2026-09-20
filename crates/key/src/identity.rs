@@ -151,6 +151,7 @@ fn unsealing_failure(e: age::DecryptError) -> KeyError {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
     use crate::testing::passphrase;

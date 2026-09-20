@@ -8,12 +8,15 @@
 //! [`Keyring::unlock`] — so entry encryption is sub-millisecond and carries no
 //! per-file work factor for another device to disagree about (ADR 0007).
 
+#![cfg_attr(all(test, coverage_nightly), feature(coverage_attribute))]
+
 mod cipher;
 mod error;
 mod identity;
 mod keyring;
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod testing;
 
 pub use cipher::Cipher;

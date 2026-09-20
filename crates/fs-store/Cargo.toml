@@ -5,3 +5,6 @@ edition = "2021"
 
 [dependencies]
 journal-store = { path = "../store" }
+
+[lints]
+workspace = true

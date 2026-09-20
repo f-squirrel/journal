@@ -161,6 +161,7 @@ fn parse(request_line: &str, expected_state: &str) -> Redirect {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 

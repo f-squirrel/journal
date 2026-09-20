@@ -1,4 +1,4 @@
-.PHONY: run build test rust-test test-e2e bindings check-bindings check-no-fallback format rust-format ts-format
+.PHONY: run build test rust-test test-e2e bindings check-bindings check-no-fallback format rust-format ts-format coverage-rust
 
 # Regenerate first: launching the app against stale bindings is how a broken
 # `invoke` bridge stays invisible (`tsc` passes, the command fails at runtime).
@@ -60,3 +60,28 @@ ts-format:
 	npm run format
 
 format: rust-format ts-format
+
+# Rust line coverage, as lcov (for Codecov) and HTML (for `coverage-open`),
+# from ONE test run: `--no-report` collects the profile, and each `report`
+# renders it. Needs nightly, because the test modules opt out of the report
+# with `#[coverage(off)]`, which is unstable (see `[workspace.lints.rust]` in
+# Cargo.toml); a plain `cargo test` stays on stable. The regex drops what is
+# test or build support and so not the app's own code: `tests/`, `examples/`,
+# `build.rs`, `MemoryRemote` (test support behind the `testing` feature) and
+# the `main.rs` shim. `clean` first, so a stale profile cannot leak in. The
+# lcov file's paths are made repo-relative, as Codecov expects.
+# One-time setup: `cargo binstall cargo-llvm-cov` and
+# `rustup component add llvm-tools-preview --toolchain nightly`.
+COV_TOOLCHAIN ?= +nightly
+COV_IGNORE := (^|/)(tests|examples|benches)/|(^|/)build\.rs$$|crates/remote/src/memory\.rs$$|src-tauri/src/main\.rs$$
+
+coverage-rust:
+	mkdir -p coverage
+	cargo $(COV_TOOLCHAIN) llvm-cov clean --workspace
+	cargo $(COV_TOOLCHAIN) llvm-cov --workspace --no-report
+	cargo $(COV_TOOLCHAIN) llvm-cov report --lcov \
+	  --output-path coverage/rust.lcov --ignore-filename-regex '$(COV_IGNORE)'
+	sed 's#^SF:$(CURDIR)/#SF:#' coverage/rust.lcov > coverage/rust.lcov.tmp \
+	  && mv coverage/rust.lcov.tmp coverage/rust.lcov
+	cargo $(COV_TOOLCHAIN) llvm-cov report --html \
+	  --output-dir coverage/rust-html --ignore-filename-regex '$(COV_IGNORE)'

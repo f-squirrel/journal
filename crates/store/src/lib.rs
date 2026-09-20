@@ -13,6 +13,8 @@
 //! blobs around needs no key at all. That is what a future sync engine is meant
 //! to be.
 
+#![cfg_attr(all(test, coverage_nightly), feature(coverage_attribute))]
+
 mod error;
 mod name;
 

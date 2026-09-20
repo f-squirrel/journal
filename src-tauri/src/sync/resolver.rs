@@ -121,6 +121,7 @@ fn same_text(a: &Entry, b: &Entry) -> bool {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::path::PathBuf;
     use std::sync::atomic::AtomicUsize;
