@@ -1,6 +1,6 @@
 # Journal
 
-[![codecov](https://codecov.io/gh/f-squirrel/journal/graph/badge.svg?token=REPLACE_ME)](https://codecov.io/gh/f-squirrel/journal)
+[![codecov](https://codecov.io/github/f-squirrel/journal/graph/badge.svg?token=HU66ORM11T)](https://codecov.io/github/f-squirrel/journal)
 
 A private, local-first journal with Markdown editing and encrypted storage.
 The interface is built with React and runs in a native
