@@ -307,6 +307,7 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::Value;
     use std::panic::AssertUnwindSafe;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -346,24 +347,67 @@ mod tests {
         assert_ne!(log::max_level(), log::LevelFilter::Off);
     }
 
+    /// The request the webview sends, with `args` as the argument object
+    /// `src/api/*.ts` builds for `invoke(cmd, args)`.
+    fn request(cmd: &str, args: serde_json::Value) -> tauri::webview::InvokeRequest {
+        tauri::webview::InvokeRequest {
+            cmd: cmd.into(),
+            callback: tauri::ipc::CallbackFn(0),
+            error: tauri::ipc::CallbackFn(1),
+            // The local origin, which is what the ACL allowances below match;
+            // it is spelled differently per platform.
+            url: if cfg!(any(windows, target_os = "android")) {
+                "http://tauri.localhost"
+            } else {
+                "tauri://localhost"
+            }
+            .parse()
+            .unwrap(),
+            body: tauri::ipc::InvokeBody::Json(args),
+            headers: Default::default(),
+            invoke_key: tauri::test::INVOKE_KEY.to_string(),
+        }
+    }
+
+    /// A command's successful response, parsed back out of the JSON the
+    /// bridge actually carried.
+    fn answered(response: Result<tauri::ipc::InvokeResponseBody, serde_json::Value>) -> Value {
+        match response.expect("the command succeeded") {
+            tauri::ipc::InvokeResponseBody::Json(json) => {
+                serde_json::from_str(&json).expect("a command answers with JSON")
+            }
+            tauri::ipc::InvokeResponseBody::Raw(_) => panic!("no command here answers with bytes"),
+        }
+    }
+
+    /// A mock context in which `commands` are allowed. A mock context carries
+    /// no ACL, and app commands are ACL-gated like any other: without this a
+    /// command is rejected before it runs and a test proves nothing about the
+    /// vault. `tauri-build` generates the equivalent allowance for the real
+    /// binary.
+    fn context_allowing(commands: &[&str]) -> tauri::Context<tauri::test::MockRuntime> {
+        let mut context = tauri::test::mock_context(tauri::test::noop_assets());
+        for command in commands {
+            context
+                .runtime_authority_mut()
+                .__allow_command((*command).into(), ExecutionContext::Local);
+        }
+        context
+    }
+
     /// The locked error crosses the bridge verbatim: `src/api/entries.ts`
     /// shows whatever string a command rejects with, so a command called
     /// before `unlock` has to say so in words the user can act on — and over
     /// the real IPC wire, which is the half `Vault`'s own tests cannot see.
+    ///
+    /// Search is in here with the listing because it is the one command that
+    /// reads *every* entry: a search answering over a locked vault would be
+    /// the whole journal, not one entry.
     #[test]
     fn commands_before_unlock_report_the_vault_as_locked() {
-        // A mock context carries no ACL, and app commands are ACL-gated like
-        // any other: without this the command is rejected before it runs and
-        // the test proves nothing about the vault. `tauri-build` generates
-        // the equivalent allowance for the real binary.
-        let mut context = tauri::test::mock_context(tauri::test::noop_assets());
-        context
-            .runtime_authority_mut()
-            .__allow_command("list_entries".into(), ExecutionContext::Local);
-
         let app = tauri::test::mock_builder()
-            .invoke_handler(tauri::generate_handler![list_entries])
-            .build(context)
+            .invoke_handler(tauri::generate_handler![list_entries, search_entries])
+            .build(context_allowing(&["list_entries", "search_entries"]))
             .expect("mock app builds");
         app.manage(VaultState {
             store: Arc::new(FsStore::new(
@@ -376,31 +420,117 @@ mod tests {
             .build()
             .expect("mock webview builds");
 
-        let response = tauri::test::get_ipc_response(
+        for request in [
+            request("list_entries", serde_json::json!({})),
+            request("search_entries", serde_json::json!({ "query": "anything" })),
+        ] {
+            let cmd = request.cmd.clone();
+            let response = tauri::test::get_ipc_response(&webview, request);
+            assert_eq!(
+                response.expect_err("a locked vault rejects"),
+                serde_json::json!(LOCKED_ERROR),
+                "{cmd} answered over a locked vault"
+            );
+        }
+    }
+
+    /// The wire contract of `search_entries`, asserted the way the frontend
+    /// actually calls it — `invoke("search_entries", { query })`.
+    ///
+    /// The argument *name* is the one part of a command nothing else in the
+    /// build checks. `tsc` catches a renamed field on a generated type, but
+    /// the argument object in `src/api/entries.ts` is hand-written; the
+    /// Playwright suite never crosses the bridge at all, because it runs
+    /// against the browser fallback. A mismatch here is a failure that
+    /// appears only in a packaged app, on the one feature whose whole job is
+    /// to read the journal.
+    #[test]
+    fn search_entries_answers_the_query_the_frontend_sends() {
+        let app = tauri::test::mock_builder()
+            .invoke_handler(tauri::generate_handler![search_entries])
+            .build(context_allowing(&["search_entries"]))
+            .expect("mock app builds");
+
+        let (state, dir) = unlocked_state();
+        // A body that holds the query under a title that does not: the case
+        // only a backend search can answer, over the real bridge this time.
+        vault(&state)
+            .expect("the state is unlocked")
+            .save_entry(&Entry {
+                header: Header {
+                    id: Id::new(),
+                    title: "Tuesday".to_string(),
+                    updated_at: chrono::Utc::now(),
+                    entry_date: chrono::Utc::now(),
+                },
+                markdown: "A long walk by the river.".to_string(),
+            })
+            .expect("the entry saves");
+        app.manage(state);
+
+        let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("mock webview builds");
+
+        let found = answered(tauri::test::get_ipc_response(
             &webview,
-            tauri::webview::InvokeRequest {
-                cmd: "list_entries".into(),
-                callback: tauri::ipc::CallbackFn(0),
-                error: tauri::ipc::CallbackFn(1),
-                // The local origin, which is what the ACL allowance above
-                // matches; it is spelled differently per platform.
-                url: if cfg!(any(windows, target_os = "android")) {
-                    "http://tauri.localhost"
-                } else {
-                    "tauri://localhost"
-                }
-                .parse()
-                .unwrap(),
-                body: tauri::ipc::InvokeBody::default(),
-                headers: Default::default(),
-                invoke_key: tauri::test::INVOKE_KEY.to_string(),
-            },
+            request("search_entries", serde_json::json!({ "query": "river" })),
+        ));
+
+        let matches = found.as_array().expect("search answers with a list");
+        assert_eq!(matches.len(), 1, "got {found}");
+        assert_eq!(matches[0]["header"]["title"], "Tuesday");
+        assert!(matches[0]["snippet"]
+            .as_str()
+            .expect("a snippet is a string")
+            .contains("river"));
+        // snake_case on the wire, which is what `src/bindings/SearchMatch.ts`
+        // promises the frontend it will find there.
+        assert!(
+            matches[0]["header"]["entry_date"].is_string(),
+            "got {found}"
         );
 
-        assert_eq!(
-            response.expect_err("a locked vault rejects"),
-            serde_json::json!(LOCKED_ERROR)
-        );
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// An empty query is not a request for the whole journal — the property
+    /// `Vault::search` holds, checked here because the frontend's debounce
+    /// can and does send one as a field is cleared.
+    #[test]
+    fn search_entries_answers_an_empty_query_with_nothing() {
+        let app = tauri::test::mock_builder()
+            .invoke_handler(tauri::generate_handler![search_entries])
+            .build(context_allowing(&["search_entries"]))
+            .expect("mock app builds");
+
+        let (state, dir) = unlocked_state();
+        vault(&state)
+            .expect("the state is unlocked")
+            .save_entry(&Entry {
+                header: Header {
+                    id: Id::new(),
+                    title: "Tuesday".to_string(),
+                    updated_at: chrono::Utc::now(),
+                    entry_date: chrono::Utc::now(),
+                },
+                markdown: "A long walk by the river.".to_string(),
+            })
+            .expect("the entry saves");
+        app.manage(state);
+
+        let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("mock webview builds");
+
+        let found = answered(tauri::test::get_ipc_response(
+            &webview,
+            request("search_entries", serde_json::json!({ "query": "  " })),
+        ));
+
+        assert_eq!(found.as_array().map(Vec::len), Some(0), "got {found}");
+
+        std::fs::remove_dir_all(dir).ok();
     }
 
     /// R1-2: `unlock` opens the vault with the guard free, so a `lock` — an
