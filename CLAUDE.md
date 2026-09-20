@@ -175,7 +175,20 @@ field-name mismatches — a class of bug neither the Playwright suite nor
     too.
     List rows carry a title and a time but no excerpt on purpose:
     `list_entries` returns headers without `markdown`, and filling
-    excerpts would decrypt the whole journal to draw the list. Rows sort
+    excerpts would decrypt the whole journal to draw the list. A **search
+    result** row does carry one line of the entry's text, which is a
+    different trade rather than a reversal of that one: it decrypts on
+    demand, for someone who asked a question, not on every render. The
+    search field sits under the list column's header and is the whole of
+    the search UI — `Ctrl`/`Cmd`-F focuses it from anywhere (the browser's
+    own find bar would only search the rendered DOM), Escape clears it,
+    and a non-empty query replaces the month sections with a flat result
+    list. The query and its results live in `AppStateContext`, debounced
+    ~200 ms, so they survive opening a result and are cleared by the lock
+    along with the decrypted titles. A *failed* search leaves
+    `searchResults` null on purpose: the journal stays on screen under the
+    error, because an empty pane would read as "nothing matched", which is
+    the one thing a failed search does not know. Rows sort
     and group by `entry_date` — the day the entry is *about* — and not by
     `updated_at`, so fixing a typo in a three-month-old entry leaves it
     where it belongs instead of dragging it to the top as it is typed.
@@ -292,8 +305,21 @@ field-name mismatches — a class of bug neither the Playwright suite nor
   entry *is*, and is what the rest of the app means by "the vault":
   `{id}.json` blob naming, serde, and the header sort. One encrypted
   blob per entry (see ADR 0003), exposed via the `list_entries`
-  (returns headers only)/`get_entry`/`save_entry`/`delete_entry`
-  commands. `Vault::open(store, passphrase)` owns the create-or-open
+  (returns headers only)/`get_entry`/`save_entry`/`delete_entry`/
+  `search_entries` commands. `Vault::search` (ADR 0014, with `search.rs`
+  holding the matching itself: case-insensitive substring over title and
+  markdown, and the snippet around the first hit) decrypts the journal on
+  **every call**
+  and keeps no index. That is measured, not assumed: over 1,000 entries a
+  search costs ~100 ms in a release build — the same ~100 ms `list_entries`
+  costs, since it decrypts every blob too, and the app already runs that on
+  every unlock and after every sync pass. An index would save a cost already
+  being paid, in exchange for invalidating it on every save, delete, lock
+  and entry sync pulls in *underneath* this layer. Do not add one without
+  evidence. Both commands share one enumerate-and-skip path
+  (`Vault::read_each`), so a blob that will not decrypt is skipped and
+  logged rather than failing either call.
+  `Vault::open(store, passphrase)` owns the create-or-open
   decision — creating a vault only when the store holds neither a key
   blob nor an entry blob, and refusing with `MissingKeyFile` when the key
   is gone but entries remain, so a lost key cannot silently orphan a

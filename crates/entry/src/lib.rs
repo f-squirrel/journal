@@ -101,6 +101,28 @@ pub struct Entry {
     pub markdown: String,
 }
 
+/// One entry a search matched, as the result row shows it.
+///
+/// A [`Header`] rather than an [`Entry`]: a result list that carried every
+/// matched entry's markdown would hand the frontend the plaintext of the whole
+/// journal for a one-letter query. The snippet is the only body text that
+/// crosses the bridge, and opening a result goes through `get_entry` like any
+/// other row.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "ts",
+    derive(ts_rs::TS),
+    ts(export, export_to = "../../../src/bindings/")
+)]
+#[serde(rename_all = "snake_case")]
+pub struct SearchMatch {
+    pub header: Header,
+    /// A window of the entry around the first match, whitespace collapsed so
+    /// it renders as one line. Empty for an entry matched on its title alone
+    /// with nothing written in it yet.
+    pub snippet: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

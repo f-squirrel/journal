@@ -102,6 +102,24 @@ test("typing counts as activity", async ({ page }) => {
   await locked(page);
 });
 
+/// Search is the one place the user types without an entry open, so a search
+/// field the idle timer did not watch would lock the vault mid-query.
+test("typing in the search field counts as activity", async ({ page }) => {
+  await login(page);
+  await page.getByLabel("Search entries").click();
+
+  await page.clock.runFor(6_000);
+  await page.keyboard.type("recipe");
+  await page.clock.runFor(6_000);
+  // Twelve seconds since login, but only six since the last keystroke — and
+  // the search behind them ran.
+  await unlocked(page);
+  await expect(page.getByTestId("entry-row")).toHaveCount(1);
+
+  await page.clock.runFor(5_000);
+  await locked(page);
+});
+
 test("an edit made before the lock is there after unlocking", async ({
   page,
 }) => {

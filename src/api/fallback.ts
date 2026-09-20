@@ -2,6 +2,7 @@ import type {
   EntryHeader,
   JournalEntry,
   ProviderInfo,
+  SearchMatch,
   SyncStatusPayload,
 } from "../types";
 import { byEntryDate } from "../utils/date";
@@ -54,7 +55,8 @@ function toHeader(entry: JournalEntry): EntryHeader {
 //
 //   ?vault=new          hasVault() resolves false, giving the create-vault UI
 //   ?fail=<ops>         comma-separated: has, unlock, list, get, save, delete,
-//                       connect, sync, resolve (see "simulated sync" below)
+//                       search, connect, sync, resolve (see "simulated sync"
+//                       below)
 //   ?failMessage=<text> the rejection message (default "Injected fault.")
 //   ?slow=<ops>         the named ops resolve after SLOW_MS
 //   ?sync=<mode>        start connected to a provider: on, conflict, busy,
@@ -70,6 +72,7 @@ type Op =
   | "get"
   | "save"
   | "delete"
+  | "search"
   | "connect"
   | "sync"
   | "resolve";
@@ -188,6 +191,43 @@ export function deleteEntry(id: string): Promise<void> {
     fallbackEntries.delete(id);
     markPending(id);
   });
+}
+
+/// The same matching `Vault::search` does, because the Playwright suite only
+/// ever sees this one: case-insensitive substring over the title and the body,
+/// an empty query matching nothing, results in the list's own order. A
+/// fallback that matched titles alone would let the frontend pass the test
+/// that exists to prove it does not have to.
+export function searchEntries(query: string): Promise<SearchMatch[]> {
+  const needle = query.trim().toLowerCase();
+  const matches = !needle
+    ? []
+    : [...fallbackEntries.values()]
+        .filter(
+          (entry) =>
+            entry.title.toLowerCase().includes(needle) ||
+            entry.markdown.toLowerCase().includes(needle),
+        )
+        .sort(byEntryDate)
+        .map((entry) => ({
+          header: toHeader(entry),
+          snippet: snippet(entry.markdown, needle),
+        }));
+  return run("search", () => matches);
+}
+
+/// SNIPPET_CHARS characters of the body around the first match, whitespace
+/// collapsed — `crates/vault/src/search.rs` in miniature.
+function snippet(markdown: string, needle: string): string {
+  const at = Math.max(0, markdown.toLowerCase().indexOf(needle));
+  const start = Math.max(0, at - 24);
+  const end = Math.min(markdown.length, start + 80);
+  const text = markdown
+    .slice(start, end)
+    .split(/\s+/)
+    .filter(Boolean)
+    .join(" ");
+  return `${start > 0 ? "…" : ""}${text}${end < markdown.length ? "…" : ""}`;
 }
 
 // --- simulated sync --------------------------------------------------------

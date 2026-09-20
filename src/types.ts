@@ -9,6 +9,7 @@
 // generated file names stay an implementation detail.
 export type { Header as EntryHeader } from "./bindings/Header";
 export type { Entry as JournalEntry } from "./bindings/Entry";
+export type { SearchMatch } from "./bindings/SearchMatch";
 export type { SyncStatusPayload } from "./bindings/SyncStatusPayload";
 export type { SyncState } from "./bindings/SyncState";
 export type { ProviderInfo } from "./bindings/ProviderInfo";

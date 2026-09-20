@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { EntryHeader, JournalEntry } from "../types";
+import type { EntryHeader, JournalEntry, SearchMatch } from "../types";
 import { backend, fallback } from "./backend";
 
 // Every call goes over `invoke` inside Tauri and to the in-memory fallback
@@ -39,4 +39,13 @@ export async function saveEntry(entry: JournalEntry): Promise<void> {
 export async function deleteEntry(id: string): Promise<void> {
   if (backend) return invoke("delete_entry", { id });
   return (await fallback()).deleteEntry(id);
+}
+
+/// Matches the query against every entry's title *and* body, which is why it
+/// is a command and not a filter over the headers the app already holds: those
+/// carry no markdown. The backend decrypts the journal to answer, so this is
+/// the slowest call here — callers debounce it.
+export async function searchEntries(query: string): Promise<SearchMatch[]> {
+  if (backend) return invoke("search_entries", { query });
+  return (await fallback()).searchEntries(query);
 }

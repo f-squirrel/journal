@@ -8,14 +8,16 @@
 //! [`Keyring`](journal_key::Keyring) only how to encrypt them (ADR 0009).
 
 mod backfill;
+mod search;
 
 pub use backfill::{BackfillMode, BackfillReport};
 
 use std::sync::Arc;
 
-use journal_entry::{Entry, Header, Id};
+use journal_entry::{Entry, Header, Id, SearchMatch};
 use journal_key::{Cipher, KeyError, Keyring};
 use journal_store::{BlobName, BlobStore, StoreError};
+use search::Query;
 use secrecy::SecretString;
 use thiserror::Error;
 
@@ -119,9 +121,77 @@ impl Vault {
     /// than failing the whole call.
     pub fn list_entries(&self) -> Result<Vec<Header>, VaultError> {
         let mut headers = Vec::new();
+        self.read_each::<Header>(|header| headers.push(header))?;
+        headers.sort_by_key(|header| std::cmp::Reverse(header.entry_date));
+        Ok(headers)
+    }
+
+    /// Every entry whose title or body contains `query`, most recent entry
+    /// date first — the order [`list_entries`](Self::list_entries) returns, so
+    /// results read as the journal filtered rather than as a second ranking.
+    ///
+    /// Case-insensitive substring, and nothing more — no regex, no ranking,
+    /// no stemming (`search.rs` holds the matching itself). The
+    /// query is matched against the title and the markdown together, which is
+    /// the whole point: `list_entries` returns headers without a body on
+    /// purpose, so a search the frontend could run on what it already has
+    /// could only ever match titles.
+    ///
+    /// **This decrypts the journal**, once per call, and holds one entry's
+    /// plaintext at a time. There is deliberately no index, and the measured
+    /// reason is that there is nothing to win: over 1,000 entries of ~1 kB a
+    /// search costs ~100 ms in a release build — the same ~100 ms
+    /// [`list_entries`](Self::list_entries) costs, since it decrypts every
+    /// blob too, and the app already runs that on every unlock and after every
+    /// sync pass. The ~1 s of scrypt is spent once, at unlock, on the key blob
+    /// alone.
+    ///
+    /// A cached index would therefore save a cost the app already pays, in
+    /// exchange for invalidating it on every save, every delete, every lock,
+    /// and every entry sync pulls in behind the vault's back — through the
+    /// store the engine writes *underneath* this layer, which cannot be
+    /// observed from in here. Correct results are worth more than that, until
+    /// there is a journal large enough to prove otherwise.
+    ///
+    /// Entries that fail to decrypt or parse are skipped, as in
+    /// [`list_entries`](Self::list_entries): one bad blob must not fail a
+    /// search any more than it fails a listing.
+    pub fn search(&self, query: &str) -> Result<Vec<SearchMatch>, VaultError> {
+        // An empty query matches nothing rather than everything: the caller
+        // that wants everything has `list_entries`, and the search field is
+        // empty far more often than it is not.
+        let Some(query) = Query::new(query) else {
+            return Ok(Vec::new());
+        };
+
+        let mut matches = Vec::new();
+        self.read_each::<Entry>(|entry| {
+            if query.matches(&entry.header.title) || query.matches(&entry.markdown) {
+                matches.push(SearchMatch {
+                    snippet: query.snippet(&entry.markdown),
+                    header: entry.header,
+                });
+            }
+        })?;
+        matches.sort_by_key(|m| std::cmp::Reverse(m.header.entry_date));
+        Ok(matches)
+    }
+
+    /// Hands `visit` every entry blob in the store, decoded, skipping the ones
+    /// that will not read.
+    ///
+    /// The one place entries are enumerated, so that skipping a corrupt blob
+    /// rather than failing the whole call is a property of the vault and not
+    /// of each caller that remembered it. Generic over the decoded shape for
+    /// the reason [`read`](Self::read) is: a listing wants headers and a
+    /// search wants bodies, out of the same bytes.
+    fn read_each<T: serde::de::DeserializeOwned>(
+        &self,
+        mut visit: impl FnMut(T),
+    ) -> Result<(), VaultError> {
         for name in self.store.list()?.into_iter().filter(is_entry) {
-            match self.read::<Header>(&name) {
-                Ok(Some(header)) => headers.push(header),
+            match self.read::<T>(&name) {
+                Ok(Some(decoded)) => visit(decoded),
                 // Listed a moment ago and gone now. Not an error — a delete
                 // racing a list is legitimate — but worth a line, because the
                 // alternative reading is a store losing blobs.
@@ -139,8 +209,7 @@ impl Vault {
                 }
             }
         }
-        headers.sort_by_key(|header| std::cmp::Reverse(header.entry_date));
-        Ok(headers)
+        Ok(())
     }
 
     pub fn get_entry(&self, id: &Id) -> Result<Option<Entry>, VaultError> {
@@ -431,6 +500,137 @@ mod tests {
         let stored = vault.get_entry(&id).unwrap().unwrap();
         assert_eq!(stored.header.entry_date, entry_date);
         assert!(stored.header.updated_at > entry_date);
+        discard(&store);
+    }
+
+    /// An entry whose text is `markdown`, dated `days_ago` so the ordering of
+    /// several of them is fixed rather than a race between two `Utc::now()`s.
+    fn entry(title: &str, markdown: &str, days_ago: i64) -> Entry {
+        let mut entry = sample(Id::new());
+        entry.header.title = title.to_string();
+        entry.header.entry_date = Utc::now() - chrono::Duration::days(days_ago);
+        entry.markdown = markdown.to_string();
+        entry
+    }
+
+    fn titles(matches: &[SearchMatch]) -> Vec<&str> {
+        matches.iter().map(|m| m.header.title.as_str()).collect()
+    }
+
+    /// The case a frontend-side search could never answer: `list_entries`
+    /// returns headers without a body, so matching the text of an entry is the
+    /// whole reason this lives in the backend.
+    #[test]
+    fn search_matches_the_body_of_an_entry_whose_title_does_not() {
+        let store = temp_store();
+        let vault = fake_vault(store.clone());
+        vault
+            .save_entry(&entry("Tuesday", "A long walk by the river.", 1))
+            .unwrap();
+        vault
+            .save_entry(&entry("Wednesday", "Stayed in and read.", 0))
+            .unwrap();
+
+        let found = vault.search("river").unwrap();
+
+        assert_eq!(titles(&found), ["Tuesday"]);
+        assert!(found[0].snippet.contains("river"), "{found:?}");
+        discard(&store);
+    }
+
+    #[test]
+    fn search_matches_a_title_too_and_ignores_case() {
+        let store = temp_store();
+        let vault = fake_vault(store.clone());
+        vault
+            .save_entry(&entry("Coffee with Sam", "Nothing else to add.", 0))
+            .unwrap();
+
+        assert_eq!(
+            titles(&vault.search("COFFEE").unwrap()),
+            ["Coffee with Sam"]
+        );
+        assert_eq!(titles(&vault.search("sAm").unwrap()), ["Coffee with Sam"]);
+        discard(&store);
+    }
+
+    /// An entry matched on both sides must appear once, not twice.
+    #[test]
+    fn an_entry_matching_in_both_places_is_one_result() {
+        let store = temp_store();
+        let vault = fake_vault(store.clone());
+        vault
+            .save_entry(&entry("Rain", "Rain all day.", 0))
+            .unwrap();
+
+        assert_eq!(vault.search("rain").unwrap().len(), 1);
+        discard(&store);
+    }
+
+    /// Results are the journal filtered, in the order the list shows it.
+    #[test]
+    fn search_results_are_most_recent_entry_date_first() {
+        let store = temp_store();
+        let vault = fake_vault(store.clone());
+        vault.save_entry(&entry("older", "a walk", 10)).unwrap();
+        vault.save_entry(&entry("newer", "a walk", 1)).unwrap();
+        vault.save_entry(&entry("oldest", "a walk", 90)).unwrap();
+
+        assert_eq!(
+            titles(&vault.search("walk").unwrap()),
+            ["newer", "older", "oldest"]
+        );
+        discard(&store);
+    }
+
+    /// The field is empty far more often than not, and the list already shows
+    /// everything: an empty query is not a request for the whole journal.
+    #[test]
+    fn an_empty_query_matches_nothing() {
+        let store = temp_store();
+        let vault = fake_vault(store.clone());
+        vault
+            .save_entry(&entry("Something", "Anything.", 0))
+            .unwrap();
+
+        assert!(vault.search("").unwrap().is_empty());
+        assert!(vault.search("   ").unwrap().is_empty());
+        discard(&store);
+    }
+
+    /// The same skip-and-warn the listing does: one bad blob must not cost the
+    /// user every result in the journal.
+    #[test]
+    fn search_skips_an_entry_that_will_not_decrypt() {
+        let store = temp_store();
+        let vault = fake_vault(store.clone());
+        vault.save_entry(&entry("Readable", "a walk", 0)).unwrap();
+        store
+            .put(&blob_name(&Id::new()), b"not valid ciphertext")
+            .unwrap();
+
+        assert_eq!(titles(&vault.search("walk").unwrap()), ["Readable"]);
+        discard(&store);
+    }
+
+    /// The search reads what is on disk now, with no index in front of it: an
+    /// entry saved a moment ago is findable, and a deleted one is not. The
+    /// property the "no cache" decision in `Vault::search` buys.
+    #[test]
+    fn search_sees_the_latest_save_and_not_a_deleted_entry() {
+        let store = temp_store();
+        let vault = fake_vault(store.clone());
+        let mut written = entry("Draft", "the first thing I wrote", 0);
+        vault.save_entry(&written).unwrap();
+        assert_eq!(vault.search("first thing").unwrap().len(), 1);
+
+        written.markdown = "rewritten entirely".to_string();
+        vault.save_entry(&written).unwrap();
+        assert!(vault.search("first thing").unwrap().is_empty());
+        assert_eq!(vault.search("rewritten").unwrap().len(), 1);
+
+        vault.delete_entry(&written.header.id).unwrap();
+        assert!(vault.search("rewritten").unwrap().is_empty());
         discard(&store);
     }
 

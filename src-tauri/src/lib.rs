@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use journal_credential::FileCredentialStore;
-use journal_entry::{Entry, Header, Id};
+use journal_entry::{Entry, Header, Id, SearchMatch};
 use journal_fs_store::FsStore;
 use journal_key::Keyring;
 use journal_store::BlobStore;
@@ -184,6 +184,20 @@ async fn delete_entry(state: State<'_, VaultState>, id: Id) -> Result<(), String
     blocking(move || vault.delete_entry(&id)).await
 }
 
+/// The slowest command in the app: it decrypts every entry in the journal
+/// (`Vault::search`, which explains why there is no index). That makes the
+/// `blocking` hop every command here makes matter more than anywhere else —
+/// on the main thread this would freeze the webview for the length of a
+/// keystroke's search.
+#[tauri::command]
+async fn search_entries(
+    state: State<'_, VaultState>,
+    query: String,
+) -> Result<Vec<SearchMatch>, String> {
+    let vault = vault(&state)?;
+    blocking(move || vault.search(&query)).await
+}
+
 /// The app's log sink. Without one installed, `log::warn!` anywhere in the
 /// workspace compiles down to nothing — notably the "skipped an entry that
 /// would not decrypt" warning in `journal_vault::list_entries`, which is
@@ -225,6 +239,7 @@ pub fn run() {
             get_entry,
             save_entry,
             delete_entry,
+            search_entries,
             sync::list_providers,
             sync::connect_remote,
             sync::disconnect_remote,
