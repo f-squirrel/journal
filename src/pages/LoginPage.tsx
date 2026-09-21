@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Alert,
@@ -43,6 +43,10 @@ export default function LoginPage() {
   // Joining a journal that already lives in the cloud (see `joinFrom`).
   const [joining, setJoining] = useState<string | null>(null);
   const [notice, setNotice] = useState("");
+  // The passphrase input, for putting the cursor back after a disabled control
+  // has dropped focus (see `handleSubmit` and `joinFrom`). Mount-time focus is
+  // the `autoFocus` prop on the field, not this ref.
+  const passphraseInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -99,6 +103,10 @@ export default function LoginPage() {
       setError(String(err));
     } finally {
       setJoining(null);
+      // The button just clicked was disabled while `joining`, and a disabled
+      // control drops focus to the body. The form has either turned into a
+      // sign-in or stayed a create form; either way the passphrase is next.
+      passphraseInput.current?.focus();
     }
   }
 
@@ -154,6 +162,14 @@ export default function LoginPage() {
       // Shown verbatim: the backend's `#[error]` strings are the user-facing
       // copy, so there is no mapping table here to fall out of step with them.
       setError(String(err));
+      // Back to the field, text selected so retyping replaces it: the submit
+      // button was disabled while `submitting`, which dropped focus to the
+      // body. Done on any failure, not only a wrong passphrase, which is
+      // simpler than telling them apart and harmless. The input itself is
+      // never disabled, so it can take focus before the `finally` re-enables
+      // the button.
+      passphraseInput.current?.focus();
+      passphraseInput.current?.select();
       // Asked again because the answer can change under the form: a journal
       // arriving from the cloud mid-create turns it into a sign-in, and a
       // form still asking for a new passphrase would send the next attempt
@@ -219,6 +235,11 @@ export default function LoginPage() {
               type="password"
               value={password}
               onChange={(event) => setPassword(event.target.value)}
+              // Focused on mount, which covers first launch and every return to
+              // this route (idle lock, log out). Safe while `pending`: the
+              // field is live then, typing early is deliberate.
+              autoFocus
+              inputRef={passphraseInput}
               autoComplete={
                 pending
                   ? "off"
