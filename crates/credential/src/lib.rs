@@ -93,6 +93,20 @@ impl Credential {
             ..self
         }
     }
+
+    /// The same credential for `account`, or `None` if the provider handed
+    /// back something that cannot be stored on one line.
+    ///
+    /// The fallible sibling of [`Self::with_account`], which panics: the
+    /// panicking form is for the crate's own `&'static str` ids, this one for
+    /// anything that came off a network or off disk.
+    pub fn try_with_account(self, account: impl Into<String>) -> Option<Self> {
+        let account = account.into();
+        is_one_line(&account).then(|| Self {
+            account: Some(account),
+            ..self
+        })
+    }
 }
 
 fn is_one_line(s: &str) -> bool {
@@ -172,8 +186,16 @@ impl CredentialStore for FileCredentialStore {
         let token = lines.next().filter(|line| !line.is_empty());
         let account = lines.next().filter(|line| !line.is_empty());
         let rest = lines.find(|line| !line.is_empty());
+        // Validated before constructing: `str::lines` strips a `\r` only
+        // before a `\n` and `trim` only at the ends, so an interior one reaches
+        // the constructors' asserts, and a damaged file must be an error, not
+        // a panic (release builds abort).
         let credential = match (provider, token, rest) {
-            (Some(provider), Some(token), None) => {
+            (Some(provider), Some(token), None)
+                if is_one_line(provider)
+                    && is_one_line(token)
+                    && account.is_none_or(is_one_line) =>
+            {
                 let credential = Credential::new(provider, RefreshToken::new(token));
                 Some(match account {
                     Some(account) => credential.with_account(account),
@@ -362,6 +384,44 @@ mod tests {
         // Nor is a file with more lines than any version wrote.
         fs::write(store.path(), "dropbox\ntoken\naccount\nmore").unwrap();
         assert!(store.load().is_err());
+    }
+
+    #[test]
+    fn a_file_with_an_interior_carriage_return_is_rejected_not_a_panic() {
+        let store = store();
+        store.save(&credential("dropbox", "x")).unwrap();
+
+        // Provider, token and account in turn: `lines` leaves each of these
+        // whole, and `trim` cannot reach the `\r` in the middle.
+        for damaged in [
+            "drop\rbox\nrefresh-1\n",
+            "dropbox\nrefresh\r-1\n",
+            "dropbox\nrefresh-1\ndbid\r:A\n",
+        ] {
+            fs::write(store.path(), damaged).unwrap();
+
+            let error = store.load().unwrap_err().to_string();
+
+            assert!(error.contains("connect again"), "{damaged:?}: {error}");
+        }
+    }
+
+    #[test]
+    fn try_with_account_refuses_an_unusable_id() {
+        for bad in ["", "   ", "dbid:\rA", "dbid:\nA"] {
+            assert!(
+                credential("dropbox", "refresh-1")
+                    .try_with_account(bad)
+                    .is_none(),
+                "{bad:?}"
+            );
+        }
+
+        let ok = credential("dropbox", "refresh-1")
+            .try_with_account("dbid:A")
+            .unwrap();
+        assert_eq!(ok.account.as_deref(), Some("dbid:A"));
+        assert_eq!(ok.token.expose(), "refresh-1");
     }
 
     #[cfg(unix)]
