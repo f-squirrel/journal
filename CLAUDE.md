@@ -321,9 +321,19 @@ field-name mismatches — a class of bug neither the Playwright suite nor
   and the encrypted on-disk payload, so renaming a field changes the
   on-disk format too.
   `crates/store` (`journal-store`) defines the `BlobStore` trait — named
-  opaque byte blobs (`get`/`put`/`delete`/`list`/`contains`) — and
+  opaque byte blobs (`get`/`put`/`put_new`/`delete`/`list`/`contains`) — and
   `BlobName`, the validated newtype its methods take, so a name cannot
-  address anything outside the store. It holds no implementation:
+  address anything outside the store. `put_new` is the create-only write
+  (`StoreError::AlreadyExists` if the name is taken): `contains` + `put`
+  cannot tell a caller it was the one that created a blob, because the sync
+  engine writes the same directory from its own thread, so `Keyring::create`
+  uses it for the key. The trait's default body *is* that racy pair, so a
+  store that can create exclusively must override it — `FsStore` does (a
+  `hard_link` of a synced temp file, falling back to `create_new` on the
+  final path where links are unsupported or denied, which is exclusive too
+  but leaves a truncated blob if a crash lands mid-write) and so does
+  `NotifyingStore`, which forwards it and notifies. It holds no
+  implementation:
   `crates/fs-store` (`journal-fs-store`) is the local one, one file per
   blob in a directory. Every layer above depends on the trait crate; only
   `src-tauri` names a concrete store, and the crates between reach for

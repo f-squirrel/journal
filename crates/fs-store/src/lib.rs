@@ -75,6 +75,67 @@ impl FsStore {
         file.sync_all()
     }
 
+    /// [`put_new`](BlobStore::put_new) with the link step passed in, so a test
+    /// can stand in for a filesystem that refuses hard links — there is no
+    /// portable way to make a real one do that.
+    fn put_new_with(
+        &self,
+        name: &BlobName,
+        bytes: &[u8],
+        link: impl Fn(&Path, &Path) -> std::io::Result<()>,
+    ) -> Result<(), StoreError> {
+        fs::create_dir_all(&self.dir)?;
+        let temp = self.temp_path(name);
+        if let Err(e) = self.write_temp(&temp, bytes) {
+            // Not a link problem, so no fallback: the disk is what refused.
+            fs::remove_file(&temp).ok();
+            return Err(e.into());
+        }
+        let linked = link(&temp, &self.path(name));
+        // The scratch file goes either way: on success the blob has its real
+        // name, on failure nothing was created.
+        fs::remove_file(&temp).ok();
+        match linked {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                return Err(StoreError::AlreadyExists(name.as_str().to_owned()));
+            }
+            // The name is free as far as the link can tell; it just cannot
+            // make one. If the directory is unwritable for real, this fails
+            // the same way and reports that instead.
+            Err(_) => self.create_in_place(name, bytes)?,
+        }
+        self.sync_dir();
+        Ok(())
+    }
+
+    /// Creates the blob under its real name, exclusively and without a scratch
+    /// file. The fallback for a filesystem with no hard links; see
+    /// [`put_new`](BlobStore::put_new) on what it gives up.
+    fn create_in_place(&self, name: &BlobName, bytes: &[u8]) -> Result<(), StoreError> {
+        let path = self.path(name);
+        let mut file = match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(file) => file,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                return Err(StoreError::AlreadyExists(name.as_str().to_owned()));
+            }
+            Err(e) => return Err(e.into()),
+        };
+        if let Err(e) = file.write_all(bytes).and_then(|()| file.sync_all()) {
+            // `create_new` succeeded, so this file is ours to remove — and a
+            // half-written blob under its real name is what `list` would hand
+            // up as one.
+            drop(file);
+            fs::remove_file(&path).ok();
+            return Err(e.into());
+        }
+        Ok(())
+    }
+
     /// Syncs the directory, so a new name in it survives a crash. Best-effort:
     /// not every platform lets a directory be opened for sync.
     fn sync_dir(&self) {
@@ -142,24 +203,18 @@ impl BlobStore for FsStore {
     /// `AlreadyExists` if the name is there, atomically, on both POSIX and
     /// NTFS — and the content is written and synced first, so this keeps the
     /// durability [`put`](FsStore::put)'s doc comment argues for.
+    ///
+    /// Not every place a store can live has hard links (FAT and exFAT, some
+    /// network mounts) or lets an app make them (a sandbox policy). When the
+    /// link fails for any reason other than the name being taken, this falls
+    /// back to creating the blob in place with `create_new`, which is just as
+    /// exclusive but writes under the real name: a crash part-way through
+    /// leaves a truncated blob where the link would have left none. That is
+    /// the trade for a store that works at all, and it is acceptable because
+    /// the one caller writes the vault key at creation, when there are no
+    /// entries yet to lose with it.
     fn put_new(&self, name: &BlobName, bytes: &[u8]) -> Result<(), StoreError> {
-        fs::create_dir_all(&self.dir)?;
-        let temp = self.temp_path(name);
-        let link = self
-            .write_temp(&temp, bytes)
-            .and_then(|()| fs::hard_link(&temp, self.path(name)));
-        // The scratch file goes either way: on success the blob has its real
-        // name, on failure nothing was created.
-        fs::remove_file(&temp).ok();
-        match link {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                return Err(StoreError::AlreadyExists(name.as_str().to_owned()));
-            }
-            Err(e) => return Err(e.into()),
-        }
-        self.sync_dir();
-        Ok(())
+        self.put_new_with(name, bytes, |from, to| fs::hard_link(from, to))
     }
 
     fn delete(&self, name: &BlobName) -> Result<(), StoreError> {
@@ -308,6 +363,66 @@ mod tests {
                 .ends_with(TEMP_EXT)),
             "a scratch file was left in the store"
         );
+        fs::remove_dir_all(store.dir()).ok();
+    }
+
+    /// A filesystem with no hard links, or a policy that denies them.
+    fn no_links(_: &Path, _: &Path) -> std::io::Result<()> {
+        Err(std::io::ErrorKind::Unsupported.into())
+    }
+
+    #[test]
+    fn put_new_falls_back_when_links_are_unsupported() {
+        let store = temp_store();
+
+        store
+            .put_new_with(&name("a.json"), b"hello", no_links)
+            .unwrap();
+
+        assert_eq!(store.get(&name("a.json")).unwrap().unwrap(), b"hello");
+        assert_eq!(store.list().unwrap(), [name("a.json")]);
+        assert!(
+            !fs::read_dir(store.dir()).unwrap().any(|f| f
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .ends_with(TEMP_EXT)),
+            "a scratch file was left in the store"
+        );
+        fs::remove_dir_all(store.dir()).ok();
+    }
+
+    /// The fallback trades crash durability, not exclusivity: it must still
+    /// refuse a name that is taken, and leave what is there alone.
+    #[test]
+    fn the_fallback_still_refuses_a_name_that_is_taken() {
+        let store = temp_store();
+        store.put(&name("a.json"), b"first").unwrap();
+
+        let err = store
+            .put_new_with(&name("a.json"), b"second", no_links)
+            .unwrap_err();
+
+        assert!(matches!(err, StoreError::AlreadyExists(_)), "got {err:?}");
+        assert_eq!(store.get(&name("a.json")).unwrap().unwrap(), b"first");
+        fs::remove_dir_all(store.dir()).ok();
+    }
+
+    /// Only a link that fails for some other reason falls back. One that says
+    /// the name is taken has answered the question, and creating the blob
+    /// anyway would be a second attempt at what it just refused.
+    #[test]
+    fn a_taken_name_from_the_link_is_not_retried_in_place() {
+        let store = temp_store();
+
+        let err = store
+            .put_new_with(&name("a.json"), b"hello", |_, _| {
+                Err(std::io::ErrorKind::AlreadyExists.into())
+            })
+            .unwrap_err();
+
+        assert!(matches!(err, StoreError::AlreadyExists(_)), "got {err:?}");
+        assert!(store.get(&name("a.json")).unwrap().is_none());
         fs::remove_dir_all(store.dir()).ok();
     }
 
