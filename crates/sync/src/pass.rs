@@ -335,9 +335,9 @@ impl<'a> Pass<'a> {
                     };
                     // If the write landed (Drive), `current` is our own bytes
                     // and `theirs` is what they overwrote. Otherwise the two are
-                    // the same.
-                    let theirs = theirs.map_or_else(|| current.0.clone(), |(bytes, _)| bytes);
-                    return self.conflict(name, local, current, theirs);
+                    // the same, and `conflict` is not given them twice.
+                    let overwritten = theirs.map(|(bytes, _)| bytes);
+                    return self.conflict(name, local, current, overwritten);
                 }
                 Err(e) => return Err(e.into()),
             }
@@ -446,24 +446,32 @@ impl<'a> Pass<'a> {
         let Some(current) = self.engine.remote.get(name)? else {
             return self.push(name, local, None);
         };
-        let theirs = current.0.clone();
-        self.conflict(name, local, current, theirs)
+        self.conflict(name, local, current, None)
     }
 
     /// `ours` and the remote disagree about `name`. `current` is what the
-    /// remote holds now and `theirs` the other device's version — the same
-    /// bytes, unless the remote overwrote them (see [`Parked`]).
+    /// remote holds now. `overwritten` is `Some` only on a backend that wrote
+    /// before it checked (Drive), where the other device's version is no
+    /// longer what a `get` returns (see [`Parked`]); `None` means `current`
+    /// *is* the other device's version.
     fn conflict(
         &mut self,
         name: &BlobName,
         ours: &Local,
         current: (Vec<u8>, Revision),
-        theirs: Vec<u8>,
+        overwritten: Option<Vec<u8>>,
     ) -> Result<Outcome, SyncError> {
         let (current_bytes, rev) = current;
         let remote_hash = Digest::of(&current_bytes);
+        let (theirs, theirs_hash) = match overwritten {
+            Some(bytes) => {
+                let hash = Digest::of(&bytes);
+                (bytes, hash)
+            }
+            None => (current_bytes, remote_hash),
+        };
 
-        if Digest::of(&theirs) == ours.digest {
+        if theirs_hash == ours.digest {
             // Both sides made the same change: nothing to resolve. The remote
             // may still hold something else (the overwrite case), in which case
             // the local bytes are a change to push.
