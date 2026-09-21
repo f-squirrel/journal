@@ -295,6 +295,11 @@ field-name mismatches — a class of bug neither the Playwright suite nor
     wrong. Read mode renders with `react-markdown` + `remark-gfm` into
     `.markdown-body` (`index.css`; the two rules that need the palette,
     link colour and image sizing, are `sx` on the container instead).
+    Links are overridden (`components.a`) to open in the user's browser
+    through `openUrl`, never in the webview: the window has no address bar,
+    so a plain `<a>` would navigate the app off the journal. There is
+    deliberately no `on_navigation` handler as well — a `tauri://` scheme
+    test is wrong on Windows and Android, which serve `http://tauri.localhost`.
     Edit mode is `components/MarkdownEditor.tsx`, a CodeMirror 6 surface
     holding the raw markdown with its syntax styled as it is typed —
     headings large, quotes italic, marks muted — so no serializer ever
