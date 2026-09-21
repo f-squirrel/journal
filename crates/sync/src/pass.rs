@@ -8,7 +8,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use journal_remote::{Change, Cursor, Precondition, RemoteError, Revision};
-use journal_store::BlobName;
+use journal_store::{BlobName, StoreError};
 
 use crate::digest::Digest;
 use crate::engine::{Outcome, KEY_BLOB};
@@ -195,29 +195,10 @@ impl<'a> Pass<'a> {
     fn sync_name(&mut self, name: &BlobName, view: &RemoteView) -> Result<Outcome, SyncError> {
         let local = self.read_local(name)?;
 
-        // D5, structurally: the key is never merged, and a pass that disagrees
-        // about it must change nothing. `conflict()` enforced this in one place,
-        // which is only reached when the remote moved — every other arm below
-        // would happily push, or delete, the one key every entry is sealed to.
+        // Its own table: the key is never merged, never deleted and never
+        // parked, so none of the arms below apply to it.
         if name.as_str() == KEY_BLOB {
-            let base = self.state.bases.get(name).cloned();
-            match (&local, view.theirs(name, base.as_ref())) {
-                (Some(local), _) if base.as_ref().is_some_and(|b| b.hash != local.digest) => {
-                    return Err(SyncError::KeyMismatch);
-                }
-                // Compare rather than pull: identical bytes record a base, and
-                // different ones reach `conflict`, which returns KeyMismatch.
-                (Some(local), Theirs::Edited { rev, hash }) => {
-                    return self.compare(name, local, rev, hash);
-                }
-                // Gone there: the key is the only thing that makes the remote
-                // journal readable, so restore it rather than follow the
-                // deletion (D4 applied to the key).
-                (Some(local), Theirs::Removed) => return self.push(name, local, None),
-                // Gone locally: never propagate that as a remote deletion.
-                (None, Theirs::Same) if base.is_some() => return Ok(Outcome::Skipped),
-                _ => {}
-            }
+            return self.sync_key(name, local, view);
         }
 
         if self.state.parked.contains_key(name) {
@@ -252,6 +233,69 @@ impl<'a> Pass<'a> {
                 // must not lose text.
                 _ => self.push(name, &local, None),
             },
+        }
+    }
+
+    /// What to do with the key blob, which is not an ordinary one (D5).
+    ///
+    /// It is never merged, and a pass that disagrees about it must change
+    /// nothing: the key is the one thing every entry is sealed to, so an upload
+    /// of a replaced key, or a deletion, would make the whole journal
+    /// unreadable on every device. The rules that differ from `sync_name`'s
+    /// table, all in one place so it can be read against it:
+    ///
+    /// - a local key that is not the one last synced is a mismatch, and stops
+    ///   the pass (`conflict` enforces the same when the remote moved, but is
+    ///   only reached then);
+    /// - a remote edit is compared, never pulled over the local key;
+    /// - a remote deletion is undone, not followed — without the key the
+    ///   remote journal cannot be read, and neither can this one;
+    /// - a local deletion is undone, not pushed — the remote copy is what
+    ///   brings the key back.
+    ///
+    /// Only the key has a table of its own, so the arms it shares with the main
+    /// one (nothing changed; created here, or arrived there) are spelled out
+    /// rather than delegated.
+    fn sync_key(
+        &mut self,
+        name: &BlobName,
+        local: Option<Local>,
+        view: &RemoteView,
+    ) -> Result<Outcome, SyncError> {
+        let base = self.state.bases.get(name).cloned();
+        match (local, view.theirs(name, base.as_ref())) {
+            (Some(local), _) if base.as_ref().is_some_and(|b| b.hash != local.digest) => {
+                Err(SyncError::KeyMismatch)
+            }
+            (Some(_), Theirs::Same) if base.is_some() => Ok(Outcome::Synced),
+            (Some(local), Theirs::Same | Theirs::Removed) => self.push(name, &local, None),
+            // Identical bytes record a base; different ones reach `conflict`,
+            // which returns KeyMismatch.
+            (Some(local), Theirs::Edited { rev, hash }) => self.compare(name, &local, rev, hash),
+            (None, Theirs::Same) if base.is_none() => Ok(Outcome::Synced),
+            (None, Theirs::Same | Theirs::Edited { .. }) => self.restore_key(name),
+            (None, Theirs::Removed) => {
+                self.state.forget(name)?;
+                Ok(Outcome::Synced)
+            }
+        }
+    }
+
+    /// Brings the remote's key here, where there is none.
+    ///
+    /// Created rather than written over: a key can appear locally between the
+    /// read that found none and this write (first-run creation seals for about
+    /// a second), and replacing it would leave the entries it has sealed
+    /// unreadable. If one did, the next pass compares it with the base and
+    /// stops on a mismatch.
+    fn restore_key(&mut self, name: &BlobName) -> Result<Outcome, SyncError> {
+        let Some((bytes, rev)) = self.engine.remote.get(name)? else {
+            return Ok(Outcome::Skipped);
+        };
+        match self.engine.local.put_new(name, &bytes) {
+            Ok(()) => self.record_pulled(name, &bytes, rev),
+            Err(StoreError::AlreadyExists(_)) => Ok(Outcome::Skipped),
+            Err(e) => Err(e.into()),
         }
     }
 
@@ -313,9 +357,19 @@ impl<'a> Pass<'a> {
             return Ok(Outcome::Skipped);
         };
         self.engine.local.put(name, &bytes)?;
+        self.record_pulled(name, &bytes, rev)
+    }
+
+    /// `bytes` are in the local store: the remote's `rev` is what they match.
+    fn record_pulled(
+        &mut self,
+        name: &BlobName,
+        bytes: &[u8],
+        rev: Revision,
+    ) -> Result<Outcome, SyncError> {
         let base = Base {
             rev,
-            hash: Digest::of(&bytes),
+            hash: Digest::of(bytes),
         };
         self.state.record(name, base)?;
         self.report.pulled += 1;

@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use common::*;
 use journal_remote::{ConflictMode, MemoryRemote, RemoteError, RemoteStore};
-use journal_sync::{SyncError, SyncErrorKind, SyncReport, KEY_BLOB};
+use journal_sync::{SyncEngine, SyncError, SyncErrorKind, SyncReport, KEY_BLOB};
 
 const BOTH_MODES: [ConflictMode; 2] = [ConflictMode::Atomic, ConflictMode::DetectAfterWrite];
 
@@ -403,7 +403,7 @@ fn a_replaced_key_is_not_uploaded() {
 }
 
 #[test]
-fn a_locally_deleted_key_is_not_deleted_remotely() {
+fn a_locally_deleted_key_is_restored_not_deleted_remotely() {
     use journal_store::BlobStore;
 
     let remote = Arc::new(MemoryRemote::new());
@@ -415,14 +415,77 @@ fn a_locally_deleted_key_is_not_deleted_remotely() {
     a.store.delete(&n(KEY_BLOB)).unwrap();
     a.reopen();
 
-    a.sync();
+    // The remote's copy is what brings the key back: without it the entries
+    // that survived (or arrive) cannot be opened.
+    let report = a.sync();
+    assert_eq!(report.pulled, 1);
+    assert_eq!(a.read(KEY_BLOB).unwrap(), b"the key");
     assert_eq!(remote_snapshot(&*remote), remote_before);
-    assert_eq!(remote.get(&n(KEY_BLOB)).unwrap().unwrap().0, b"the key");
     assert_eq!(a.read("a.json").unwrap(), b"entry a");
-    assert_eq!(a.read(KEY_BLOB), None);
 
-    // Nothing changes on the passes after it, either.
-    a.sync();
+    // And it is an ordinary synced key afterwards.
+    assert_eq!(a.sync(), SyncReport::default());
+    assert_eq!(remote_snapshot(&*remote), remote_before);
+}
+
+mod racy {
+    use journal_fs_store::FsStore;
+    use journal_store::{BlobName, BlobStore, StoreError};
+
+    /// An [`FsStore`] that finds a key already there whenever it is asked to
+    /// create one, as if first-run creation had written its own since the pass
+    /// looked.
+    pub struct KeyAppearsFirst(pub FsStore);
+
+    impl BlobStore for KeyAppearsFirst {
+        fn get(&self, name: &BlobName) -> Result<Option<Vec<u8>>, StoreError> {
+            self.0.get(name)
+        }
+        fn put(&self, name: &BlobName, bytes: &[u8]) -> Result<(), StoreError> {
+            self.0.put(name, bytes)
+        }
+        fn put_new(&self, name: &BlobName, _bytes: &[u8]) -> Result<(), StoreError> {
+            self.0.put(name, b"a key created here")?;
+            Err(StoreError::AlreadyExists(name.as_str().to_owned()))
+        }
+        fn delete(&self, name: &BlobName) -> Result<(), StoreError> {
+            self.0.delete(name)
+        }
+        fn list(&self) -> Result<Vec<BlobName>, StoreError> {
+            self.0.list()
+        }
+        fn contains(&self, name: &BlobName) -> Result<bool, StoreError> {
+            self.0.contains(name)
+        }
+    }
+}
+
+#[test]
+fn a_restored_key_does_not_replace_one_created_meanwhile() {
+    use journal_store::BlobStore;
+
+    let remote = Arc::new(MemoryRemote::new());
+    let a = synced_with_key(&remote);
+    let remote_before = remote_snapshot(&*remote);
+
+    a.store.delete(&n(KEY_BLOB)).unwrap();
+    let store = racy::KeyAppearsFirst(a.store.clone());
+    let engine = SyncEngine::open(
+        Arc::new(store),
+        remote.clone(),
+        a.state_path(),
+        Box::new(|_| {}),
+    )
+    .unwrap();
+
+    // The pass leaves the key that is there alone, and does not upload it.
+    engine.sync_once(&NoConflicts).unwrap();
+    assert_eq!(a.read(KEY_BLOB).unwrap(), b"a key created here");
+    assert_eq!(remote_snapshot(&*remote), remote_before);
+
+    // Which the next pass sees is not the key it last synced.
+    let err = engine.sync_once(&NoConflicts).unwrap_err();
+    assert!(matches!(err, SyncError::KeyMismatch), "{err:?}");
     assert_eq!(remote_snapshot(&*remote), remote_before);
 }
 
