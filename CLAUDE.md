@@ -444,7 +444,8 @@ field-name mismatches — a class of bug neither the Playwright suite nor
   block of `id`, `title`, `entry_date` and `updated_at`, so a later import
   can round-trip. It is the one place the app writes the journal
   unencrypted, so: it takes only an existing, **empty** folder outside the
-  app's data directory, never overwrites (`create_new`), removes what it
+  app's data directory, never overwrites (`create_new`), writes each file
+  `0600` on Unix (owner only, whatever the umask), removes what it
   wrote if it fails part-way (or the empty-folder rule would turn one
   failed run into a permanent refusal), and its command logs a count and
   nothing else — never a path or a title. It reads through `list_entries` +

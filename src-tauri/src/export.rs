@@ -14,6 +14,8 @@ use std::cmp::Reverse;
 use std::collections::HashSet;
 use std::fs;
 use std::io::{self, Write};
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Local, NaiveDate, SecondsFormat, Utc};
@@ -111,10 +113,15 @@ fn write_entries(
             // `create_new` so that overwriting is impossible even if a name
             // somehow repeats, rather than merely unlikely. Recorded before the
             // write so a write that fails half-way is cleaned up too.
-            let mut file = fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&path)?;
+            let mut options = fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            // Plaintext journal: readable by its owner and nobody else, whatever
+            // the umask and whatever the chosen folder allows. The dialog
+            // promises "anyone that can read this folder"; 0644 is more people
+            // than that. Windows has no equivalent here.
+            #[cfg(unix)]
+            options.mode(0o600);
+            let mut file = options.open(&path)?;
             written.push(path);
             file.write_all(render(&entry).as_bytes())?;
         }
@@ -491,6 +498,31 @@ mod tests {
 
         assert_eq!(to_directory(&vault, &out.0, &home.0).unwrap(), 0);
         assert!(names(&out.0).is_empty());
+    }
+
+    /// The files are the whole journal in plaintext, so they are the owner's
+    /// alone whatever the umask: a default `create` would give 0644 under the
+    /// usual 022.
+    #[cfg(unix)]
+    #[test]
+    fn exported_files_are_readable_by_their_owner_alone() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let home = Scratch::new("home");
+        let out = Scratch::new("out");
+        let a = entry("First", "2026-09-02T12:00:00Z", "one");
+        let b = entry("Second", "2026-09-03T12:00:00Z", "two");
+        let vault = vault_with(&home, &[&a, &b]);
+
+        assert_eq!(to_directory(&vault, &out.0, &home.0).unwrap(), 2);
+
+        for name in names(&out.0) {
+            let mode = fs::metadata(out.0.join(&name))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o600, "{name} is mode {:o}", mode & 0o777);
+        }
     }
 
     /// The reason for the cleanup: without it a failed export leaves a folder
