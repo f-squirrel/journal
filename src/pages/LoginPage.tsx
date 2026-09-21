@@ -154,6 +154,14 @@ export default function LoginPage() {
       // Shown verbatim: the backend's `#[error]` strings are the user-facing
       // copy, so there is no mapping table here to fall out of step with them.
       setError(String(err));
+      // Asked again because the answer can change under the form: a journal
+      // arriving from the cloud mid-create turns it into a sign-in, and a
+      // form still asking for a new passphrase would send the next attempt
+      // at a key sealed under another one. Best-effort — the error above is
+      // what the user needs, and a rejection leaves the form as it was.
+      hasVault()
+        .then(setVaultExists)
+        .catch(() => {});
     } finally {
       // In a `finally` because `login` now rejects: re-enabling the button
       // only on the way out of the `try` strands the user on this screen

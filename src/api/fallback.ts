@@ -54,6 +54,10 @@ function toHeader(entry: JournalEntry): EntryHeader {
 // `invoke` bridge, so backend failures have to be injectable from the URL:
 //
 //   ?vault=new          hasVault() resolves false, giving the create-vault UI
+//   ?vault=arrives      the same, but the journal's key arrives from the cloud
+//                       while the first unlock is creating one: that unlock
+//                       rejects with the backend's message, and hasVault()
+//                       resolves true from then on
 //   ?fail=<ops>         comma-separated: has, unlock, list, get, save, delete,
 //                       search, export, connect, sync, resolve (see
 //                       "simulated sync" below)
@@ -82,6 +86,7 @@ const SLOW_MS = 1200;
 
 interface Faults {
   newVault: boolean;
+  keyArrives: boolean;
   fail: Set<Op>;
   failMessage: string;
   slow: Set<Op>;
@@ -103,7 +108,8 @@ function parseFaults(search: string): Faults {
   const ops = (value: string | null) =>
     new Set((value ?? "").split(",").filter(Boolean) as Op[]);
   return {
-    newVault: params.get("vault") === "new",
+    newVault: ["new", "arrives"].includes(params.get("vault") ?? ""),
+    keyArrives: params.get("vault") === "arrives",
     fail: ops(params.get("fail")),
     failMessage: params.get("failMessage") ?? "Injected fault.",
     slow: ops(params.get("slow")),
@@ -153,6 +159,11 @@ export function hasVault(): Promise<boolean> {
 
 export function unlockVault(_passphrase: string): Promise<void> {
   return run("unlock", () => {
+    if (faults.keyArrives && !vaultPresent) {
+      // `KeyError::KeyArrivedWhileCreating`, as `Keyring::create` reports it.
+      vaultPresent = true;
+      throw "This journal already exists — it arrived from the cloud while yours was being created. Sign in with the passphrase you chose when you first created it, not the new one.";
+    }
     locked = false;
     // As `unlock` kicks a pass in Rust: a parked conflict waits for the key.
     if (connected && conflicted.size > 0) schedulePass();

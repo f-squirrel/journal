@@ -126,3 +126,21 @@ test("an unanswered vault check blocks a programmatic submit", async ({
     0,
   );
 });
+
+// A journal arriving from the cloud mid-create turns the form into a sign-in.
+// Left as a create form it would send the next attempt, with the new
+// passphrase, at a key sealed under the other device's — and "Incorrect
+// passphrase." would read as the app having mangled what was just chosen.
+test("a journal that arrives while creating turns the form into a sign-in", async ({
+  page,
+}) => {
+  await page.goto("/?vault=arrives");
+  const passphrase = "a-brand-new-passphrase";
+  await page.getByLabel("Passphrase", { exact: true }).fill(passphrase);
+  await page.getByLabel("Confirm passphrase").fill(passphrase);
+  await page.getByRole("button", { name: "Create vault" }).click();
+
+  await expect(page.getByText(/journal already exists/i)).toBeVisible();
+  await expect(page.getByLabel("Confirm passphrase")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Sign in" })).toBeVisible();
+});

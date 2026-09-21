@@ -38,8 +38,14 @@ pub enum KeyError {
     /// A key blob appeared in the store while [`Keyring::create`](crate::Keyring::create)
     /// was sealing its own — sync pulled the journal's real key in from
     /// another device. Nothing is missing and nothing is damaged, so neither
-    /// of the copy above fits; trying again unlocks what arrived.
-    #[error("This journal is still arriving from the cloud — try again in a moment.")]
+    /// of the copy above fits. The key that arrived is sealed under the
+    /// passphrase from the device that made it, not the one just chosen, so
+    /// the copy says so: "try again" would end in "Incorrect passphrase."
+    #[error(
+        "This journal already exists — it arrived from the cloud while yours \
+         was being created. Sign in with the passphrase you chose when you \
+         first created it, not the new one."
+    )]
     KeyArrivedWhileCreating,
 }
 

@@ -166,8 +166,9 @@ field-name mismatches — a class of bug neither the Playwright suite nor
     in-memory vault in `src/api/fallback.ts`. That module also carries the
     fault-injection hook it parses once at load: `?fail=<ops>` (the ops
     include `export`, `connect`, `sync` and `resolve`), `?failMessage=<text>`, `?slow=<ops>`,
-    `?vault=new` and `?sync=on|conflict|busy|reauth|key_mismatch` (`busy`:
-    every pass fires `sync://changed`; the last two start halted, with the
+    `?vault=new` (`?vault=arrives`: the same, but the first unlock reports the
+    journal's key arriving from the cloud) and
+    `?sync=on|conflict|busy|reauth|key_mismatch` (`busy`: every pass fires `sync://changed`; the last two start halted, with the
     message the backend sends). Its listing reads the vault when called, not when it
     answers, as the real one does, so `?slow=list` exposes races with it.
     It simulates sync too, in the
@@ -329,9 +330,10 @@ field-name mismatches — a class of bug neither the Playwright suite nor
   engine writes the same directory from its own thread, so `Keyring::create`
   uses it for the key. The trait's default body *is* that racy pair, so a
   store that can create exclusively must override it — `FsStore` does (a
-  `hard_link` of a synced temp file, falling back to `create_new` on the
-  final path where links are unsupported or denied, which is exclusive too
-  but leaves a truncated blob if a crash lands mid-write) and so does
+  `hard_link` of a synced temp file, falling back to renaming that file into
+  place unless the name has appeared where links are unsupported or denied:
+  never a partial blob under the real name, but the check and the rename are
+  two steps, so a writer in the gap between them is overwritten) and so does
   `NotifyingStore`, which forwards it and notifies. It holds no
   implementation:
   `crates/fs-store` (`journal-fs-store`) is the local one, one file per
@@ -350,8 +352,12 @@ field-name mismatches — a class of bug neither the Playwright suite nor
   a per-device *base* (never synced) rather than clocks, so an edit always
   outranks a delete and a conflict is parked for a `ConflictResolver` the app
   supplies (it needs plaintext). `.vault-key` is never merged — a mismatch
-  stops sync (`KeyMismatch`); its name is a constant here because `journal-key`
-  keeps its own private, and a test checks they agree. It also has
+  stops sync (`KeyMismatch`) — and has its own table in `Pass::sync_key`: never
+  pushed once it differs from its base, never deleted (a remote deletion is
+  undone by pushing it back, a local one by creating it from the remote copy,
+  create-only so a key made meanwhile is not replaced). Its name is a constant
+  here because `journal-key` keeps its own private, and a test checks they
+  agree. It also has
   `NotifyingStore`, the pending/conflicted `SyncStatus` behind the UI's
   per-entry marks, and `erase_state` for disconnecting. `src-tauri/src/sync/`
   wires it up — see below and `.claude/plans/cloud-sync.md`.
