@@ -3,7 +3,8 @@ import { test, expect, type Page } from "./coverage";
 // Backend failures are invisible to the browser fallback by construction, so
 // these tests inject them from the URL (see the fault-injection block in
 // `src/api/entries.ts`). The app uses HashRouter, so the query string goes
-// before the hash.
+// before the hash. `?failAfter=<n>` lets that many calls of each failing op
+// succeed first.
 
 /// A new entry opens in the editor; existing ones open rendered.
 function editor(page: Page) {
@@ -156,4 +157,31 @@ test("a delete waits for the save already in flight", async ({ page }) => {
   await page.getByRole("button", { name: "Sign in" }).click();
   await expect(page.getByText("First day back")).toBeVisible();
   await expect(page.getByText("Project ideas")).toHaveCount(0);
+});
+
+test("a failed listing says so and does not claim the journal is empty", async ({
+  page,
+}) => {
+  await login(page, "?fail=list&failMessage=Disk+is+unreadable.");
+
+  await expect(page.getByText("Disk is unreadable.")).toBeVisible();
+  await expect(page.getByText("No entries yet.")).toHaveCount(0);
+});
+
+// `?fail=list` alone fails the first listing too. `failAfter=1` lets that one
+// through, and `?sync=busy` makes the pass after the next save fire
+// `sync://changed`, which is what reloads the list — into a failure.
+test("a failed reload leaves the existing rows on screen", async ({ page }) => {
+  await login(
+    page,
+    "?sync=busy&fail=list&failAfter=1&failMessage=Disk+is+unreadable.",
+  );
+  await expect(page.getByTestId("entry-row")).toHaveCount(2);
+
+  await page.getByRole("button", { name: "New entry" }).first().click();
+  await page.getByPlaceholder("Title").fill("Written before the reload");
+  await expect(page.getByText("Disk is unreadable.")).toBeVisible();
+
+  await expect(page.getByTestId("entry-row")).toHaveCount(3);
+  await expect(page.getByText("No entries yet.")).toHaveCount(0);
 });

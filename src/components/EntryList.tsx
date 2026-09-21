@@ -113,7 +113,8 @@ export default function EntryList({
 }: {
   onOpenSidebar?: () => void;
 }) {
-  const { entries, searchQuery, searchResults, searchError } = useAppState();
+  const { entries, searchQuery, searchResults, searchError, listError } =
+    useAppState();
   const newEntry = useNewEntry();
 
   const months = groupByMonth(entries);
@@ -171,6 +172,12 @@ export default function EntryList({
             {searchError}
           </Alert>
         )}
+        {/* Likewise a failed reload: the rows already loaded stay below it. */}
+        {listError && (
+          <Alert severity="error" square sx={{ fontSize: 13 }}>
+            {listError}
+          </Alert>
+        )}
 
         {searchResults !== null ? (
           searchResults.length === 0 ? (
@@ -195,26 +202,7 @@ export default function EntryList({
               ))}
             </List>
           )
-        ) : entries.length === 0 ? (
-          <Stack
-            alignItems="center"
-            spacing={2}
-            sx={{ px: 3, py: 8, textAlign: "center" }}
-          >
-            <NotesIcon sx={{ fontSize: 36, color: "text.disabled" }} />
-            <Typography variant="body2" color="text.secondary">
-              No entries yet. Start your journal.
-            </Typography>
-            <Button
-              variant="contained"
-              disableElevation
-              startIcon={<AddIcon />}
-              onClick={newEntry}
-            >
-              Write your first entry
-            </Button>
-          </Stack>
-        ) : (
+        ) : entries.length > 0 ? (
           <List disablePadding>
             {months.map((month) => [
               <ListSubheader
@@ -236,6 +224,25 @@ export default function EntryList({
               )),
             ])}
           </List>
+        ) : listError ? null : (
+          <Stack
+            alignItems="center"
+            spacing={2}
+            sx={{ px: 3, py: 8, textAlign: "center" }}
+          >
+            <NotesIcon sx={{ fontSize: 36, color: "text.disabled" }} />
+            <Typography variant="body2" color="text.secondary">
+              No entries yet. Start your journal.
+            </Typography>
+            <Button
+              variant="contained"
+              disableElevation
+              startIcon={<AddIcon />}
+              onClick={newEntry}
+            >
+              Write your first entry
+            </Button>
+          </Stack>
         )}
       </Box>
 

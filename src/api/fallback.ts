@@ -62,6 +62,9 @@ function toHeader(entry: JournalEntry): EntryHeader {
 //                       search, export, connect, sync, resolve (see
 //                       "simulated sync" below)
 //   ?failMessage=<text> the rejection message (default "Injected fault.")
+//   ?failAfter=<n>      successful calls of each failing op before ?fail= bites
+//                       (default 0: fail from the first call), so a listing
+//                       can succeed and its reload fail (?fail=list&failAfter=1)
 //   ?slow=<ops>         the named ops resolve after SLOW_MS
 //   ?sync=<mode>        start connected to a provider: on, conflict, busy,
 //                       reauth, key_mismatch (see below)
@@ -89,6 +92,7 @@ interface Faults {
   keyArrives: boolean;
   fail: Set<Op>;
   failMessage: string;
+  failAfter: number;
   slow: Set<Op>;
   sync: SyncMode;
 }
@@ -112,12 +116,15 @@ function parseFaults(search: string): Faults {
     keyArrives: params.get("vault") === "arrives",
     fail: ops(params.get("fail")),
     failMessage: params.get("failMessage") ?? "Injected fault.",
+    failAfter: Number(params.get("failAfter") ?? 0),
     slow: ops(params.get("slow")),
     sync: SYNC_MODES.find((mode) => mode === params.get("sync")) ?? "off",
   };
 }
 
 const faults: Faults = parseFaults(window.location.search);
+// Calls seen so far by each op named in `?fail=`, for `?failAfter=`.
+const failedCalls = new Map<Op, number>();
 const fallbackEntries = new Map(seedEntries.map((entry) => [entry.id, entry]));
 
 // Locked until `unlockVault`, like `VaultState`. Without it a write made after
@@ -144,7 +151,9 @@ async function run<T>(op: Op, work: () => T): Promise<T> {
     await new Promise((resolve) => setTimeout(resolve, SLOW_MS));
   }
   if (faults.fail.has(op)) {
-    throw faults.failMessage;
+    const seen = failedCalls.get(op) ?? 0;
+    failedCalls.set(op, seen + 1);
+    if (seen >= faults.failAfter) throw faults.failMessage;
   }
   return work();
 }

@@ -121,6 +121,8 @@ interface AppStateContextValue {
   searchResults: SearchMatch[] | null;
   searching: boolean;
   searchError: string;
+  /// The backend's own message for the last failed `list_entries`, or "".
+  listError: string;
 }
 
 const AppStateContext = createContext<AppStateContextValue | null>(null);
@@ -137,6 +139,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   );
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState("");
+  const [listError, setListError] = useState("");
   // Bumped when a pass changed entries on disk, to re-run the list effect.
   const [listVersion, setListVersion] = useState(0);
   // Set by the first `sync://status` event, so the seed read below cannot land
@@ -210,6 +213,8 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     setSearchQuery("");
     setSearchResults(null);
     setSearchError("");
+    // A backend message can carry a path; it must not outlive the session.
+    setListError("");
     mutations.current.clear();
     lockVault().catch(() => {
       // Best-effort; nothing to lock into a UI state for.
@@ -258,12 +263,15 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         const merged = loaded.filter((header) => !ids.has(header.id));
         for (const [, m] of missed) if (m.header) merged.push(m.header);
         setEntries(merged.sort(byEntryDate));
+        setListError("");
       })
       .catch((err) => {
         if (cancelled) return;
-        // No surface to show this on yet; without the log it would be an
-        // unhandled rejection, which is how the failures P0-1 is about hid.
+        // `entries` is left as it was, so a failed reload keeps the rows on
+        // screen; `listError` is what stops an empty list reading as "no
+        // entries". The log stays: without it this is an unhandled rejection.
         console.error("Failed to list entries:", err);
+        setListError(errorMessage(err));
       })
       .finally(close);
     return () => {
@@ -444,6 +452,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       searchResults,
       searching,
       searchError,
+      listError,
       // `upsertEntry` and `removeEntry` update React state optimistically and
       // then reject if the backend refuses, rolling the optimistic edit back
       // first: showing an entry as saved while nothing reached disk is how it
@@ -531,6 +540,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       searchResults,
       searching,
       searchError,
+      listError,
     ],
   );
 
