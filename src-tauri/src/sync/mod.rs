@@ -232,11 +232,12 @@ impl SyncControl {
     }
 
     /// The provider with this id, if the build offers it.
-    fn provider(&self, id: &str) -> Result<&Arc<dyn Provider>, String> {
+    fn provider(&self, id: &str) -> Result<&dyn Provider, String> {
         self.config
             .providers
             .iter()
             .find(|p| p.id() == id)
+            .map(AsRef::as_ref)
             .ok_or_else(|| format!("unknown sync provider {id:?}"))
     }
 
@@ -311,7 +312,9 @@ impl SyncControl {
         drop(listener);
         let token = redeem(&code)?;
         let account = provider.account(&token)?;
-        let credential = Credential::new(provider.id(), token).with_account(account);
+        let credential = Credential::new(provider.id(), token)
+            .try_with_account(account)
+            .ok_or_else(|| format!("{} returned an unusable account id", provider.name()))?;
 
         let worker = self.install(provider, &credential, Login::New)?;
         if let Err(e) = worker.sync_now() {
@@ -357,7 +360,7 @@ impl SyncControl {
     /// does not find there reads as deleted remotely — and is deleted here.
     fn install(
         &self,
-        provider: &Arc<dyn Provider>,
+        provider: &dyn Provider,
         credential: &Credential,
         login: Login,
     ) -> Result<Arc<Worker>, String> {
@@ -366,27 +369,31 @@ impl SyncControl {
 
         let keep_state = match login {
             Login::Saved => true,
-            Login::New => {
-                // Unreadable counts as different, and so does a saved login
-                // with no account recorded: losing the state is safe.
-                let same = matches!(
-                    cfg.credentials.load(),
-                    Ok(Some(saved)) if saved.provider == credential.provider
-                        && saved.account.is_some()
-                        && saved.account == credential.account
-                );
-                cfg.credentials
-                    .save(credential)
-                    .map_err(|e| e.to_string())?;
-                same
-            }
+            // Unreadable counts as different, and so does a saved login with
+            // no account recorded: losing the state is safe.
+            Login::New => matches!(
+                cfg.credentials.load(),
+                Ok(Some(saved)) if saved.provider == credential.provider
+                    && saved.account.is_some()
+                    && saved.account == credential.account
+            ),
         };
         if let Some(old) = cfg.slot.take() {
             old.stop();
         }
+        // Erased *before* the new login is saved. A failure, or a crash,
+        // between the two must never leave a credential naming one account
+        // beside state describing another: the next run would read the new
+        // remote's listing as every entry deleted, and delete them here too.
+        // The reverse — state gone, credential unchanged — is safe.
         if !keep_state {
             erase_state(&cfg.state_path)
                 .map_err(|e| format!("could not clear the old sync state: {e}"))?;
+        }
+        if matches!(login, Login::New) {
+            cfg.credentials
+                .save(credential)
+                .map_err(|e| e.to_string())?;
         }
 
         let remote = provider.remote(&credential.token)?;

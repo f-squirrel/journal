@@ -626,6 +626,61 @@ fn connecting_another_account_starts_clean_and_deletes_nothing() {
     assert_eq!(saved.account.as_deref(), Some("account-2"));
 }
 
+/// The order matters more than the erase: a credential naming account B must
+/// never outlive a failed erase of account A's state, or the next launch reads
+/// B's remote against A's cursor and deletes the journal.
+#[test]
+fn a_failed_erase_leaves_the_old_login_in_place() {
+    let first = Forgetful::new(Arc::new(MemoryRemote::new()));
+    let fake = Fake::new("fake", first.clone());
+    let rig = Rig::with_providers(vec![fake.clone()]);
+    rig.unlock();
+    rig.save(ID, "Today", "words", "2026-03-01T10:00:00Z");
+    rig.connect();
+    // A directory where the state file was: removing it as a file fails.
+    let state = rig.dir.join("sync-state.json");
+    std::fs::remove_file(&state).unwrap();
+    std::fs::create_dir(&state).unwrap();
+
+    fake.sign_in_as("account-2", Forgetful::new(Arc::new(MemoryRemote::new())));
+    let refused = rig
+        .invoke("connect_remote", json!({ "provider": "fake" }))
+        .expect_err("the state could not be cleared");
+
+    assert!(
+        refused.as_str().unwrap().contains("old sync state"),
+        "{refused}"
+    );
+    let saved = FileCredentialStore::new(rig.dir.join("config").join("login"))
+        .load()
+        .unwrap()
+        .unwrap();
+    assert_eq!(saved.account.as_deref(), Some("account-1"));
+    assert_eq!(rig.titles(), ["Today"]);
+}
+
+/// The account id comes off the network; one that cannot be written on a line
+/// of the login file is refused, where it used to abort the app.
+#[test]
+fn an_unusable_account_id_is_refused_rather_than_panicking() {
+    for account in ["", "  ", "drop\rbox"] {
+        let remote = Arc::new(MemoryRemote::new());
+        let fake = Fake::new("fake", remote);
+        fake.sign_in_as(account, Arc::new(MemoryRemote::new()));
+        let rig = Rig::with_providers(vec![fake]);
+
+        let refused = rig
+            .invoke("connect_remote", json!({ "provider": "fake" }))
+            .expect_err("no usable account");
+
+        assert_eq!(
+            refused, "Fake Cloud returned an unusable account id",
+            "{account:?}"
+        );
+        assert_eq!(rig.saved_provider(), None, "{account:?}");
+    }
+}
+
 /// A login saved before accounts were recorded cannot be told to be the same
 /// account, so it is taken to be another one.
 #[test]
