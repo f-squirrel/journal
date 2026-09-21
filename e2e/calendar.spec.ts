@@ -240,8 +240,12 @@ test("logging out from the calendar lands on the sign-in screen", async ({
   await expect(page.getByLabel("Passphrase")).toBeVisible();
 });
 
-test("Today jumps the grid and the panel back to today", async ({ page }) => {
-  await login(page, "2026-09-21T12:00:00Z");
+test("Today jumps the grid, the selection and the panel back to today", async ({
+  page,
+}) => {
+  // "now" is the day "Project ideas" is on, so the panel's content — not just
+  // its heading — says which day is selected.
+  await login(page, "2026-09-02T12:00:00Z");
   await openCalendar(page);
 
   const today = calendar(page).getByRole("button", {
@@ -251,22 +255,52 @@ test("Today jumps the grid and the panel back to today", async ({ page }) => {
   const previousMonth = calendar(page).getByRole("button", {
     name: "Previous month",
   });
+  const selectedDay = calendar(page).getByRole("gridcell", { selected: true });
 
   // Away in both senses: another day selected, and another month on screen.
-  await day(page, 2).click();
+  await day(page, 3).click();
   for (let i = 0; i < 3; i++) await previousMonth.click();
   await expect(calendar(page).getByText("June 2026")).toBeVisible();
 
   await today.click();
   await expect(calendar(page).getByText("September 2026")).toBeVisible();
+  await expect(selectedDay).toHaveText("2");
   await expect(
-    calendar(page).getByRole("heading", { name: /September 21, 2026/ }),
+    calendar(page).getByRole("heading", { name: /September 2, 2026/ }),
   ).toBeVisible();
+  await expect(calendar(page).getByTestId("entry-row")).toContainText(
+    "Project ideas",
+  );
 
   // Today is already the selected day now, so this is the case where the
-  // button has nothing to select and only the month is out of place.
+  // button has nothing to select and only the month is out of place — the one
+  // a `value` that did not change identity would silently fail.
   for (let i = 0; i < 3; i++) await previousMonth.click();
   await expect(calendar(page).getByText("June 2026")).toBeVisible();
   await today.click();
   await expect(calendar(page).getByText("September 2026")).toBeVisible();
+  await expect(selectedDay).toHaveText("2");
+});
+
+test("Today is reachable on a phone", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 800 });
+  await login(page, "2026-09-02T12:00:00Z");
+
+  await page.getByRole("button", { name: "Open menu" }).click();
+  await railButton(page, "Calendar").click();
+  await expect(page.getByRole("heading", { name: "Calendar" })).toBeVisible();
+
+  // The header is Back, the title and this button; it must not be pushed off
+  // the screen by the first two.
+  await day(page, 3).click();
+  await calendar(page)
+    .getByRole("button", { name: "Today", exact: true })
+    .click();
+  await expect(
+    calendar(page).getByRole("heading", { name: /September 2, 2026/ }),
+  ).toBeVisible();
+  const overflow = await page.evaluate(
+    () => document.documentElement.scrollWidth - window.innerWidth,
+  );
+  expect(overflow).toBeLessThanOrEqual(0);
 });
