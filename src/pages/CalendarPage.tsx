@@ -30,6 +30,10 @@ import {
   onThisDay,
 } from "../utils/date";
 
+/// `DateCalendar`'s own fixed width. The left column is pinned to it so the
+/// section under the grid lines up with it instead of stretching.
+const CALENDAR_WIDTH = 320;
+
 /// The days that have entries, for `MarkedDay` to look itself up in. It reaches
 /// the grid through context because the slot is a component type, not an
 /// element: passing the set as a prop would mean defining the slot inside the
@@ -155,8 +159,15 @@ export default function CalendarPage() {
       </Stack>
 
       <Box sx={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
-        <Stack sx={{ maxWidth: 720, mx: "auto", py: 2, gap: 3 }}>
-          <Stack direction="row" sx={{ flexWrap: "wrap", gap: 2 }}>
+        <Stack
+          direction="row"
+          sx={{ maxWidth: 720, mx: "auto", py: 2, gap: 2, flexWrap: "wrap" }}
+        >
+          {/* The left column is the calendar's own width and holds everything
+              anchored to it. "On this day" sits here rather than under the
+              whole row so the day's entries — which change length as days are
+              picked — cannot push it up and down. */}
+          <Stack sx={{ width: CALENDAR_WIDTH, maxWidth: "100%", gap: 3 }}>
             <MarksContext.Provider value={byDay}>
               {/* No slide transition between months: the outgoing month stays
                   mounted through it and shadows the one on screen (ADR 0013). */}
@@ -168,51 +179,55 @@ export default function CalendarPage() {
               />
             </MarksContext.Provider>
 
-            <Box sx={{ flex: "1 1 280px", minWidth: 0 }}>
-              <Typography variant="subtitle1" component="h2" sx={{ px: 2 }}>
-                {formatEntryHeading(selected.toISOString())}
+            <Box>
+              <Typography
+                variant="overline"
+                component="h2"
+                color="text.secondary"
+                sx={{ px: 2 }}
+              >
+                On this day
               </Typography>
-              {dayEntries.length === 0 ? (
+              {memories.length === 0 ? (
                 <Typography
                   variant="body2"
                   color="text.secondary"
-                  sx={{ px: 2, pt: 1 }}
+                  sx={{ px: 2 }}
                 >
-                  No entries on this day.
+                  Nothing from earlier years on this day.
                 </Typography>
               ) : (
-                <List disablePadding sx={{ pt: 1 }}>
-                  {dayEntries.map((entry) => (
-                    <EntryRow key={entry.id} entry={entry} />
-                  ))}
+                <List disablePadding>
+                  {memories.map((group) => [
+                    <GroupHeading key={`h${group.year}`}>
+                      {`${formatYearsAgo(group.yearsAgo)} · ${group.year}`}
+                    </GroupHeading>,
+                    ...group.entries.map((entry) => (
+                      <EntryRow key={entry.id} entry={entry} />
+                    )),
+                  ])}
                 </List>
               )}
             </Box>
           </Stack>
 
-          <Box>
-            <Typography
-              variant="overline"
-              component="h2"
-              color="text.secondary"
-              sx={{ px: 2 }}
-            >
-              On this day
+          <Box sx={{ flex: "1 1 280px", minWidth: 0 }}>
+            <Typography variant="subtitle1" component="h2" sx={{ px: 2 }}>
+              {formatEntryHeading(selected.toISOString())}
             </Typography>
-            {memories.length === 0 ? (
-              <Typography variant="body2" color="text.secondary" sx={{ px: 2 }}>
-                Nothing from earlier years on this day.
+            {dayEntries.length === 0 ? (
+              <Typography
+                variant="body2"
+                color="text.secondary"
+                sx={{ px: 2, pt: 1 }}
+              >
+                No entries on this day.
               </Typography>
             ) : (
-              <List disablePadding>
-                {memories.map((group) => [
-                  <GroupHeading key={`h${group.year}`}>
-                    {`${formatYearsAgo(group.yearsAgo)} · ${group.year}`}
-                  </GroupHeading>,
-                  ...group.entries.map((entry) => (
-                    <EntryRow key={entry.id} entry={entry} />
-                  )),
-                ])}
+              <List disablePadding sx={{ pt: 1 }}>
+                {dayEntries.map((entry) => (
+                  <EntryRow key={entry.id} entry={entry} />
+                ))}
               </List>
             )}
           </Box>
