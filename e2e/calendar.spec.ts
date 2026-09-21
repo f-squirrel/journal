@@ -239,3 +239,34 @@ test("logging out from the calendar lands on the sign-in screen", async ({
 
   await expect(page.getByLabel("Passphrase")).toBeVisible();
 });
+
+test("Today jumps the grid and the panel back to today", async ({ page }) => {
+  await login(page, "2026-09-21T12:00:00Z");
+  await openCalendar(page);
+
+  const today = calendar(page).getByRole("button", {
+    name: "Today",
+    exact: true,
+  });
+  const previousMonth = calendar(page).getByRole("button", {
+    name: "Previous month",
+  });
+
+  // Away in both senses: another day selected, and another month on screen.
+  await day(page, 2).click();
+  for (let i = 0; i < 3; i++) await previousMonth.click();
+  await expect(calendar(page).getByText("June 2026")).toBeVisible();
+
+  await today.click();
+  await expect(calendar(page).getByText("September 2026")).toBeVisible();
+  await expect(
+    calendar(page).getByRole("heading", { name: /September 21, 2026/ }),
+  ).toBeVisible();
+
+  // Today is already the selected day now, so this is the case where the
+  // button has nothing to select and only the month is out of place.
+  for (let i = 0; i < 3; i++) await previousMonth.click();
+  await expect(calendar(page).getByText("June 2026")).toBeVisible();
+  await today.click();
+  await expect(calendar(page).getByText("September 2026")).toBeVisible();
+});

@@ -1,6 +1,7 @@
 import { createContext, useContext, useMemo, useState } from "react";
 import {
   Box,
+  Button,
   IconButton,
   List,
   ListSubheader,
@@ -140,6 +141,17 @@ export default function CalendarPage() {
         <Typography variant="h6" sx={{ fontSize: 17 }}>
           Calendar
         </Typography>
+        <Box sx={{ flexGrow: 1 }} />
+        {/* Always live, never disabled on today: it puts the grid back on this
+            month as well as selecting the day, and after browsing to 2019 that
+            is the whole point — a selection that is already today says nothing
+            about which month is on screen. A fresh `Date` each time is what
+            makes that work: the grid follows `value` by identity, so reusing
+            the selected day's object would select today and leave the grid
+            where it was. */}
+        <Button size="small" onClick={() => setSelected(new Date())}>
+          Today
+        </Button>
       </Stack>
 
       <Box sx={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
