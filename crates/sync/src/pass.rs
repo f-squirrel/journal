@@ -195,6 +195,31 @@ impl<'a> Pass<'a> {
     fn sync_name(&mut self, name: &BlobName, view: &RemoteView) -> Result<Outcome, SyncError> {
         let local = self.read_local(name)?;
 
+        // D5, structurally: the key is never merged, and a pass that disagrees
+        // about it must change nothing. `conflict()` enforced this in one place,
+        // which is only reached when the remote moved — every other arm below
+        // would happily push, or delete, the one key every entry is sealed to.
+        if name.as_str() == KEY_BLOB {
+            let base = self.state.bases.get(name).cloned();
+            match (&local, view.theirs(name, base.as_ref())) {
+                (Some(local), _) if base.as_ref().is_some_and(|b| b.hash != local.digest) => {
+                    return Err(SyncError::KeyMismatch);
+                }
+                // Compare rather than pull: identical bytes record a base, and
+                // different ones reach `conflict`, which returns KeyMismatch.
+                (Some(local), Theirs::Edited { rev, hash }) => {
+                    return self.compare(name, local, rev, hash);
+                }
+                // Gone there: the key is the only thing that makes the remote
+                // journal readable, so restore it rather than follow the
+                // deletion (D4 applied to the key).
+                (Some(local), Theirs::Removed) => return self.push(name, local, None),
+                // Gone locally: never propagate that as a remote deletion.
+                (None, Theirs::Same) if base.is_some() => return Ok(Outcome::Skipped),
+                _ => {}
+            }
+        }
+
         if self.state.parked.contains_key(name) {
             return self.resume_parked(name, local, view);
         }

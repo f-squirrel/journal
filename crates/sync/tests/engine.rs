@@ -5,7 +5,7 @@ mod common;
 use std::sync::Arc;
 
 use common::*;
-use journal_remote::{ConflictMode, MemoryRemote, RemoteError};
+use journal_remote::{ConflictMode, MemoryRemote, RemoteError, RemoteStore};
 use journal_sync::{SyncError, SyncErrorKind, SyncReport, KEY_BLOB};
 
 const BOTH_MODES: [ConflictMode; 2] = [ConflictMode::Atomic, ConflictMode::DetectAfterWrite];
@@ -370,6 +370,82 @@ fn the_same_key_on_both_sides_is_not_a_mismatch() {
     b.put_quietly(KEY_BLOB, b"the key");
     b.reopen();
     assert_eq!(b.sync(), SyncReport::default());
+}
+
+/// A device that has synced, with the key and one entry on both sides.
+fn synced_with_key(remote: &Arc<MemoryRemote>) -> Device {
+    let a = Device::new(remote.clone());
+    a.put(KEY_BLOB, b"the key");
+    a.put("a.json", b"entry a");
+    a.sync();
+    a
+}
+
+#[test]
+fn a_replaced_key_is_not_uploaded() {
+    let remote = Arc::new(MemoryRemote::new());
+    let a = synced_with_key(&remote);
+    let remote_before = remote_snapshot(&*remote);
+
+    // The remote has not moved, so the ordinary "only we changed it" arm would
+    // push this under the base's revision, and the remote would accept it.
+    a.put(KEY_BLOB, b"a brand new key");
+    a.put("b.json", b"entry b");
+
+    let err = a.try_sync().unwrap_err();
+    assert!(matches!(err, SyncError::KeyMismatch), "{err:?}");
+    assert_eq!(remote_snapshot(&*remote), remote_before);
+    assert_eq!(a.read(KEY_BLOB).unwrap(), b"a brand new key");
+
+    // It keeps refusing until the user decides.
+    assert!(matches!(a.try_sync(), Err(SyncError::KeyMismatch)));
+    assert_eq!(remote_snapshot(&*remote), remote_before);
+}
+
+#[test]
+fn a_locally_deleted_key_is_not_deleted_remotely() {
+    use journal_store::BlobStore;
+
+    let remote = Arc::new(MemoryRemote::new());
+    let a = synced_with_key(&remote);
+    let remote_before = remote_snapshot(&*remote);
+
+    // As when the entries directory is wiped while `sync-state.json`, which
+    // lives beside it and not in it, survives.
+    a.store.delete(&n(KEY_BLOB)).unwrap();
+    a.reopen();
+
+    a.sync();
+    assert_eq!(remote_snapshot(&*remote), remote_before);
+    assert_eq!(remote.get(&n(KEY_BLOB)).unwrap().unwrap().0, b"the key");
+    assert_eq!(a.read("a.json").unwrap(), b"entry a");
+    assert_eq!(a.read(KEY_BLOB), None);
+
+    // Nothing changes on the passes after it, either.
+    a.sync();
+    assert_eq!(remote_snapshot(&*remote), remote_before);
+}
+
+#[test]
+fn a_remotely_deleted_key_is_restored_not_followed() {
+    use journal_remote::Precondition;
+
+    let remote = Arc::new(MemoryRemote::new());
+    let a = synced_with_key(&remote);
+
+    // `Precondition` has no unconditional delete: match the revision it has.
+    let (_, rev) = remote.get(&n(KEY_BLOB)).unwrap().unwrap();
+    remote
+        .delete(&n(KEY_BLOB), Precondition::Matches(rev))
+        .unwrap();
+    assert_eq!(remote.get(&n(KEY_BLOB)).unwrap(), None);
+
+    // Following the deletion would leave the remote journal with no key at all.
+    a.sync();
+    assert_eq!(a.read(KEY_BLOB).unwrap(), b"the key");
+    assert_eq!(remote.get(&n(KEY_BLOB)).unwrap().unwrap().0, b"the key");
+    assert_eq!(a.read("a.json").unwrap(), b"entry a");
+    assert_eq!(remote_snapshot(&*remote).len(), 2);
 }
 
 #[test]
