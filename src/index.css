@@ -25,7 +25,10 @@
   line-height: 1.3;
   margin-top: 1.6em;
   margin-bottom: 0.6em;
-  letter-spacing: -0.2px;
+  /* `em`, not `px`: the four headings are four different sizes, and tracking
+     that is a fixed nudge over-tightens the largest and does nothing to the
+     smallest. */
+  letter-spacing: -0.012em;
 }
 
 .markdown-body h1 {

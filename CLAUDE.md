@@ -218,6 +218,20 @@ field-name mismatches — a class of bug neither the Playwright suite nor
     breakpoint the three columns become one — the rail moves into a drawer
     and the list gives way to the pane — so check a change at phone width
     too.
+    **Every size in the UI is `rem`, never `px`** — the shell's dimensions
+    and the type scale both live in `components/chrome.ts` (`rem()`,
+    `SIDEBAR_WIDTH`, `LIST_WIDTH`, `HEADER_HEIGHT`, `READING_WIDTH`,
+    `BODY_MIN_HEIGHT`, `TYPE`, `TRACKING`, `sectionHeadingSx`), and
+    `theme.ts` states `spacing` in `rem` too, so every `px:`/`gap:` follows.
+    A bare number in `sx` is `px`, which ignores the reader's text-size
+    setting; `e2e/text-size.spec.ts` sets the root font to 24px and fails
+    if the rail, the headers, the list column or the type did not scale
+    with it. Tracking goes in `em` for the same reason. The exceptions are
+    deliberate and commented: hairline borders, corner radii, and
+    `CalendarPage`'s `CALENDAR_WIDTH` and day dot, which are pinned to MUI
+    X's hard-coded 320px grid. Nothing is sized in `vw`/`vh` — the list is
+    a column, not a share of the screen, and the `md` breakpoint is what
+    handles a small one.
     List rows carry a title and a time but no excerpt on purpose:
     `list_entries` returns headers without `markdown`, and filling
     excerpts would decrypt the whole journal to draw the list. A **search

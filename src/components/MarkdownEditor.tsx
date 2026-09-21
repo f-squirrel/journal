@@ -10,6 +10,7 @@ import {
   placeholder as cmPlaceholder,
 } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
+import { BODY_MIN_HEIGHT } from "./chrome";
 
 /// Styles the markdown *as it is written*: a heading is large while its `#`
 /// is still there to edit, a list marker is coloured, a quote is italic.
@@ -192,7 +193,7 @@ export default function MarkdownEditor({
         editor.focus();
         editor.dispatch({ selection: { anchor: editor.state.doc.length } });
       }}
-      sx={{ minHeight: 260, cursor: "text" }}
+      sx={{ minHeight: BODY_MIN_HEIGHT, cursor: "text" }}
     />
   );
 }

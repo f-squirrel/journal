@@ -19,7 +19,13 @@ import SearchIcon from "@mui/icons-material/Search";
 import { useAppState } from "../context/AppStateContext";
 import { useNewEntry } from "../hooks/useNewEntry";
 import { groupByMonth } from "../utils/date";
-import { HEADER_HEIGHT, LIST_WIDTH } from "./chrome";
+import {
+  HEADER_HEIGHT,
+  LIST_WIDTH,
+  TYPE,
+  rem,
+  sectionHeadingSx,
+} from "./chrome";
 import EntryRow from "./EntryRow";
 
 /// The search field, above the journal and below the column header.
@@ -62,10 +68,10 @@ function SearchField() {
           px: 1,
           borderRadius: 2,
           bgcolor: "tonal.surfaceContainerHigh",
-          height: 34,
+          height: rem(34),
         }}
       >
-        <SearchIcon sx={{ fontSize: 18, opacity: searching ? 1 : 0.6 }} />
+        <SearchIcon sx={{ fontSize: rem(18), opacity: searching ? 1 : 0.6 }} />
         <InputBase
           inputRef={input}
           value={searchQuery}
@@ -80,7 +86,7 @@ function SearchField() {
           }}
           placeholder="Search entries"
           inputProps={{ "aria-label": "Search entries" }}
-          sx={{ flex: 1, fontSize: 13 }}
+          sx={{ flex: 1, fontSize: TYPE.dense }}
         />
         {searchQuery && (
           <IconButton
@@ -91,7 +97,7 @@ function SearchField() {
               input.current?.focus();
             }}
           >
-            <ClearIcon sx={{ fontSize: 16 }} />
+            <ClearIcon sx={{ fontSize: rem(16) }} />
           </IconButton>
         )}
       </Stack>
@@ -121,6 +127,7 @@ export default function EntryList({
 
   return (
     <Stack
+      data-testid="entry-list"
       sx={{
         width: { xs: "100%", md: LIST_WIDTH },
         flexShrink: 0,
@@ -154,7 +161,7 @@ export default function EntryList({
             <MenuIcon />
           </IconButton>
         )}
-        <Typography variant="h6" sx={{ flex: 1, fontSize: 17 }}>
+        <Typography variant="h6" sx={{ flex: 1, fontSize: TYPE.header }}>
           All entries
         </Typography>
         <Typography variant="caption" color="text.secondary">
@@ -168,13 +175,13 @@ export default function EntryList({
         {/* A failed search leaves `searchResults` null, so the journal is
             still below this and the user has not lost their place. */}
         {searchError && (
-          <Alert severity="error" square sx={{ fontSize: 13 }}>
+          <Alert severity="error" square sx={{ fontSize: TYPE.dense }}>
             {searchError}
           </Alert>
         )}
         {/* Likewise a failed reload: the rows already loaded stay below it. */}
         {listError && (
-          <Alert severity="error" square sx={{ fontSize: 13 }}>
+          <Alert severity="error" square sx={{ fontSize: TYPE.dense }}>
             {listError}
           </Alert>
         )}
@@ -186,7 +193,7 @@ export default function EntryList({
               spacing={1}
               sx={{ px: 3, py: 6, textAlign: "center" }}
             >
-              <SearchIcon sx={{ fontSize: 30, color: "text.disabled" }} />
+              <SearchIcon sx={{ fontSize: rem(30), color: "text.disabled" }} />
               <Typography variant="body2" color="text.secondary">
                 Nothing matches “{searchQuery.trim()}”.
               </Typography>
@@ -208,13 +215,8 @@ export default function EntryList({
               <ListSubheader
                 key={month.key}
                 sx={{
+                  ...sectionHeadingSx,
                   bgcolor: "tonal.surfaceContainerLow",
-                  color: "text.secondary",
-                  fontSize: 11,
-                  fontWeight: 700,
-                  letterSpacing: 0.8,
-                  textTransform: "uppercase",
-                  lineHeight: 2.6,
                 }}
               >
                 {month.label}
@@ -230,7 +232,7 @@ export default function EntryList({
             spacing={2}
             sx={{ px: 3, py: 8, textAlign: "center" }}
           >
-            <NotesIcon sx={{ fontSize: 36, color: "text.disabled" }} />
+            <NotesIcon sx={{ fontSize: rem(36), color: "text.disabled" }} />
             <Typography variant="body2" color="text.secondary">
               No entries yet. Start your journal.
             </Typography>
@@ -253,7 +255,7 @@ export default function EntryList({
         <Fab
           aria-label="New entry"
           onClick={newEntry}
-          sx={{ position: "absolute", right: 20, bottom: 20 }}
+          sx={{ position: "absolute", right: rem(20), bottom: rem(20) }}
         >
           <AddIcon />
         </Fab>

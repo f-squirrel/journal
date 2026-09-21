@@ -15,6 +15,7 @@ import {
 import AutoStoriesIcon from "@mui/icons-material/AutoStories";
 import { useAppState } from "../context/AppStateContext";
 import { hasVault } from "../api/entries";
+import { rem } from "../components/chrome";
 
 /// The shortest passphrase the create-vault form accepts, stated to the user
 /// in the field's helper text (and asserted against that rendered text by
@@ -189,7 +190,11 @@ export default function LoginPage() {
   return (
     <Box
       sx={{
-        minHeight: "100vh",
+        // `100%`, not `100vh`: `html`, `body` and `#root` are already the
+        // viewport's height (see `theme.ts`), and on a mobile webview `vh` is
+        // the *largest* viewport — with a toolbar on screen the card is pushed
+        // past the bottom edge and the screen scrolls for no reason.
+        minHeight: "100%",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
@@ -201,7 +206,7 @@ export default function LoginPage() {
         sx={{
           p: 4,
           width: "100%",
-          maxWidth: 380,
+          maxWidth: rem(380),
           textAlign: "center",
           bgcolor: "tonal.surfaceContainerLow",
         }}
@@ -210,8 +215,8 @@ export default function LoginPage() {
           sx={{
             bgcolor: "tonal.primaryContainer",
             color: "tonal.onPrimaryContainer",
-            width: 56,
-            height: 56,
+            width: rem(56),
+            height: rem(56),
             mx: "auto",
             mb: 2,
           }}

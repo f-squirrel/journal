@@ -175,6 +175,7 @@ export default function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   return (
     <Stack
       alignItems="center"
+      data-testid="sidebar"
       sx={{
         width: SIDEBAR_WIDTH,
         flexShrink: 0,

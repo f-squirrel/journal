@@ -17,7 +17,13 @@ import {
   type PickersDayProps,
 } from "@mui/x-date-pickers/PickersDay";
 import { useNavigate } from "react-router-dom";
-import { HEADER_HEIGHT } from "../components/chrome";
+import {
+  HEADER_HEIGHT,
+  READING_WIDTH,
+  TYPE,
+  rem,
+  sectionHeadingSx,
+} from "../components/chrome";
 import EntryRow from "../components/EntryRow";
 import { useAppState } from "../context/AppStateContext";
 import { useNow } from "../hooks/useNow";
@@ -32,6 +38,14 @@ import {
 
 /// `DateCalendar`'s own fixed width. The left column is pinned to it so the
 /// section under the grid lines up with it instead of stretching.
+///
+/// The one place in the app still measured in `px`, and only because the grid
+/// itself is: MUI X hard-codes it at 320 (`DIALOG_WIDTH`) and its day cells at
+/// 36 (`DAY_SIZE`), neither of which moves with the text size. Anything
+/// anchored to that geometry — this column, and the dot drawn inside a day —
+/// has to be stated in the same unit, or it drifts away from the grid the
+/// moment the reader turns their text up. Everything outside the grid is
+/// `rem` (see `components/chrome.ts`).
 const CALENDAR_WIDTH = 320;
 
 /// The days that have entries, for `MarkedDay` to look itself up in. It reaches
@@ -61,6 +75,7 @@ function MarkedDay(props: PickersDayProps) {
           data-testid="day-dot"
           sx={{
             position: "absolute",
+            // `px`, with the grid it sits in — see `CALENDAR_WIDTH`.
             bottom: 3,
             left: "50%",
             width: 4,
@@ -82,15 +97,7 @@ function GroupHeading({ children }: { children: string }) {
   return (
     <ListSubheader
       disableSticky
-      sx={{
-        bgcolor: "transparent",
-        color: "text.secondary",
-        fontSize: 11,
-        fontWeight: 700,
-        letterSpacing: 0.8,
-        textTransform: "uppercase",
-        lineHeight: 2.6,
-      }}
+      sx={{ ...sectionHeadingSx, bgcolor: "transparent" }}
     >
       {children}
     </ListSubheader>
@@ -142,7 +149,7 @@ export default function CalendarPage() {
             <ArrowBackIcon />
           </IconButton>
         )}
-        <Typography variant="h6" sx={{ fontSize: 17 }}>
+        <Typography variant="h6" sx={{ fontSize: TYPE.header }}>
           Calendar
         </Typography>
         <Box sx={{ flexGrow: 1 }} />
@@ -161,7 +168,13 @@ export default function CalendarPage() {
       <Box sx={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
         <Stack
           direction="row"
-          sx={{ maxWidth: 720, mx: "auto", py: 2, gap: 2, flexWrap: "wrap" }}
+          sx={{
+            maxWidth: READING_WIDTH,
+            mx: "auto",
+            py: 2,
+            gap: 2,
+            flexWrap: "wrap",
+          }}
         >
           {/* The left column is the calendar's own width and holds everything
               anchored to it. "On this day" sits here rather than under the
@@ -211,7 +224,7 @@ export default function CalendarPage() {
             </Box>
           </Stack>
 
-          <Box sx={{ flex: "1 1 280px", minWidth: 0 }}>
+          <Box sx={{ flex: `1 1 ${rem(280)}`, minWidth: 0 }}>
             <Typography variant="subtitle1" component="h2" sx={{ px: 2 }}>
               {formatEntryHeading(selected.toISOString())}
             </Typography>

@@ -31,7 +31,14 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { backend } from "../api/backend";
-import { HEADER_HEIGHT } from "../components/chrome";
+import {
+  BODY_MIN_HEIGHT,
+  HEADER_HEIGHT,
+  READING_WIDTH,
+  TRACKING,
+  TYPE,
+  rem,
+} from "../components/chrome";
 import MarkdownEditor from "../components/MarkdownEditor";
 import { useAppState } from "../context/AppStateContext";
 import { useAutosave, type SaveStatus } from "../hooks/useAutosave";
@@ -57,7 +64,7 @@ export function NoEntrySelected() {
       spacing={2}
       sx={{ height: "100%", px: 4 }}
     >
-      <AutoStoriesIcon sx={{ fontSize: 44, color: "text.disabled" }} />
+      <AutoStoriesIcon sx={{ fontSize: rem(44), color: "text.disabled" }} />
       <Typography color="text.secondary">
         Select an entry, or start a new one.
       </Typography>
@@ -153,7 +160,10 @@ function EntryPane({ id, draft }: { id: string; draft: boolean }) {
   if (loadError) {
     return (
       <Box sx={{ p: 4 }}>
-        <Alert severity="error" sx={{ maxWidth: 720, mx: "auto", mt: 4 }}>
+        <Alert
+          severity="error"
+          sx={{ maxWidth: READING_WIDTH, mx: "auto", mt: 4 }}
+        >
           {loadError}
         </Alert>
       </Box>
@@ -287,7 +297,7 @@ function EntryPane({ id, draft }: { id: string; draft: boolean }) {
       <Box sx={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
         <Box
           sx={{
-            maxWidth: 720,
+            maxWidth: READING_WIDTH,
             mx: "auto",
             px: { xs: 2.5, sm: 5 },
             py: { xs: 3, sm: 5 },
@@ -344,9 +354,9 @@ function EntryPane({ id, draft }: { id: string; draft: boolean }) {
                 fullWidth
                 sx={{
                   mb: 1.5,
-                  fontSize: "1.45rem",
+                  fontSize: TYPE.entryTitle,
                   fontWeight: 700,
-                  letterSpacing: "-0.3px",
+                  letterSpacing: TRACKING.tight,
                   "& input": { p: 0 },
                 }}
               />
@@ -362,7 +372,7 @@ function EntryPane({ id, draft }: { id: string; draft: boolean }) {
               <Typography
                 variant="h5"
                 component="h2"
-                sx={{ mb: 1.5, fontSize: "1.45rem" }}
+                sx={{ mb: 1.5, fontSize: TYPE.entryTitle }}
               >
                 {title || "Untitled entry"}
               </Typography>
@@ -372,7 +382,7 @@ function EntryPane({ id, draft }: { id: string; draft: boolean }) {
                 data-testid="entry-body"
                 className="markdown-body"
                 sx={{
-                  minHeight: 260,
+                  minHeight: BODY_MIN_HEIGHT,
                   // The two rules that need the palette, so they cannot live
                   // in `index.css` with the rest of the markdown styling.
                   "& a": { color: "primary.main" },
