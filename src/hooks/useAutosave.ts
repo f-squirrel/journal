@@ -27,6 +27,10 @@ export interface Autosave {
   /// Returns whether there was one, so a delete that fails can put it back
   /// without inventing a write the user never earned.
   cancel: () => boolean;
+  /// Settles when the write already in flight does, or at once if there is
+  /// none. Named `whenSettled`, not `settled`: `save` declares a local
+  /// `settled`, and with no linter configured the shadowing would go uncaught.
+  whenSettled: () => Promise<void>;
 }
 
 /// What the pane holds and what a save writes, minus `updated_at` — that is
@@ -46,7 +50,13 @@ export interface Draft {
 /// captured when the effect ran. The timers reach `save` through a ref for the
 /// same reason: `upsertEntry`'s identity changes with every `entries` update,
 /// so a timer keyed on it would be torn down by unrelated saves.
-export function useAutosave(id: string, initialDraft: Draft): Autosave {
+export function useAutosave(
+  id: string,
+  initialDraft: Draft,
+  /// True for an entry that has never reached the vault, so an empty draft is
+  /// "nothing was started" rather than "this was cleared on purpose".
+  isNew = false,
+): Autosave {
   const { upsertEntry, registerFlush } = useAppState();
   const [status, setStatus] = useState<SaveStatus>("idle");
   const [error, setError] = useState("");
@@ -57,6 +67,9 @@ export function useAutosave(id: string, initialDraft: Draft): Autosave {
   // own date and not an empty one. Only the first render's value is kept; the
   // pane owns the draft from then on.
   const draft = useRef({ ...initialDraft, dirty: false });
+  /// Whether the entry is in the vault: true from the start for one that was
+  /// opened, and once the first save of a new one lands.
+  const written = useRef(!isNew);
   const saving = useRef(false);
   /// Settles when the write in flight does; null when there is none. What
   /// `flush` waits on, since `save` itself returns at once if one is running.
@@ -76,9 +89,11 @@ export function useAutosave(id: string, initialDraft: Draft): Autosave {
     if (saving.current) return;
 
     const { title, markdown, entryDate } = draft.current;
-    // An untouched draft is not an entry. Without this, opening "New entry"
-    // and navigating away would leave an empty row in the journal.
-    if (!title.trim() && !markdown.trim()) return;
+    // A draft that was never written and holds nothing is not an entry.
+    // Without this, opening "New entry" and navigating away would leave an
+    // empty row in the journal. Emptying an entry that *is* on disk is an edit
+    // like any other, and is written.
+    if (!written.current && !title.trim() && !markdown.trim()) return;
 
     draft.current.dirty = false;
     saving.current = true;
@@ -95,6 +110,7 @@ export function useAutosave(id: string, initialDraft: Draft): Autosave {
         entry_date: entryDate,
         markdown,
       });
+      written.current = true;
       setSavedAt(updatedAt);
       setError("");
       setStatus("saved");
@@ -145,14 +161,19 @@ export function useAutosave(id: string, initialDraft: Draft): Autosave {
 
   // What the lock waits on before it drops the vault. Unlike `saveNow` it
   // outlasts a write already in flight and reports whether the draft made it.
-  // A blank draft counts as saved: `save` never writes one, so calling it
-  // unsaved would block the lock forever over an entry that was never started.
+  // A blank draft that was never written counts as saved: `save` skips it, so
+  // calling it unsaved would block the lock forever over an entry that was
+  // never started.
   const flush = useCallback(async () => {
     if (inflight.current) await inflight.current;
     clearTimeout(timer.current);
     await saveRef.current();
     const { title, markdown, dirty } = draft.current;
-    return !dirty || (!title.trim() && !markdown.trim());
+    return !dirty || (!written.current && !title.trim() && !markdown.trim());
+  }, []);
+
+  const whenSettled = useCallback(async () => {
+    if (inflight.current) await inflight.current;
   }, []);
 
   useEffect(() => registerFlush(flush), [registerFlush, flush]);
@@ -167,5 +188,5 @@ export function useAutosave(id: string, initialDraft: Draft): Autosave {
     [],
   );
 
-  return { status, error, savedAt, noteChange, saveNow, cancel };
+  return { status, error, savedAt, noteChange, saveNow, cancel, whenSettled };
 }

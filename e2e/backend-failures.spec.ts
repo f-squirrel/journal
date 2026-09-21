@@ -127,3 +127,33 @@ test("a list in flight at logout cannot repopulate the next session", async ({
   // back in state, so they render before this listing has answered.
   await expect(page.getByText("First day back")).toHaveCount(0);
 });
+
+test("a delete waits for the save already in flight", async ({ page }) => {
+  // This exercises the frontend's await against the fallback, not the order
+  // the Rust commands run in — the fallback never crosses the bridge.
+  await login(page, "?slow=save");
+
+  await page.getByText("Project ideas").click();
+  await page.getByRole("button", { name: "Entry actions" }).click();
+  await page.getByRole("menuitem", { name: "Edit" }).click();
+  await editor(page).fill("# Edited just before deleting");
+  // The debounce has fired and the (slow) write is on its way.
+  await expect(page.getByTestId("save-status")).toHaveText("Saving…");
+
+  await page.getByRole("button", { name: "Entry actions" }).click();
+  await page.getByRole("menuitem", { name: "Delete entry" }).click();
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "Delete" })
+    .click();
+  await expect(page.getByText("Project ideas")).toHaveCount(0);
+
+  // Sit out the slow write, then read the journal back from the vault: a save
+  // that landed after the delete would have put the entry back.
+  await page.waitForTimeout(2000);
+  await page.getByRole("button", { name: "Log out" }).click();
+  await page.getByLabel("Passphrase").fill("password123");
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await expect(page.getByText("First day back")).toBeVisible();
+  await expect(page.getByText("Project ideas")).toHaveCount(0);
+});

@@ -108,6 +108,40 @@ test("an untouched draft is never written", async ({ page }) => {
   await expect(page.getByTestId("entry-row")).toHaveCount(2);
 });
 
+test("clearing both fields on a saved entry is written", async ({ page }) => {
+  await login(page);
+  await page.getByText("Project ideas").click();
+  await openEditor(page);
+  await page.getByPlaceholder("Title").fill("");
+  await editor(page).fill("");
+
+  // An entry already on disk that is emptied on purpose is an edit like any
+  // other: it must be written, not dropped for looking like an untouched draft.
+  await expect(page.getByTestId("save-status")).toHaveText("Saved");
+
+  await page.getByRole("button", { name: "Log out" }).click();
+  await page.getByLabel("Passphrase").fill("password123");
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await row(page, "Untitled entry").click();
+  await expect(body(page)).not.toContainText("Some things I want to build");
+});
+
+test("a new entry that was typed in and emptied again is never written", async ({
+  page,
+}) => {
+  await login(page);
+  await page.getByRole("button", { name: "New entry" }).first().click();
+  await editor(page).fill("Started something");
+  await editor(page).fill("");
+  // Back out before the debounce fires: nothing on disk was ever this entry,
+  // so emptying it again leaves the journal as it was, not with a blank row.
+  await page.getByText("Project ideas").click();
+  // Wait for the other entry to be on screen: the abandoned pane's unmount
+  // flush has run by then, so a blank row would already be in the list.
+  await expect(body(page)).toContainText("Some things I want to build");
+  await expect(page.getByTestId("entry-row")).toHaveCount(2);
+});
+
 test("deleting an entry removes it from the list", async ({ page }) => {
   await login(page);
   await page.getByText("Project ideas").click();

@@ -107,7 +107,11 @@ function EntryPane({ id, draft }: { id: string; draft: boolean }) {
   const [entryDate, setEntryDate] = useState(openedAt);
   const [dateAnchor, setDateAnchor] = useState<HTMLElement | null>(null);
 
-  const autosave = useAutosave(id, { title: "", markdown: "", entryDate });
+  const autosave = useAutosave(
+    id,
+    { title: "", markdown: "", entryDate },
+    draft,
+  );
 
   useEffect(() => {
     if (draft) return;
@@ -204,6 +208,9 @@ function EntryPane({ id, draft }: { id: string; draft: boolean }) {
     // Before the request, not after: a save scheduled by the last keystroke
     // would otherwise land on a deleted entry and write it straight back.
     const hadPendingSave = autosave.cancel();
+    // A write already on its way has to land before the delete, or it lands
+    // after it and puts the entry back.
+    await autosave.whenSettled();
     try {
       await removeEntry(id);
     } catch (err) {

@@ -267,10 +267,14 @@ field-name mismatches — a class of bug neither the Playwright suite nor
     no Save button and no separate editor page. The hook keeps the live draft in a ref so its unmount cleanup can
     flush what was typed — which is also what a switch to another entry is,
     since the route element keys `EntryPane` on the id. It never writes an
-    untouched draft (so "New entry" costs nothing if abandoned), never
+    untouched *new* draft (so "New entry" costs nothing if abandoned — but
+    emptying an entry already on disk is an edit and is written; `isNew` and
+    the `written` ref tell the two apart), never
     reschedules after a failed save (that would retry a broken backend
     forever — the next keystroke or Retry does it), and `cancel()` before a
-    delete keeps a pending save from resurrecting the entry.
+    delete keeps a pending save from resurrecting the entry — with
+    `whenSettled()` after it, so a write already in flight lands before the
+    delete rather than after.
     `hooks/useNewEntry.ts` generates the entry's id before navigating, so
     the draft's URL never changes under the keyed pane.
   - `src/bindings/` is **generated** — do not edit by hand. ts-rs derives
