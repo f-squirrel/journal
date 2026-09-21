@@ -27,8 +27,10 @@ import EditIcon from "@mui/icons-material/Edit";
 import MoreHorizIcon from "@mui/icons-material/MoreHoriz";
 import VisibilityIcon from "@mui/icons-material/Visibility";
 import { DateCalendar } from "@mui/x-date-pickers/DateCalendar";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { backend } from "../api/backend";
 import { HEADER_HEIGHT } from "../components/chrome";
 import MarkdownEditor from "../components/MarkdownEditor";
 import { useAppState } from "../context/AppStateContext";
@@ -377,7 +379,28 @@ function EntryPane({ id, draft }: { id: string; draft: boolean }) {
                   "& img": { maxWidth: "100%", borderRadius: 1 },
                 }}
               >
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                <ReactMarkdown
+                  remarkPlugins={[remarkGfm]}
+                  components={{
+                    // The window has no address bar, so a click must never
+                    // navigate it: an entry's links open in the user's
+                    // browser, where they can be seen.
+                    a: ({ href, children }) => (
+                      <a
+                        href={href}
+                        onClick={(event) => {
+                          event.preventDefault();
+                          if (!href) return;
+                          if (backend) void openUrl(href);
+                          else
+                            window.open(href, "_blank", "noopener,noreferrer");
+                        }}
+                      >
+                        {children}
+                      </a>
+                    ),
+                  }}
+                >
                   {markdown}
                 </ReactMarkdown>
               </Box>
