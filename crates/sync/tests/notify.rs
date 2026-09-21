@@ -39,6 +39,63 @@ fn writes_and_deletes_are_reported_by_name_and_reads_are_not() {
     assert!(seen.lock().unwrap().is_empty());
 }
 
+/// An `FsStore` that counts the `put_new` calls that reach it. The trait's
+/// default `put_new` would create, refuse and notify just the same through
+/// `contains` + `put`, so only the count tells a forward from the racy default.
+struct CountingNew {
+    inner: FsStore,
+    calls: Arc<Mutex<usize>>,
+}
+
+impl BlobStore for CountingNew {
+    fn get(&self, name: &BlobName) -> Result<Option<Vec<u8>>, StoreError> {
+        self.inner.get(name)
+    }
+    fn put(&self, name: &BlobName, bytes: &[u8]) -> Result<(), StoreError> {
+        self.inner.put(name, bytes)
+    }
+    fn put_new(&self, name: &BlobName, bytes: &[u8]) -> Result<(), StoreError> {
+        *self.calls.lock().unwrap() += 1;
+        self.inner.put_new(name, bytes)
+    }
+    fn delete(&self, name: &BlobName) -> Result<(), StoreError> {
+        self.inner.delete(name)
+    }
+    fn list(&self) -> Result<Vec<BlobName>, StoreError> {
+        self.inner.list()
+    }
+    fn contains(&self, name: &BlobName) -> Result<bool, StoreError> {
+        self.inner.contains(name)
+    }
+}
+
+#[test]
+fn notifying_store_forwards_put_new() {
+    let (seen, on_change) = recorded();
+    let dir = TempDir::new();
+    let calls = Arc::new(Mutex::new(0));
+    let store = NotifyingStore::new(
+        CountingNew {
+            inner: FsStore::new(dir.path()),
+            calls: calls.clone(),
+        },
+        on_change,
+    );
+
+    store.put_new(&n("a.json"), b"1").unwrap();
+    assert_eq!(store.get(&n("a.json")).unwrap().unwrap(), b"1");
+    assert_eq!(*seen.lock().unwrap(), ["a.json"]);
+    assert_eq!(*calls.lock().unwrap(), 1, "put_new did not reach the store");
+
+    // Refused by the inner store, not by a check made here: the blob is
+    // untouched and, since nothing changed, nothing is reported.
+    let err = store.put_new(&n("a.json"), b"2").unwrap_err();
+    assert!(matches!(err, StoreError::AlreadyExists(_)), "got {err:?}");
+    assert_eq!(store.get(&n("a.json")).unwrap().unwrap(), b"1");
+    assert_eq!(*seen.lock().unwrap(), ["a.json"]);
+    assert_eq!(*calls.lock().unwrap(), 2);
+}
+
 /// A store whose writes all fail.
 struct Broken;
 

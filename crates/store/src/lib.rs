@@ -36,6 +36,23 @@ pub trait BlobStore: Send + Sync {
     /// Creates or replaces the named blob.
     fn put(&self, name: &BlobName, bytes: &[u8]) -> Result<(), StoreError>;
 
+    /// Creates the named blob, failing with
+    /// [`StoreError::AlreadyExists`] if it is already there.
+    ///
+    /// The check and the write are one step: a caller that must be the one
+    /// that created a blob cannot get that from `contains` + `put`, because
+    /// another writer — the sync engine pulls into this same store from its
+    /// own thread — can land between the two.
+    ///
+    /// The default below is `contains` + `put`, which is exactly that race.
+    /// An implementation that can create exclusively must override it.
+    fn put_new(&self, name: &BlobName, bytes: &[u8]) -> Result<(), StoreError> {
+        if self.contains(name)? {
+            return Err(StoreError::AlreadyExists(name.as_str().to_owned()));
+        }
+        self.put(name, bytes)
+    }
+
     /// Removes the named blob. Succeeds if it was not there.
     fn delete(&self, name: &BlobName) -> Result<(), StoreError>;
 

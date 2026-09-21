@@ -35,6 +35,12 @@ pub enum KeyError {
     /// fresh key written over nothing.
     #[error("There is no vault here yet.")]
     NoVault,
+    /// A key blob appeared in the store while [`Keyring::create`](crate::Keyring::create)
+    /// was sealing its own — sync pulled the journal's real key in from
+    /// another device. Nothing is missing and nothing is damaged, so neither
+    /// of the copy above fits; trying again unlocks what arrived.
+    #[error("This journal is still arriving from the cloud — try again in a moment.")]
+    KeyArrivedWhileCreating,
 }
 
 impl KeyError {

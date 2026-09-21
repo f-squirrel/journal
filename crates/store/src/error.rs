@@ -11,4 +11,8 @@ pub enum StoreError {
     /// panicked on, because names also arrive from a store's own listing.
     #[error("invalid blob name {0:?}: {1}")]
     InvalidName(String, String),
+    /// A [`put_new`](crate::BlobStore::put_new) for a name that is already
+    /// taken.
+    #[error("blob {0:?} already exists")]
+    AlreadyExists(String),
 }

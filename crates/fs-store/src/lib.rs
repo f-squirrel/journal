@@ -65,6 +65,23 @@ impl FsStore {
             std::process::id()
         ))
     }
+
+    /// Writes the bytes to `temp` and syncs them, so a name given to the file
+    /// afterwards is one a reader can trust.
+    fn write_temp(&self, temp: &Path, bytes: &[u8]) -> std::io::Result<()> {
+        let mut file = fs::File::create(temp)?;
+        file.write_all(bytes)?;
+        // The bytes, before the caller gives them a name a reader will trust.
+        file.sync_all()
+    }
+
+    /// Syncs the directory, so a new name in it survives a crash. Best-effort:
+    /// not every platform lets a directory be opened for sync.
+    fn sync_dir(&self) {
+        if let Ok(dir) = fs::File::open(&self.dir) {
+            let _ = dir.sync_all();
+        }
+    }
 }
 
 impl BlobStore for FsStore {
@@ -99,16 +116,12 @@ impl BlobStore for FsStore {
         fs::create_dir_all(&self.dir)?;
         let temp = self.temp_path(name);
 
-        // One closure for everything that can fail once `temp` exists, so the
-        // cleanup below covers all of it rather than the rename alone.
-        let write = || -> std::io::Result<()> {
-            let mut file = fs::File::create(&temp)?;
-            file.write_all(bytes)?;
-            // The bytes, before the rename gives them a name a reader will
-            // trust.
-            file.sync_all()
-        };
-        if let Err(e) = write().and_then(|()| fs::rename(&temp, self.path(name))) {
+        // Everything that can fail once `temp` exists is in this one chain, so
+        // the cleanup below covers all of it rather than the rename alone.
+        if let Err(e) = self
+            .write_temp(&temp, bytes)
+            .and_then(|()| fs::rename(&temp, self.path(name)))
+        {
             // The blob is untouched, but the scratch file would otherwise stay
             // in the store's directory for good. `File::create` on a missing
             // parent fails before `temp` exists, so this is a no-op there
@@ -117,11 +130,35 @@ impl BlobStore for FsStore {
             return Err(e.into());
         }
 
-        // The rename itself, so the new name survives a crash. Best-effort:
-        // not every platform lets a directory be opened for sync.
-        if let Ok(dir) = fs::File::open(&self.dir) {
-            let _ = dir.sync_all();
+        // The rename itself, so the new name survives a crash.
+        self.sync_dir();
+        Ok(())
+    }
+
+    /// Creates the blob, or fails if the name is taken.
+    ///
+    /// A link rather than a rename: `rename` replaces silently, which is the
+    /// whole property this method exists to deny. `hard_link` fails with
+    /// `AlreadyExists` if the name is there, atomically, on both POSIX and
+    /// NTFS — and the content is written and synced first, so this keeps the
+    /// durability [`put`](FsStore::put)'s doc comment argues for.
+    fn put_new(&self, name: &BlobName, bytes: &[u8]) -> Result<(), StoreError> {
+        fs::create_dir_all(&self.dir)?;
+        let temp = self.temp_path(name);
+        let link = self
+            .write_temp(&temp, bytes)
+            .and_then(|()| fs::hard_link(&temp, self.path(name)));
+        // The scratch file goes either way: on success the blob has its real
+        // name, on failure nothing was created.
+        fs::remove_file(&temp).ok();
+        match link {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                return Err(StoreError::AlreadyExists(name.as_str().to_owned()));
+            }
+            Err(e) => return Err(e.into()),
         }
+        self.sync_dir();
         Ok(())
     }
 
@@ -216,6 +253,61 @@ mod tests {
         store.put(&name("a.json"), b"hello").unwrap();
 
         assert_eq!(store.get(&name("a.json")).unwrap().unwrap(), b"hello");
+        fs::remove_dir_all(store.dir()).ok();
+    }
+
+    #[test]
+    fn put_new_creates_the_blob() {
+        let store = temp_store();
+        store.put_new(&name("a.json"), b"hello").unwrap();
+        assert_eq!(store.get(&name("a.json")).unwrap().unwrap(), b"hello");
+        fs::remove_dir_all(store.dir()).ok();
+    }
+
+    #[test]
+    fn put_new_refuses_a_name_that_is_taken() {
+        let store = temp_store();
+        store.put(&name("a.json"), b"first").unwrap();
+
+        let err = store.put_new(&name("a.json"), b"second").unwrap_err();
+
+        assert!(matches!(err, StoreError::AlreadyExists(_)), "got {err:?}");
+        assert_eq!(store.get(&name("a.json")).unwrap().unwrap(), b"first");
+        fs::remove_dir_all(store.dir()).ok();
+    }
+
+    /// The first save of a store is where the directory does not exist yet;
+    /// `put_new` is what writes the key blob there, so it needs the same
+    /// `create_dir_all` `put` has.
+    #[test]
+    fn put_new_creates_the_store_directory() {
+        let store = temp_store();
+        assert!(!store.dir().exists(), "the store directory already existed");
+
+        store.put_new(&name("a.json"), b"hello").unwrap();
+
+        assert_eq!(store.get(&name("a.json")).unwrap().unwrap(), b"hello");
+        fs::remove_dir_all(store.dir()).ok();
+    }
+
+    /// `put_new` is write-then-link, and like `put` it must not leave its
+    /// scratch file in the store — after a success, where the link leaves two
+    /// names for one file, or after a refusal.
+    #[test]
+    fn put_new_leaves_no_temp_file_behind() {
+        let store = temp_store();
+        store.put_new(&name("a.json"), b"first").unwrap();
+        assert!(store.put_new(&name("a.json"), b"second").is_err());
+
+        assert_eq!(store.list().unwrap(), [name("a.json")]);
+        assert!(
+            !fs::read_dir(store.dir()).unwrap().any(|f| f
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .ends_with(TEMP_EXT)),
+            "a scratch file was left in the store"
+        );
         fs::remove_dir_all(store.dir()).ok();
     }
 

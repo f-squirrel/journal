@@ -1,4 +1,4 @@
-use journal_store::BlobStore;
+use journal_store::{BlobStore, StoreError};
 use secrecy::SecretString;
 
 use crate::identity::{key_blob, Identity};
@@ -54,7 +54,14 @@ impl Keyring {
     /// crate down from the code allowed to make it (ADR 0009).
     pub fn create(store: &dyn BlobStore, passphrase: &SecretString) -> Result<Self, KeyError> {
         let key = Identity::generate();
-        store.put(&key_blob(), &key.seal(passphrase)?)?;
+        // Sealing is ~1s of scrypt, and sync writes this store from its own
+        // thread, so "there was no key a second ago" is not "there is no key".
+        // `put_new` is what makes the check and the write one step.
+        let sealed = key.seal(passphrase)?;
+        store.put_new(&key_blob(), &sealed).map_err(|e| match e {
+            StoreError::AlreadyExists(_) => KeyError::KeyArrivedWhileCreating,
+            other => other.into(),
+        })?;
         Ok(Self { key })
     }
 
@@ -85,6 +92,7 @@ mod tests {
     use super::*;
     use crate::testing::{passphrase, temp_store};
     use journal_fs_store::FsStore;
+    use journal_store::BlobName;
     use std::fs;
 
     /// A keyring with a fresh key and no store behind it, for the tests that
@@ -146,6 +154,51 @@ mod tests {
         Keyring::create(&store, &passphrase("hunter2")).unwrap();
         assert_eq!(store.list().unwrap(), [key_blob()]);
         discard(store);
+    }
+
+    /// A store that lets a key blob arrive — as a sync pass would — in the gap
+    /// between `create` deciding to write and its write, by putting one in
+    /// place on the first `put_new`.
+    struct KeyArrives<S>(S);
+
+    impl<S: BlobStore> BlobStore for KeyArrives<S> {
+        fn get(&self, name: &BlobName) -> Result<Option<Vec<u8>>, StoreError> {
+            self.0.get(name)
+        }
+        fn put(&self, name: &BlobName, bytes: &[u8]) -> Result<(), StoreError> {
+            self.0.put(name, bytes)
+        }
+        fn put_new(&self, name: &BlobName, bytes: &[u8]) -> Result<(), StoreError> {
+            self.0.put(&key_blob(), b"the journal's real key")?;
+            self.0.put_new(name, bytes)
+        }
+        fn delete(&self, name: &BlobName) -> Result<(), StoreError> {
+            self.0.delete(name)
+        }
+        fn list(&self) -> Result<Vec<BlobName>, StoreError> {
+            self.0.list()
+        }
+        fn contains(&self, name: &BlobName) -> Result<bool, StoreError> {
+            self.0.contains(name)
+        }
+    }
+
+    #[test]
+    fn a_key_that_arrives_while_creating_is_not_overwritten() {
+        let store = KeyArrives(temp_store());
+
+        let err = Keyring::create(&store, &passphrase("hunter2")).unwrap_err();
+
+        assert!(
+            matches!(err, KeyError::KeyArrivedWhileCreating),
+            "got {err:?}"
+        );
+        assert_eq!(
+            store.get(&key_blob()).unwrap().unwrap(),
+            b"the journal's real key",
+            "the key that arrived was replaced by the one being created"
+        );
+        discard(store.0);
     }
 
     #[test]
