@@ -91,48 +91,40 @@ impl FsStore {
             fs::remove_file(&temp).ok();
             return Err(e.into());
         }
-        let linked = link(&temp, &self.path(name));
-        // The scratch file goes either way: on success the blob has its real
-        // name, on failure nothing was created.
-        fs::remove_file(&temp).ok();
-        match linked {
-            Ok(()) => {}
+        let path = self.path(name);
+        let published = match link(&temp, &path) {
+            Ok(()) => Ok(()),
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                return Err(StoreError::AlreadyExists(name.as_str().to_owned()));
+                Err(StoreError::AlreadyExists(name.as_str().to_owned()))
             }
             // The name is free as far as the link can tell; it just cannot
             // make one. If the directory is unwritable for real, this fails
             // the same way and reports that instead.
-            Err(_) => self.create_in_place(name, bytes)?,
-        }
+            Err(_) => Self::rename_unless_taken(name, &temp, &path),
+        };
+        // The scratch file goes either way: on success the blob has its real
+        // name, on failure nothing was created.
+        fs::remove_file(&temp).ok();
+        published?;
         self.sync_dir();
         Ok(())
     }
 
-    /// Creates the blob under its real name, exclusively and without a scratch
-    /// file. The fallback for a filesystem with no hard links; see
-    /// [`put_new`](BlobStore::put_new) on what it gives up.
-    fn create_in_place(&self, name: &BlobName, bytes: &[u8]) -> Result<(), StoreError> {
-        let path = self.path(name);
-        let mut file = match fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)
-        {
-            Ok(file) => file,
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                return Err(StoreError::AlreadyExists(name.as_str().to_owned()));
-            }
-            Err(e) => return Err(e.into()),
-        };
-        if let Err(e) = file.write_all(bytes).and_then(|()| file.sync_all()) {
-            // `create_new` succeeded, so this file is ours to remove — and a
-            // half-written blob under its real name is what `list` would hand
-            // up as one.
-            drop(file);
-            fs::remove_file(&path).ok();
-            return Err(e.into());
+    /// Gives the finished `temp` its real name, if nothing has it. The fallback
+    /// for a filesystem with no hard links; see [`put_new`](BlobStore::put_new)
+    /// on what it gives up.
+    ///
+    /// Only ever a whole blob under the real name: the file is complete and
+    /// synced before it is renamed, so neither a reader (the sync worker lists
+    /// this directory from its own thread) nor a crash sees a partial one. What
+    /// it cannot be is atomic with the check — `std` has no rename that refuses
+    /// to replace — so the name being free is decided a moment before it is
+    /// taken.
+    fn rename_unless_taken(name: &BlobName, temp: &Path, path: &Path) -> Result<(), StoreError> {
+        if path.exists() {
+            return Err(StoreError::AlreadyExists(name.as_str().to_owned()));
         }
+        fs::rename(temp, path)?;
         Ok(())
     }
 
@@ -207,12 +199,14 @@ impl BlobStore for FsStore {
     /// Not every place a store can live has hard links (FAT and exFAT, some
     /// network mounts) or lets an app make them (a sandbox policy). When the
     /// link fails for any reason other than the name being taken, this falls
-    /// back to creating the blob in place with `create_new`, which is just as
-    /// exclusive but writes under the real name: a crash part-way through
-    /// leaves a truncated blob where the link would have left none. That is
-    /// the trade for a store that works at all, and it is acceptable because
-    /// the one caller writes the vault key at creation, when there are no
-    /// entries yet to lose with it.
+    /// back to renaming the finished file into place unless the name has
+    /// appeared. The blob is still whole under its real name from the first
+    /// instant it has one, but the check and the rename are two steps, so a
+    /// writer that creates the same name in the microseconds between them is
+    /// overwritten rather than refused. That is the trade for a store that
+    /// works at all; the one caller writes the vault key at creation, and
+    /// against a ~1 s seal it narrows the window from the seal to the gap
+    /// between two syscalls.
     fn put_new(&self, name: &BlobName, bytes: &[u8]) -> Result<(), StoreError> {
         self.put_new_with(name, bytes, |from, to| fs::hard_link(from, to))
     }
@@ -392,7 +386,27 @@ mod tests {
         fs::remove_dir_all(store.dir()).ok();
     }
 
-    /// The fallback trades crash durability, not exclusivity: it must still
+    /// What a reader — the sync worker lists this directory from its own
+    /// thread — or a crash must never meet: the real name existing before the
+    /// whole blob is behind it. The fallback publishes by rename, so at the
+    /// moment the link is refused there is nothing under that name yet.
+    #[test]
+    fn the_fallback_creates_nothing_under_the_real_name_before_the_blob_is_whole() {
+        let store = temp_store();
+
+        store
+            .put_new_with(&name("a.json"), b"hello", |from, to| {
+                assert!(!to.exists(), "the name existed before the blob was whole");
+                assert_eq!(fs::read(from).unwrap(), b"hello");
+                Err(std::io::ErrorKind::Unsupported.into())
+            })
+            .unwrap();
+
+        assert_eq!(store.get(&name("a.json")).unwrap().unwrap(), b"hello");
+        fs::remove_dir_all(store.dir()).ok();
+    }
+
+    /// The fallback gives up atomic exclusivity, not the check: it must still
     /// refuse a name that is taken, and leave what is there alone.
     #[test]
     fn the_fallback_still_refuses_a_name_that_is_taken() {
