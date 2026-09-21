@@ -9,10 +9,7 @@
 
 #![cfg_attr(all(test, coverage_nightly), feature(coverage_attribute))]
 
-mod backfill;
 mod search;
-
-pub use backfill::{BackfillMode, BackfillReport};
 
 use std::sync::Arc;
 

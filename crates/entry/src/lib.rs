@@ -85,7 +85,7 @@ pub struct Header {
 }
 
 /// serde cannot default one field from another, so an entry predating
-/// `entry_date` gets "now" rather than its `updated_at`. Backfilling the
+/// `entry_date` gets "now" rather than its `updated_at`. Filling in the
 /// exact value would be a migration, which this app deliberately does not do.
 fn default_entry_date() -> DateTime<Utc> {
     Utc::now()

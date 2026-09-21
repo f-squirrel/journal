@@ -4,52 +4,6 @@ Problems that are understood and deliberately left unfixed for now. Each
 entry says what the user sees, when it happens, how to get out of it, and
 what fixing it would take. When one is fixed, delete its entry.
 
-## Entries written before entry dates existed all show today
-
-**What the user sees.** Every entry written before the entry-date feature
-landed shows today's date, and they all sit together at the top of the list
-under this month's heading. Opening one and editing it fixes that one entry
-only — and fixes it to *today*, not to when it was written.
-
-**When it happens.** Once, on the first run after the entry-date change.
-Entries carry two timestamps now: `updated_at`, the last write, and
-`entry_date`, the day the entry is about, which is what the list sorts and
-groups by. Blobs written before the change have no `entry_date` on disk, so
-they take a `#[serde(default)]` of "now" every time they are read. Nothing
-is lost — the markdown, the title and `updated_at` are all intact — but the
-ordering is wrong until each entry is given a date.
-
-**Workaround.** Run the one-shot backfill, which copies each undated entry's
-`updated_at` into its `entry_date`. That is not a perfect answer (an entry
-written up days after the fact gets the day it was *saved*, not the day it
-is about), but it restores the journal's order, and any individual entry can
-then be re-dated from its heading in the app.
-
-1. Quit the app. The tool writes to the same blobs, and a sync pass mid-run
-   would upload a half-finished repair.
-2. Back up the entries directory — it is the only copy:
-   `cp -r ~/.local/share/com.fsquirrel.journal/entries{,.bak}`
-3. Count what would change, writing nothing:
-
-   ```
-   cargo run --release -p journal-vault --example backfill \
-     -- ~/.local/share/com.fsquirrel.journal/entries
-   ```
-
-   It asks for the passphrase on stdin (never as an argument, which `ps`
-   would show) and prints counts only, never a title or an id.
-4. If the numbers look right, run it again with `--apply`.
-5. Start the app. If sync is connected, the repaired entries upload: `age`
-   output is not deterministic, so a rewritten blob is a changed blob.
-
-Re-running is safe — an entry that already has a date is left alone.
-
-**What a fix would take.** Nothing further; this is a one-time state. Once
-the user has run it, delete `crates/vault/src/backfill.rs`,
-`crates/vault/examples/backfill.rs` and this entry. The serde default stays:
-it is what lets an old blob parse at all, and it costs the read path no
-branch.
-
 ## Sync stops when this device and the cloud hold different journals
 
 **What the user sees.** The sync button reports a key mismatch
