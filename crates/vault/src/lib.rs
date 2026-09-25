@@ -13,6 +13,7 @@ mod search;
 
 use std::sync::Arc;
 
+use chrono::{DateTime, Utc};
 use journal_entry::{Entry, Header, Id, SearchMatch};
 use journal_key::{Cipher, KeyError, Keyring};
 use journal_store::{BlobName, BlobStore, StoreError};
@@ -31,6 +32,13 @@ pub enum VaultError {
     /// one would read as a developer's note wrapping a sentence.
     #[error(transparent)]
     Key(#[from] KeyError),
+    /// The entry on disk no longer matches the `updated_at` the caller last
+    /// saw: another writer — another device via sync, most likely — changed
+    /// or created it since. The text is the contract: `src/utils/errors.ts`
+    /// on the frontend matches it verbatim to recognise this case out of the
+    /// `Err(String)` an `invoke` call returns.
+    #[error("this entry was changed on another device since it was opened")]
+    Stale,
 }
 
 /// The extension every entry blob's name ends in.
@@ -59,12 +67,14 @@ pub fn entry_id(name: &BlobName) -> Option<Id> {
 
 /// Whether `name` is one of our entry blobs.
 ///
-/// The single definition of that question. It used to have a second copy in
-/// the crate below, which is how a rename here could silently disable the
-/// orphan check in [`Vault::open`] — the two halves of that check now live
-/// side by side.
+/// Delegates to [`entry_id`] rather than checking the extension alone, so
+/// there is exactly one definition of "is an entry blob" in the crate: the
+/// two used to disagree (this one accepted anything ending in `.json`, while
+/// `entry_id` demanded a lower-case uuid), which meant a stray `notes.json`
+/// counted as an entry here and blocked [`Vault::open`]'s orphan check
+/// without ever showing up in a listing.
 fn is_entry(name: &BlobName) -> bool {
-    name.ends_with(ENTRY_EXT)
+    entry_id(name).is_some()
 }
 
 /// A journal: the entries in one blob store, each encrypted at rest under the
@@ -216,11 +226,47 @@ impl Vault {
     }
 
     /// Creates or overwrites the entry with the given id.
+    ///
+    /// Unconditional on purpose: the resolver calls this for the conflicted
+    /// copy it writes and for a theirs-wins overwrite (ADR 0012, D1), and
+    /// both of those must succeed regardless of what is on disk. Anything
+    /// that should refuse a stale write wants [`save_entry_if`](Self::save_entry_if)
+    /// instead.
     pub fn save_entry(&self, entry: &Entry) -> Result<(), VaultError> {
         let plaintext = serde_json::to_vec(entry)?;
         let ciphertext = self.cipher.encrypt(&plaintext)?;
         self.store.put(&blob_name(&entry.header.id), &ciphertext)?;
         Ok(())
+    }
+
+    /// Saves `entry` only if the entry on disk is still the one the caller
+    /// last saw: `expected` is the `updated_at` it was holding, or `None` for
+    /// "does not exist yet". Refuses with [`VaultError::Stale`] otherwise,
+    /// leaving whatever is on disk untouched.
+    ///
+    /// This is the precondition the open pane's autosave writes through
+    /// (GEN-1): it is what lets the vault tell "I am overwriting my own
+    /// earlier draft" from "I am about to overwrite an edit that arrived from
+    /// somewhere else since I last read this entry".
+    ///
+    /// **Not atomic against the sync engine.** The engine writes the bare
+    /// `BlobStore` beneath this vault, from its own thread, so a pull that
+    /// lands between the read below and the write in [`save_entry`](Self::save_entry)
+    /// is silently overwritten (see the plan's Non-goals). The window is one
+    /// read plus one encrypt plus one write; closing it needs a lock or a
+    /// compare-and-swap shared with the engine, which is its own design.
+    pub fn save_entry_if(
+        &self,
+        entry: &Entry,
+        expected: Option<DateTime<Utc>>,
+    ) -> Result<(), VaultError> {
+        let on_disk = self
+            .read::<Header>(&blob_name(&entry.header.id))?
+            .map(|header| header.updated_at);
+        if on_disk != expected {
+            return Err(VaultError::Stale);
+        }
+        self.save_entry(entry)
     }
 
     pub fn delete_entry(&self, id: &Id) -> Result<(), VaultError> {
@@ -420,6 +466,97 @@ mod tests {
         assert_eq!(vault.list_entries().unwrap().len(), 1);
         assert_eq!(vault.get_entry(&id).unwrap().unwrap().markdown, "# edited");
         discard(&store);
+    }
+
+    #[test]
+    fn save_entry_if_writes_when_disk_matches() {
+        let store = temp_store();
+        let vault = fake_vault(store.clone());
+        let id = Id::new();
+        let entry = sample(id);
+        vault.save_entry(&entry).unwrap();
+
+        let mut edited = entry.clone();
+        edited.markdown = "# edited".to_string();
+        vault
+            .save_entry_if(&edited, Some(entry.header.updated_at))
+            .unwrap();
+
+        assert_eq!(vault.get_entry(&id).unwrap().unwrap().markdown, "# edited");
+        discard(&store);
+    }
+
+    #[test]
+    fn save_entry_if_refuses_when_disk_moved_on() {
+        let store = temp_store();
+        let vault = fake_vault(store.clone());
+        let id = Id::new();
+
+        let v0 = sample(id);
+        vault.save_entry(&v0).unwrap();
+
+        let mut v1 = v0.clone();
+        v1.header.updated_at = v0.header.updated_at + chrono::Duration::seconds(1);
+        v1.markdown = "# v1".to_string();
+        vault.save_entry(&v1).unwrap();
+
+        let mut v2 = v1.clone();
+        v2.header.updated_at = v1.header.updated_at + chrono::Duration::seconds(1);
+        v2.markdown = "# v2".to_string();
+        let Err(err) = vault.save_entry_if(&v2, Some(v0.header.updated_at)) else {
+            panic!("save_entry_if wrote over a newer entry");
+        };
+        assert!(matches!(err, VaultError::Stale), "got {err:?}");
+
+        assert_eq!(vault.get_entry(&id).unwrap().unwrap().markdown, "# v1");
+        discard(&store);
+    }
+
+    #[test]
+    fn save_entry_if_none_creates_but_refuses_over_an_existing_entry() {
+        let store = temp_store();
+        let vault = fake_vault(store.clone());
+        let id = Id::new();
+        let entry = sample(id);
+
+        vault.save_entry_if(&entry, None).unwrap();
+        assert_eq!(vault.get_entry(&id).unwrap().unwrap().markdown, "# hello");
+
+        let mut edited = entry.clone();
+        edited.markdown = "# edited".to_string();
+        let Err(err) = vault.save_entry_if(&edited, None) else {
+            panic!("save_entry_if(None) overwrote an entry that already existed");
+        };
+        assert!(matches!(err, VaultError::Stale), "got {err:?}");
+        assert_eq!(vault.get_entry(&id).unwrap().unwrap().markdown, "# hello");
+        discard(&store);
+    }
+
+    #[test]
+    fn save_entry_if_some_refuses_when_the_entry_is_gone() {
+        let store = temp_store();
+        let vault = fake_vault(store.clone());
+        let id = Id::new();
+        let entry = sample(id);
+        vault.save_entry(&entry).unwrap();
+        vault.delete_entry(&id).unwrap();
+
+        let Err(err) = vault.save_entry_if(&entry, Some(entry.header.updated_at)) else {
+            panic!("save_entry_if resurrected a deleted entry");
+        };
+        assert!(matches!(err, VaultError::Stale), "got {err:?}");
+        assert!(vault.get_entry(&id).unwrap().is_none());
+        discard(&store);
+    }
+
+    /// The text is the contract: `src/utils/errors.ts`'s `isStaleEntry`
+    /// compares an `Err(String)` against this exact string.
+    #[test]
+    fn stale_message_is_the_contract() {
+        assert_eq!(
+            VaultError::Stale.to_string(),
+            "this entry was changed on another device since it was opened"
+        );
     }
 
     #[test]
@@ -715,8 +852,31 @@ mod tests {
         store
             .put(&BlobName::literal("notes.txt"), b"something else entirely")
             .unwrap();
+        // RUST-3: this used to pass `is_entry`'s old `.ends_with(".json")`
+        // check even though it is not a `<uuid>.json` name, and so counted
+        // toward `holds_entries` too.
+        store
+            .put(&BlobName::literal("notes.json"), b"also not an entry")
+            .unwrap();
 
         assert_eq!(vault.list_entries().unwrap().len(), 1);
+        discard(&store);
+    }
+
+    /// RUST-3: a store holding a non-uuid `.json` blob and nothing else must
+    /// still open as an empty, fresh vault rather than tripping the
+    /// [`Vault::open`] orphan check meant for a store that lost its key.
+    #[test]
+    fn a_store_holding_only_notes_json_opens_as_a_new_vault() {
+        let store = temp_store();
+        store
+            .put(&BlobName::literal("notes.json"), b"not an entry")
+            .unwrap();
+
+        let vault = Vault::open(store.clone(), &passphrase("fresh start")).unwrap();
+        assert!(vault.list_entries().unwrap().is_empty());
+        assert!(Keyring::exists(&*store).unwrap());
+
         discard(&store);
     }
 
