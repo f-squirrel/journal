@@ -8,7 +8,7 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use journal_entry::{Entry, Header, Id};
+use journal_api::{Entry, Header, Id};
 use journal_store::BlobName;
 use journal_sync_engine::{ConflictResolver, Resolution};
 use journal_vault::{entry_id, Vault, VaultError};

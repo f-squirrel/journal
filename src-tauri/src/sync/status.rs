@@ -8,8 +8,8 @@ use std::thread;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
+use journal_api::{SyncState, SyncStatusPayload};
 use journal_sync_engine::{SyncErrorKind, SyncStatus};
-use journal_sync_status::{SyncState, SyncStatusPayload};
 use journal_vault::entry_id;
 
 use super::Events;
@@ -147,7 +147,7 @@ mod tests {
     use std::sync::Mutex;
     use std::time::{Instant, SystemTime};
 
-    use journal_entry::Id;
+    use journal_api::Id;
     use journal_store::BlobName;
 
     use super::*;

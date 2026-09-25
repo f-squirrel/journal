@@ -135,6 +135,7 @@ workspace crates:
 | `src/` | React UI, routing, autosave, and the Tauri API wrapper |
 | `src-tauri/` | Native application setup and Tauri commands |
 | `crates/entry` | Shared entry and header types |
+| `crates/api` | Frontend contract: bridge-only types, entry types re-exported |
 | `crates/key` | Key creation, sealing, unlocking, and encryption |
 | `crates/vault` | Encrypted entry CRUD and journal rules |
 | `crates/store` | Abstract local blob-store interface |

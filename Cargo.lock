@@ -2500,15 +2500,14 @@ name = "journal"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "journal-api",
  "journal-credential",
  "journal-dropbox",
- "journal-entry",
  "journal-fs-store",
  "journal-key",
  "journal-remote",
  "journal-store",
  "journal-sync-engine",
- "journal-sync-status",
  "journal-vault",
  "log",
  "secrecy",
@@ -2521,6 +2520,17 @@ dependencies = [
  "tauri-plugin-opener",
  "thiserror 2.0.20",
  "url",
+]
+
+[[package]]
+name = "journal-api"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "journal-entry",
+ "serde",
+ "serde_json",
+ "ts-rs",
 ]
 
 [[package]]
@@ -2607,17 +2617,6 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "thiserror 2.0.20",
-]
-
-[[package]]
-name = "journal-sync-status"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "journal-entry",
- "serde",
- "serde_json",
- "ts-rs",
 ]
 
 [[package]]

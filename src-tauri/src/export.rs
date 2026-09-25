@@ -19,7 +19,7 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Local, NaiveDate, SecondsFormat, Utc};
-use journal_entry::{Entry, Header};
+use journal_api::{Entry, Header};
 use journal_vault::{Vault, VaultError};
 use thiserror::Error;
 
@@ -232,7 +232,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
-    use journal_entry::Id;
+    use journal_api::Id;
     use journal_fs_store::FsStore;
     use journal_store::BlobStore;
     use secrecy::SecretString;

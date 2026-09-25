@@ -1,13 +1,9 @@
-#![cfg_attr(all(test, coverage_nightly), feature(coverage_attribute))]
-
 //! What the app tells the frontend about sync: one payload, sent over both the
 //! `sync_status` command and the `sync://status` event, and the list of
 //! providers the connect dialog offers.
 //!
-//! Only the shape lives here, so that `make bindings` can generate its
-//! TypeScript; deriving the state from the sync engine's own status is the
-//! backend's job (`src-tauri`). It depends on `journal-entry` for [`Id`] alone,
-//! and on nothing from `journal-sync`, which knows blobs rather than entries.
+//! Only the shape lives here; deriving the state from the sync engine's own
+//! `SyncStatus` is the backend's job (`src-tauri/src/sync/status.rs`).
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;

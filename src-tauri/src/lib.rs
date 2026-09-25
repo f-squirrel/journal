@@ -8,8 +8,8 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
+use journal_api::{Entry, Header, Id, SearchMatch};
 use journal_credential::FileCredentialStore;
-use journal_entry::{Entry, Header, Id, SearchMatch};
 use journal_fs_store::FsStore;
 use journal_key::Keyring;
 use journal_store::BlobStore;

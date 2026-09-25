@@ -29,8 +29,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 url = { workspace = true }
-journal-entry = { path = "../crates/entry" }
-journal-sync-status = { path = "../crates/sync-status" }
+journal-api = { path = "../crates/api" }
 journal-vault = { path = "../crates/vault" }
 journal-store = { path = "../crates/store" }
 journal-fs-store = { path = "../crates/fs-store" }

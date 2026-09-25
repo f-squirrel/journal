@@ -1,5 +1,5 @@
 [package]
-name = "journal-sync-status"
+name = "journal-api"
 version = "0.1.0"
 edition = "2021"
 

@@ -29,11 +29,11 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
+use journal_api::{ProviderInfo, SyncStatusPayload};
 use journal_credential::{Credential, CredentialStore, RefreshToken};
 use journal_remote::RemoteStore;
 use journal_store::{BlobName, BlobStore};
 use journal_sync_engine::{erase_state, SyncEngine, SyncStatus};
-use journal_sync_status::{ProviderInfo, SyncStatusPayload};
 use tauri::State;
 use url::Url;
 
