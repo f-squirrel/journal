@@ -325,10 +325,15 @@ pub fn run() {
                         .map_err(|e| e.to_string())
                 }),
                 timing: sync::worker::Timing::default(),
-            }));
+            })?);
             app.manage(control.clone());
             // Scans every blob against the sync state: not on the main thread.
-            std::thread::spawn(move || control.resume());
+            if let Err(e) = std::thread::Builder::new()
+                .name("sync-resume".to_owned())
+                .spawn(move || control.resume())
+            {
+                log::warn!("could not start the sync-resume thread: {e}");
+            }
 
             if let Some(window) = app.get_webview_window("main") {
                 window.maximize()?;

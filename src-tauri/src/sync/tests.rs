@@ -358,17 +358,20 @@ impl Rig {
         });
         let handle = app.handle().clone();
         let events = Arc::new(Recorder::default());
-        let control = Arc::new(SyncControl::new(SyncConfig {
-            slot,
-            local: Arc::new(entries),
-            vault: Arc::new(move || crate::vault(&handle.state::<VaultState>()).ok()),
-            events: events.clone(),
-            providers,
-            credentials: Arc::new(FileCredentialStore::new(dir.join("config").join("login"))),
-            state_path: dir.join("sync-state.json"),
-            open_url: Arc::new(browser),
-            timing,
-        }));
+        let control = Arc::new(
+            SyncControl::new(SyncConfig {
+                slot,
+                local: Arc::new(entries),
+                vault: Arc::new(move || crate::vault(&handle.state::<VaultState>()).ok()),
+                events: events.clone(),
+                providers,
+                credentials: Arc::new(FileCredentialStore::new(dir.join("config").join("login"))),
+                state_path: dir.join("sync-state.json"),
+                open_url: Arc::new(browser),
+                timing,
+            })
+            .unwrap(),
+        );
         app.manage(control.clone());
 
         let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())

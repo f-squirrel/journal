@@ -185,7 +185,7 @@ impl Worker {
         timing: Timing,
         poke: Arc<dyn Fn() + Send + Sync>,
         provider: &'static str,
-    ) -> Arc<Self> {
+    ) -> std::io::Result<Arc<Self>> {
         let (tx, rx) = mpsc::channel();
         let detail = Arc::new(Mutex::new(None));
         let context = Context {
@@ -197,15 +197,14 @@ impl Worker {
         };
         let thread = thread::Builder::new()
             .name("sync-worker".to_owned())
-            .spawn(move || context.run(Schedule::new(timing, Instant::now()), rx))
-            .expect("the OS can start a thread");
-        Arc::new(Self {
+            .spawn(move || context.run(Schedule::new(timing, Instant::now()), rx))?;
+        Ok(Arc::new(Self {
             engine,
             tx,
             thread: Mutex::new(Some(thread)),
             detail,
             provider,
-        })
+        }))
     }
 
     pub fn engine(&self) -> &SyncEngine {

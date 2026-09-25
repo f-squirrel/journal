@@ -114,7 +114,7 @@ impl Coalescer {
         interval: Duration,
         snapshot: impl Fn() -> SyncStatusPayload + Send + 'static,
         events: Arc<dyn Events>,
-    ) -> Self {
+    ) -> std::io::Result<Self> {
         let (tx, rx) = mpsc::channel::<()>();
         thread::Builder::new()
             .name("sync-status".to_owned())
@@ -125,9 +125,8 @@ impl Coalescer {
                     events.status(&snapshot());
                     thread::sleep(interval);
                 }
-            })
-            .expect("the OS can start a thread");
-        Self { tx }
+            })?;
+        Ok(Self { tx })
     }
 
     /// A handle that pokes, for callbacks that outlive a borrow of `self`. A
@@ -359,6 +358,7 @@ mod tests {
                 },
                 recorder.clone(),
             )
+            .unwrap()
         };
 
         let poke = coalescer.poker();

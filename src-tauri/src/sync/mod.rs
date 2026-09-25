@@ -228,20 +228,20 @@ pub struct SyncControl {
 }
 
 impl SyncControl {
-    pub fn new(config: SyncConfig) -> Self {
+    pub fn new(config: SyncConfig) -> std::io::Result<Self> {
         let coalescer = {
             let slot = config.slot.clone();
             Coalescer::new(
                 STATUS_INTERVAL,
                 move || slot.payload(),
                 config.events.clone(),
-            )
+            )?
         };
-        Self {
+        Ok(Self {
             config,
             coalescer,
             lifecycle: Mutex::new(()),
-        }
+        })
     }
 
     /// The provider with this id, if the build offers it.
@@ -465,6 +465,8 @@ impl SyncControl {
         };
         let engine = SyncEngine::open(cfg.local.clone(), remote, cfg.state_path.clone(), on_status)
             .map_err(|e| e.to_string())?;
+        // A failure here leaves the credential already saved above and sync
+        // off: the next launch's `resume` retries starting the worker.
         let worker = Worker::start(
             Arc::new(engine),
             Arc::new(VaultResolver::new(cfg.vault.clone())),
@@ -472,7 +474,8 @@ impl SyncControl {
             cfg.timing,
             poke.clone(),
             provider.name(),
-        );
+        )
+        .map_err(|e| format!("could not start sync: {e}"))?;
         cfg.slot.set(worker.clone());
         poke();
         Ok(worker)
