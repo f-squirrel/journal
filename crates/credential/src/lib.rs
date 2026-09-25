@@ -16,6 +16,8 @@
 use std::fmt;
 use std::fs;
 use std::io::{self, Write};
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 use secrecy::{ExposeSecret, SecretString};
@@ -131,8 +133,26 @@ pub trait CredentialStore: Send + Sync {
 }
 
 #[derive(Debug, Error)]
-#[error("{0}")]
-pub struct CredentialStoreError(String);
+pub enum CredentialStoreError {
+    #[error("could not {action} the saved login at {}: {error}", .path.display())]
+    Io {
+        action: &'static str,
+        path: PathBuf,
+        // Named `error`, not `source`: thiserror treats a field named
+        // `source` as the error source even without `#[source]`, which
+        // would print the cause a second time as the chain's next link on
+        // top of this variant's own interpolation of it.
+        error: io::Error,
+    },
+    #[error(
+        "the saved login at {} is not in a format this version reads; connect again",
+        .0.display()
+    )]
+    Unreadable(PathBuf),
+    /// For a store implemented outside this crate (an OS keychain, a fake).
+    #[error(transparent)]
+    Other(Box<dyn std::error::Error + Send + Sync>),
+}
 
 /// A [`CredentialStore`] that keeps the credential in one file, readable by its
 /// owner alone: the provider id on the first line, the token on the second,
@@ -160,11 +180,12 @@ impl FileCredentialStore {
         PathBuf::from(name)
     }
 
-    fn fail(&self, action: &str, e: io::Error) -> CredentialStoreError {
-        CredentialStoreError(format!(
-            "could not {action} the saved login at {}: {e}",
-            self.path.display()
-        ))
+    fn fail(&self, action: &'static str, error: io::Error) -> CredentialStoreError {
+        CredentialStoreError::Io {
+            action,
+            path: self.path.clone(),
+            error,
+        }
     }
 }
 
@@ -204,12 +225,9 @@ impl CredentialStore for FileCredentialStore {
             }
             _ => None,
         };
-        credential.map(Some).ok_or_else(|| {
-            CredentialStoreError(format!(
-                "the saved login at {} is not in a format this version reads; connect again",
-                self.path.display()
-            ))
-        })
+        credential
+            .map(Some)
+            .ok_or_else(|| CredentialStoreError::Unreadable(self.path.clone()))
     }
 
     fn save(&self, credential: &Credential) -> Result<(), CredentialStoreError> {
@@ -220,13 +238,26 @@ impl CredentialStore for FileCredentialStore {
             // Written whole and renamed into place, so a crash leaves either
             // the old login or the new one and never half of one.
             let temp = self.temp_path();
-            let mut file = fs::OpenOptions::new()
-                .write(true)
-                .create(true)
-                .truncate(true)
-                .open(&temp)?;
-            // Before the token goes in, and whether or not the scratch file
-            // already existed with looser permissions.
+            // A stale scratch file from an interrupted save may still be
+            // sitting here, at whatever permissions that run left it with.
+            // Remove it first, so the file opened below is always a fresh
+            // inode — one no other file descriptor (this process's or
+            // another's) could still be holding open at the old, looser
+            // permissions — rather than a name that already existed being
+            // reused in place.
+            match fs::remove_file(&temp) {
+                Ok(()) => {}
+                Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e),
+            }
+            let mut options = fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            options.mode(0o600);
+            let mut file = options.open(&temp)?;
+            // Belt and braces on Unix (mode() above already set it at
+            // creation, atomically); the only thing that matters on
+            // non-Unix, where directory permissions are relied on instead.
             restrict_to_owner(&file)?;
             file.write_all(credential.provider.as_bytes())?;
             file.write_all(b"\n")?;
@@ -427,16 +458,80 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn the_file_is_readable_by_its_owner_alone() {
+        use std::io::Read;
         use std::os::unix::fs::PermissionsExt;
         let store = store();
 
-        // Even when a scratch file with looser permissions is in the way.
+        // Even when a scratch file with looser permissions is in the way,
+        // holding junk from an interrupted run. Held open across the save:
+        // a reader that already had the stale file open must keep seeing
+        // what it opened, never the new secret, which is what tells "the
+        // stale file was unlinked and a fresh one created in its place"
+        // apart from "the existing file was reused and overwritten". (A
+        // same-process `MetadataExt::ino` comparison cannot tell these
+        // apart: ext4 was observed here to immediately hand the
+        // just-freed inode number back to the very next create in the same
+        // directory, so an inode-number check would fail even though the
+        // file object is in fact new — see the WP5 hand-off note.)
         fs::create_dir_all(store.path().parent().unwrap()).unwrap();
-        fs::write(store.temp_path(), "old").unwrap();
+        fs::write(store.temp_path(), "junk").unwrap();
         fs::set_permissions(store.temp_path(), fs::Permissions::from_mode(0o644)).unwrap();
+        let mut still_open = fs::File::open(store.temp_path()).unwrap();
+
         store.save(&credential("dropbox", "refresh-1")).unwrap();
 
-        let mode = fs::metadata(store.path()).unwrap().permissions().mode();
-        assert_eq!(mode & 0o777, 0o600);
+        let loaded = store.load().unwrap().unwrap();
+        assert_eq!(loaded.provider, "dropbox");
+        assert_eq!(loaded.token.expose(), "refresh-1");
+
+        let metadata = fs::metadata(store.path()).unwrap();
+        assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
+
+        let mut still_there = String::new();
+        still_open.read_to_string(&mut still_there).unwrap();
+        assert_eq!(still_there, "junk");
+    }
+
+    #[test]
+    fn error_display_strings_match_the_pinned_text() {
+        let path = PathBuf::from("/tmp/journal-credential-test/credential");
+
+        let io_error = CredentialStoreError::Io {
+            action: "write",
+            path: path.clone(),
+            error: io::Error::other("disk full"),
+        };
+        assert_eq!(
+            io_error.to_string(),
+            "could not write the saved login at /tmp/journal-credential-test/credential: disk full"
+        );
+
+        let unreadable = CredentialStoreError::Unreadable(path);
+        assert_eq!(
+            unreadable.to_string(),
+            "the saved login at /tmp/journal-credential-test/credential is not in a format \
+             this version reads; connect again"
+        );
+    }
+
+    #[test]
+    fn the_other_variant_wraps_a_foreign_error_transparently() {
+        let error = CredentialStoreError::Other(Box::new(io::Error::other("x")));
+        assert_eq!(error.to_string(), "x");
+    }
+
+    #[test]
+    fn an_io_error_does_not_also_report_its_cause_as_a_source() {
+        use std::error::Error as _;
+        let error = CredentialStoreError::Io {
+            action: "write",
+            path: PathBuf::from("/tmp/journal-credential-test/credential"),
+            error: io::Error::other("disk full"),
+        };
+
+        // The cause is already interpolated into the Display text above; a
+        // field named `source` would make thiserror report it again as the
+        // chain's next link.
+        assert!(error.source().is_none());
     }
 }
