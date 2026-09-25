@@ -88,8 +88,19 @@ interface AppStateContextValue {
   /// function, so it fits directly into an effect.
   registerFlush: (flush: Flush) => () => void;
   loadEntry: (id: string) => Promise<JournalEntry | undefined>;
-  upsertEntry: (entry: JournalEntry) => Promise<void>;
+  /// `expectedUpdatedAt` is the `updated_at` the pane last saw for this entry,
+  /// or `null` for one that has never been written. Passed straight through to
+  /// `saveEntry`; the vault rejects with `STALE_ENTRY_MESSAGE` (see
+  /// `../utils/errors`) if the disk has moved on since.
+  upsertEntry: (
+    entry: JournalEntry,
+    expectedUpdatedAt: string | null,
+  ) => Promise<void>;
   removeEntry: (id: string) => Promise<void>;
+  /// Bumped whenever a sync pass changed entries on disk (`sync://changed`),
+  /// so a pane with no unsaved edits can reload and stay current. The same
+  /// counter also re-runs the list effect, so one bump does both.
+  syncVersion: number;
   /// The backend's latest word on sync. Sync runs whether or not the vault is
   /// unlocked, so this is live on the login screen too.
   sync: SyncStatusPayload;
@@ -345,8 +356,10 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         setSyncLoaded(true);
       }),
     );
-    // The entry open in the pane is left alone: autosave owns its draft, and a
-    // remote edit to it has already become a conflicted copy on the backend.
+    // A clean pane refreshes itself on this bump (`EntryPane`'s `syncVersion`
+    // effect); a dirty one skips it and meets Stale on its next save, which is
+    // what turns its draft into a conflicted copy (see GEN-1, ADR 0012's
+    // amendment). This is the same counter the list effect re-runs on.
     void keep(onSyncChanged(() => setListVersion((n) => n + 1)));
 
     syncStatus()
@@ -439,6 +452,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       },
       registerFlush,
       loadEntry,
+      syncVersion: listVersion,
       sync,
       syncLoaded,
       pendingIds,
@@ -470,7 +484,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       // while the save was in flight would be discarded with it. Today the UI
       // serializes mutations by disabling buttons, so this is a trap set for
       // whoever adds autosave.
-      upsertEntry: async (entry) => {
+      upsertEntry: async (entry, expectedUpdatedAt) => {
         const header = toHeader(entry);
         const settle = recordMutation(entry.id, header);
         // Read inside the updater, not from `entries` in this closure, so the
@@ -485,7 +499,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
           );
         });
         try {
-          await saveEntryBackend(entry);
+          await saveEntryBackend(entry, expectedUpdatedAt);
           settle(true);
         } catch (err) {
           settle(false);
@@ -528,6 +542,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       registerFlush,
       recordMutation,
       loadEntry,
+      listVersion,
       sync,
       syncLoaded,
       pendingIds,

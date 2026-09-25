@@ -32,9 +32,22 @@ export async function getEntry(id: string): Promise<JournalEntry | null> {
   return (await fallback()).getEntry(id);
 }
 
-export async function saveEntry(entry: JournalEntry): Promise<void> {
-  if (backend) return invoke("save_entry", { entry });
-  return (await fallback()).saveEntry(entry);
+/// `expectedUpdatedAt` is the `updated_at` the caller last read or wrote for
+/// this entry, or `null` for one that has never reached the vault. The vault
+/// refuses the write (`STALE_ENTRY_MESSAGE`, see `../utils/errors`) if the
+/// disk no longer holds that value — an edit pulled in by sync, say. It is
+/// passed through verbatim, never re-serialised through `Date`, so it matches
+/// byte-for-byte what the vault is comparing against.
+export async function saveEntry(
+  entry: JournalEntry,
+  expectedUpdatedAt: string | null,
+): Promise<void> {
+  if (backend)
+    return invoke("save_entry", {
+      entry,
+      expected_updated_at: expectedUpdatedAt,
+    });
+  return (await fallback()).saveEntry(entry, expectedUpdatedAt);
 }
 
 export async function deleteEntry(id: string): Promise<void> {

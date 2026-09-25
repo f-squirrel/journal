@@ -6,6 +6,7 @@ import type {
   SyncStatusPayload,
 } from "../types";
 import { byEntryDate } from "../utils/date";
+import { STALE_ENTRY_MESSAGE } from "../utils/errors";
 
 // The browser fallback: an in-memory vault for `npm run dev` and the
 // Playwright suite, where there is no Rust backend to talk to.
@@ -71,8 +72,8 @@ function toHeader(entry: JournalEntry): EntryHeader {
 //                       ?fail=save&failTimes=1 is a one-shot fault: the next
 //                       save of the same op succeeds.
 //   ?slow=<ops>         the named ops resolve after SLOW_MS
-//   ?sync=<mode>        start connected to a provider: on, conflict, busy,
-//                       reauth, key_mismatch (see below)
+//   ?sync=<mode>        start connected to a provider: on, pull, conflict,
+//                       busy, reauth, key_mismatch (see below)
 //
 // The app uses HashRouter, so the query string goes *before* the hash:
 // `page.goto("/?fail=save")`, not `/#/?fail=save`.
@@ -103,10 +104,12 @@ interface Faults {
   sync: SyncMode;
 }
 
-type SyncMode = "off" | "on" | "conflict" | "busy" | "reauth" | "key_mismatch";
+type SyncMode =
+  "off" | "on" | "pull" | "conflict" | "busy" | "reauth" | "key_mismatch";
 const SYNC_MODES: readonly SyncMode[] = [
   "off",
   "on",
+  "pull",
   "conflict",
   "busy",
   "reauth",
@@ -214,8 +217,16 @@ export function getEntry(id: string): Promise<JournalEntry | null> {
   return run("get", () => fallbackEntries.get(id) ?? null);
 }
 
-export function saveEntry(entry: JournalEntry): Promise<void> {
+/// `expected` is the `updated_at` the caller last saw, or `null` for a new
+/// entry. Mirrors `Vault::save_entry_if`: refuses with `STALE_ENTRY_MESSAGE`
+/// if the disk no longer holds that value, e.g. after `?sync=pull` rewrote it.
+export function saveEntry(
+  entry: JournalEntry,
+  expected: string | null,
+): Promise<void> {
   return run("save", () => {
+    const onDisk = fallbackEntries.get(entry.id)?.updated_at ?? null;
+    if (onDisk !== expected) throw STALE_ENTRY_MESSAGE;
     fallbackEntries.set(entry.id, entry);
     markPending(entry.id);
   });
@@ -299,6 +310,12 @@ function snippet(markdown: string, needle: string): string {
 // connected. From the URL:
 //
 //   ?sync=on          starts connected and synced
+//   ?sync=pull        starts connected; the first successful pass only pulls in
+//                     an edit to the first seed entry from "another device"
+//                     (same id, the markdown "Rewritten on another device.", a
+//                     fresh `updated_at`) and fires `sync://changed` — for GEN-1:
+//                     a clean pane refreshes to show it, a dirty one meets Stale
+//                     on its next save
 //   ?sync=conflict    starts connected with one conflict parked, which the pass
 //                     that unlocking starts settles as `resolver.rs` does: the
 //                     newer version keeps the id, the older becomes a
@@ -357,6 +374,10 @@ const HALT_MESSAGES: Record<Halt, string> = {
     "the journal key on this device differs from the one in the cloud; sync is stopped until you choose which to keep",
 };
 let halted: Halt | null = null;
+
+/// Whether `?sync=pull`'s one-shot remote edit has already landed, so a later
+/// pass (a retry, `sync_now`, the debounce after a save) does not repeat it.
+let pulled = false;
 
 /// A pass is running, and a save during it asks for another.
 let running = false;
@@ -441,6 +462,23 @@ function resolveConflicts(): number {
   return settled;
 }
 
+/// `?sync=pull`'s one-shot simulated remote edit: another device rewrote the
+/// first seed entry. Returns whether it did anything, which is what tells the
+/// caller to fire `sync://changed`.
+function pullRemoteEdit(): boolean {
+  if (faults.sync !== "pull" || pulled) return false;
+  const id = seedEntries[0].id;
+  const current = fallbackEntries.get(id);
+  if (!current) return false;
+  pulled = true;
+  fallbackEntries.set(id, {
+    ...current,
+    markdown: "Rewritten on another device.",
+    updated_at: new Date().toISOString(),
+  });
+  return true;
+}
+
 /// One pass: uploads everything pending and settles what conflicts it can, or
 /// fails, leaving all of it as it was. `syncing` for as long as it runs.
 async function pass() {
@@ -464,7 +502,8 @@ async function pass() {
     if (!rerun) pending.clear();
     lastSyncedAt = new Date().toISOString();
     const settled = resolveConflicts();
-    if (settled > 0 || faults.sync === "busy") {
+    const pulledIn = pullRemoteEdit();
+    if (settled > 0 || pulledIn || faults.sync === "busy") {
       changedListeners.forEach((listener) => listener());
     }
   }

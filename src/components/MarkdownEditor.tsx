@@ -159,8 +159,10 @@ export default function MarkdownEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Keeps the editor honest if the value is changed from outside (nothing does
-  // today), without touching the document while the user is typing into it.
+  // Keeps the editor honest when the value is changed from outside (the pane
+  // reloading an entry sync pulled in), without touching the document while
+  // the user is typing into it. The replacement is reported through
+  // `onChange` like any edit; `EntryPane` swallows that echo.
   useEffect(() => {
     const editor = view.current;
     if (!editor) return;

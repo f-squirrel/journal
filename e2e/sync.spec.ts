@@ -7,6 +7,8 @@ import { test, expect, type Page } from "./coverage";
 //
 //   ?sync=on / ?sync=conflict   start connected, or connected with a conflict
 //                               that unlocking settles
+//   ?sync=pull                  the first successful pass rewrites the first
+//                               seed entry, as if another device had edited it
 //   ?sync=busy                  every pass also fires `sync://changed`
 //   ?fail=resolve               a conflict stays parked
 //   ?sync=reauth                start with a login the provider refuses
@@ -367,4 +369,105 @@ test("a list reload that races a save keeps the saved title", async ({
 
   await expect(row(page, "Second title")).toBeVisible();
   await expect(row(page, "First title")).toHaveCount(0);
+});
+
+// GEN-1: an unconditional save used to let the open pane overwrite an edit
+// sync had just pulled in. `save_entry` is now conditional on the
+// `updated_at` the pane last saw (`Vault::save_entry_if`,
+// `VaultError::Stale`), and `?sync=pull` simulates the pull that exposes it —
+// see ADR 0012's amendment.
+
+test("a pass that pulls the open entry shows the new text", async ({
+  page,
+}) => {
+  await login(page, "?sync=pull");
+  await row(page, "First day back").click();
+  await expect(page.getByTestId("entry-body")).toContainText(
+    "Started journaling again",
+  );
+
+  await rail(page).click();
+  await dialog(page).getByRole("button", { name: "Sync now" }).click();
+  await dialog(page).getByRole("button", { name: "Close" }).click();
+
+  // The pane had nothing unsaved, so it refreshed itself on `sync://changed`
+  // rather than waiting for a save to meet Stale.
+  await expect(page.getByTestId("entry-body")).toContainText(
+    "Rewritten on another device.",
+  );
+});
+
+test("an edit made while a pass pulled the entry is kept as a conflicted copy", async ({
+  page,
+}) => {
+  await page.clock.install();
+  await login(page, "?sync=pull");
+
+  await row(page, "First day back").click();
+  await page.getByRole("button", { name: "Entry actions" }).click();
+  await page.getByRole("menuitem", { name: "Edit" }).click();
+  // No time passes: the 800 ms debounce has not fired, so this pane is dirty
+  // when the pass below lands.
+  await page.getByTestId("entry-body").locator(".cm-content").fill("mine");
+
+  await rail(page).click();
+  await dialog(page).getByRole("button", { name: "Sync now" }).click();
+  await dialog(page).getByRole("button", { name: "Close" }).click();
+
+  // The debounce fires: the save meets Stale, and the draft becomes a copy.
+  await page.clock.runFor(1000);
+
+  await expect(page.getByTestId("entry-body")).toContainText(
+    "Rewritten on another device.",
+  );
+  await expect(page.getByRole("alert")).toBeVisible();
+
+  const copy = row(page, "(conflicted copy)");
+  await expect(copy).toBeVisible();
+  await copy.click();
+  await expect(page.getByTestId("entry-body")).toContainText("mine");
+});
+
+test("a conflicted copy that fails to save can be retried", async ({
+  page,
+}) => {
+  await page.clock.install();
+  // The debounced save that meets Stale is the first `save` call and is not
+  // itself the injected fault — it fails on its own, as `Vault::save_entry_if`
+  // does. `failAfter=1&failTimes=1` bites only the second `save` call, the
+  // copy write `useAutosave` makes right after catching Stale.
+  await login(page, "?sync=pull&fail=save&failAfter=1&failTimes=1");
+
+  await row(page, "First day back").click();
+  await page.getByRole("button", { name: "Entry actions" }).click();
+  await page.getByRole("menuitem", { name: "Edit" }).click();
+  // No time passes: the 800 ms debounce has not fired, so this pane is dirty
+  // when the pass below lands.
+  await page.getByTestId("entry-body").locator(".cm-content").fill("mine");
+
+  await rail(page).click();
+  await dialog(page).getByRole("button", { name: "Sync now" }).click();
+  await dialog(page).getByRole("button", { name: "Close" }).click();
+
+  // The debounce fires: the save meets Stale, and the conflicted-copy write
+  // itself fails once. Dirty stays set, status is "error", and nothing
+  // reschedules on its own.
+  await page.clock.runFor(1000);
+
+  await expect(page.getByTestId("save-status")).toHaveText("Couldn't save");
+  await expect(page.getByRole("alert")).toContainText("Injected fault.");
+
+  // Retry meets Stale again on the original id and retries the copy, which
+  // now succeeds.
+  await page.getByRole("button", { name: "Retry" }).click();
+
+  await expect(page.getByTestId("entry-body")).toContainText(
+    "Rewritten on another device.",
+  );
+  await expect(page.getByRole("alert")).toBeVisible();
+
+  const retriedCopy = row(page, "(conflicted copy)");
+  await expect(retriedCopy).toBeVisible();
+  await retriedCopy.click();
+  await expect(page.getByTestId("entry-body")).toContainText("mine");
 });

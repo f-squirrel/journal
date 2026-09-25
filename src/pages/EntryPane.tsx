@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import {
   Alert,
@@ -41,7 +41,11 @@ import {
 } from "../components/chrome";
 import MarkdownEditor from "../components/MarkdownEditor";
 import { useAppState } from "../context/AppStateContext";
-import { useAutosave, type SaveStatus } from "../hooks/useAutosave";
+import {
+  useAutosave,
+  type Autosave,
+  type SaveStatus,
+} from "../hooks/useAutosave";
 import { useNewEntry } from "../hooks/useNewEntry";
 import { formatAgo, formatEntryHeading, formatTime } from "../utils/date";
 import { errorMessage } from "../utils/errors";
@@ -90,7 +94,7 @@ export default function EntryPaneRoute() {
 }
 
 function EntryPane({ id, draft }: { id: string; draft: boolean }) {
-  const { loadEntry, removeEntry } = useAppState();
+  const { loadEntry, removeEntry, syncVersion } = useAppState();
   const navigate = useNavigate();
   const theme = useTheme();
   const compact = useMediaQuery(theme.breakpoints.down("md"));
@@ -108,6 +112,9 @@ function EntryPane({ id, draft }: { id: string; draft: boolean }) {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState("");
+  // Dismissible: a fresh notice un-dismisses itself, since it describes a new
+  // event, not the one the user already closed.
+  const [noticeDismissed, setNoticeDismissed] = useState(false);
   // A new entry is about today until the user says otherwise. Computed once,
   // so it is stable for the life of the pane.
   const [openedAt] = useState(() => new Date().toISOString());
@@ -116,11 +123,80 @@ function EntryPane({ id, draft }: { id: string; draft: boolean }) {
   const [entryDate, setEntryDate] = useState(openedAt);
   const [dateAnchor, setDateAnchor] = useState<HTMLElement | null>(null);
 
+  // Reaches the autosave hook through a ref rather than a closure variable:
+  // `refreshFromDisk` is itself passed into `useAutosave` as `onStale`, so
+  // `autosave` cannot exist yet at the point `refreshFromDisk` is declared.
+  const autosaveRef = useRef<Autosave | null>(null);
+
+  /// `MarkdownEditor` reports every change to the CodeMirror document through
+  /// `onChange`, including the one *it* makes when `value` changes out from
+  /// under it (its own effect diffs the doc against the new prop and dispatches
+  /// the difference) — there is no separate "this came from outside" signal
+  /// from CodeMirror's update listener. Set to the text `refreshFromDisk` just
+  /// wrote whenever it touches `markdown` while in edit mode, so `changeMarkdown`
+  /// can tell that echo apart from an actual keystroke and skip `noteChange`
+  /// for it — otherwise a reload while the user is looking at the editor both
+  /// erases the notice (`noteChange` clears it) and queues a pointless resave.
+  const externalMarkdown = useRef<string | null>(null);
+
+  /// Reloads the entry from disk and adopts it, but only if this pane has
+  /// nothing unsaved — a dirty draft is left alone, and its next save meets
+  /// Stale and becomes a conflicted copy instead (see `useAutosave`). Checked
+  /// again after the load resolves, since typing can start while it is in
+  /// flight. Used both by the `syncVersion` effect below, for a pass that
+  /// changed entries on disk, and as `onStale`, once a stale save of this
+  /// pane's own draft has already been kept as a copy elsewhere. Never sets
+  /// `loading`, so the editor stays mounted and keeps its undo history.
+  const refreshFromDisk = useCallback(() => {
+    const autosave = autosaveRef.current;
+    if (!autosave || autosave.hasUnsaved()) return;
+    loadEntry(id).then((loaded) => {
+      const current = autosaveRef.current;
+      if (!current || current.hasUnsaved()) return;
+      if (!loaded) {
+        // A brand-new draft that has never reached the vault is not "missing"
+        // — there is nothing on disk yet for it to have gone missing from.
+        if (draft && current.savedAt === null) return;
+        setMissing(true);
+        return;
+      }
+      setTitle(loaded.title);
+      externalMarkdown.current = loaded.markdown;
+      setMarkdown(loaded.markdown);
+      setEntryDate(loaded.entry_date);
+      setLoadedAt(loaded.updated_at);
+      current.setBase(loaded.updated_at);
+    });
+  }, [draft, id, loadEntry]);
+
   const autosave = useAutosave(
     id,
     { title: "", markdown: "", entryDate },
     draft,
+    refreshFromDisk,
   );
+
+  useEffect(() => {
+    autosaveRef.current = autosave;
+  });
+
+  // A new notice starts undismissed, even if the last one was closed.
+  useEffect(() => {
+    setNoticeDismissed(false);
+  }, [autosave.notice]);
+
+  // A pane with nothing unsaved refreshes itself when a sync pass changed
+  // entries on disk (`sync://changed`, via `syncVersion`). Skips the run that
+  // fires right after mount: there is nothing to refresh from yet, since the
+  // load effect below has either not started or just seeded the same state.
+  const skipNextSyncVersion = useRef(true);
+  useEffect(() => {
+    if (skipNextSyncVersion.current) {
+      skipNextSyncVersion.current = false;
+      return;
+    }
+    refreshFromDisk();
+  }, [syncVersion, refreshFromDisk]);
 
   useEffect(() => {
     if (draft) return;
@@ -138,6 +214,7 @@ function EntryPane({ id, draft }: { id: string; draft: boolean }) {
           setMarkdown(loaded.markdown);
           setLoadedAt(loaded.updated_at);
           setEntryDate(loaded.entry_date);
+          autosave.setBase(loaded.updated_at);
         }
         setLoading(false);
       })
@@ -185,6 +262,15 @@ function EntryPane({ id, draft }: { id: string; draft: boolean }) {
 
   function changeMarkdown(next: string) {
     setMarkdown(next);
+    // The editor reporting back the text a reload just gave it, not a
+    // keystroke — see `externalMarkdown`. Consumed once, so a real edit
+    // straight after (even one that happens to retype the same text) is not
+    // swallowed too.
+    if (externalMarkdown.current !== null) {
+      const wasExternal = next === externalMarkdown.current;
+      externalMarkdown.current = null;
+      if (wasExternal) return;
+    }
     autosave.noteChange({ title, markdown: next, entryDate });
   }
 
@@ -295,6 +381,16 @@ function EntryPane({ id, draft }: { id: string; draft: boolean }) {
           }
         >
           {autosave.error}
+        </Alert>
+      )}
+
+      {autosave.notice && !noticeDismissed && (
+        <Alert
+          severity="info"
+          sx={{ borderRadius: 0 }}
+          onClose={() => setNoticeDismissed(true)}
+        >
+          {autosave.notice}
         </Alert>
       )}
 
