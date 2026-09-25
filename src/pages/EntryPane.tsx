@@ -219,10 +219,14 @@ function EntryPane({ id, draft }: { id: string; draft: boolean }) {
     setDeleteError("");
     // Before the request, not after: a save scheduled by the last keystroke
     // would otherwise land on a deleted entry and write it straight back.
-    const hadPendingSave = autosave.cancel();
+    let hadPendingSave = autosave.cancel();
     // A write already on its way has to land before the delete, or it lands
     // after it and puts the entry back.
     await autosave.whenSettled();
+    // A write that failed while we waited has marked the draft dirty again —
+    // the pane's unmount flush would otherwise write the entry straight back
+    // after the delete below has succeeded.
+    hadPendingSave = autosave.cancel() || hadPendingSave;
     try {
       await removeEntry(id);
     } catch (err) {

@@ -65,6 +65,11 @@ function toHeader(entry: JournalEntry): EntryHeader {
 //   ?failAfter=<n>      successful calls of each failing op before ?fail= bites
 //                       (default 0: fail from the first call), so a listing
 //                       can succeed and its reload fail (?fail=list&failAfter=1)
+//   ?failTimes=<n>      how many consecutive calls (after ?failAfter=) actually
+//                       fail before the op goes back to succeeding (default
+//                       unbounded, i.e. every call from ?failAfter= on fails).
+//                       ?fail=save&failTimes=1 is a one-shot fault: the next
+//                       save of the same op succeeds.
 //   ?slow=<ops>         the named ops resolve after SLOW_MS
 //   ?sync=<mode>        start connected to a provider: on, conflict, busy,
 //                       reauth, key_mismatch (see below)
@@ -93,6 +98,7 @@ interface Faults {
   fail: Set<Op>;
   failMessage: string;
   failAfter: number;
+  failTimes: number;
   slow: Set<Op>;
   sync: SyncMode;
 }
@@ -117,6 +123,9 @@ function parseFaults(search: string): Faults {
     fail: ops(params.get("fail")),
     failMessage: params.get("failMessage") ?? "Injected fault.",
     failAfter: Number(params.get("failAfter") ?? 0),
+    failTimes: params.has("failTimes")
+      ? Number(params.get("failTimes"))
+      : Infinity,
     slow: ops(params.get("slow")),
     sync: SYNC_MODES.find((mode) => mode === params.get("sync")) ?? "off",
   };
@@ -153,7 +162,12 @@ async function run<T>(op: Op, work: () => T): Promise<T> {
   if (faults.fail.has(op)) {
     const seen = failedCalls.get(op) ?? 0;
     failedCalls.set(op, seen + 1);
-    if (seen >= faults.failAfter) throw faults.failMessage;
+    if (
+      seen >= faults.failAfter &&
+      seen < faults.failAfter + faults.failTimes
+    ) {
+      throw faults.failMessage;
+    }
   }
   return work();
 }

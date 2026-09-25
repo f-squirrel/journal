@@ -159,6 +159,40 @@ test("a delete waits for the save already in flight", async ({ page }) => {
   await expect(page.getByText("Project ideas")).toHaveCount(0);
 });
 
+test("a save that fails during a delete does not bring the entry back", async ({
+  page,
+}) => {
+  // A one-shot fault (`failTimes=1`): the save in flight when the delete is
+  // confirmed fails, but the pane's unmount flush — which fires after the
+  // delete succeeds — must not retry it and write the entry straight back.
+  await login(page, "?fail=save&failTimes=1&slow=save");
+
+  await page.getByText("Project ideas").click();
+  await page.getByRole("button", { name: "Entry actions" }).click();
+  await page.getByRole("menuitem", { name: "Edit" }).click();
+  await editor(page).fill("# Edited just before deleting");
+  // The debounce has fired and the (slow, failing) write is on its way.
+  await expect(page.getByTestId("save-status")).toHaveText("Saving…");
+
+  await page.getByRole("button", { name: "Entry actions" }).click();
+  await page.getByRole("menuitem", { name: "Delete entry" }).click();
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "Delete" })
+    .click();
+  await expect(page.getByText("Project ideas")).toHaveCount(0);
+
+  // Sit out the slow, failing write (plus its debounce), then read the
+  // journal back from the vault: without the fix, the pane's unmount flush
+  // retries the write once the fault has expired and puts the entry back.
+  await page.waitForTimeout(2000);
+  await page.getByRole("button", { name: "Log out" }).click();
+  await page.getByLabel("Passphrase").fill("password123");
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await expect(page.getByText("First day back")).toBeVisible();
+  await expect(page.getByText("Project ideas")).toHaveCount(0);
+});
+
 test("a failed listing says so and does not claim the journal is empty", async ({
   page,
 }) => {
