@@ -139,6 +139,24 @@ fn account_id_with(client: &impl UserAuthClient) -> Result<String, RemoteError> 
         .map_err(|e| lift(e).or_other("could not read the Dropbox account"))
 }
 
+/// Revokes `refresh` at Dropbox: it and every access token minted from it stop
+/// working right away (SDK doc comment on `token_revoke`).
+///
+/// Best effort — the caller decides what an error means; this never logs the
+/// token. Blocks on the network.
+pub fn revoke(app_key: &str, refresh: &RefreshToken) -> Result<(), RemoteError> {
+    revoke_with(&RefreshingClient::new(
+        NoauthDefaultClient::default(),
+        app_key,
+        refresh,
+    ))
+}
+
+fn revoke_with(client: &impl UserAuthClient) -> Result<(), RemoteError> {
+    dropbox_sdk::auth::token_revoke(client)
+        .map_err(|e| lift(e).or_other("could not revoke the Dropbox login"))
+}
+
 /// Why a connection could not be completed.
 #[derive(Debug, Error)]
 pub enum ConnectError {
@@ -325,6 +343,31 @@ mod tests {
             err,
             RemoteError::MissingPermission("account_info.read".to_owned())
         );
+    }
+
+    #[test]
+    fn revoke_refreshes_first_and_then_disables_the_login() {
+        // No access token yet, so `revoke` must mint one before it can call
+        // the revoke route — the same shape as any other authenticated call.
+        let http = FakeHttp::default()
+            .expect("oauth2/token", redeemed(None))
+            .expect("2/auth/token/revoke", Reply::ok(json!(null)));
+        let client =
+            RefreshingClient::new(http.clone(), "app-key", &RefreshToken::new("refresh-1"));
+
+        revoke_with(&client).unwrap();
+
+        http.assert_finished();
+    }
+
+    #[test]
+    fn an_unreachable_dropbox_fails_the_revoke() {
+        let http = FakeHttp::default().expect("oauth2/token", Reply::network_down());
+        let client = RefreshingClient::new(http, "app-key", &RefreshToken::new("refresh-1"));
+
+        let err = revoke_with(&client).unwrap_err();
+
+        assert!(matches!(err, RemoteError::Transient(_)), "{err:?}");
     }
 
     #[test]

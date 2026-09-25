@@ -27,6 +27,7 @@ mod tests;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
+use std::thread;
 use std::time::Duration;
 
 use journal_api::{ProviderInfo, SyncStatusPayload};
@@ -126,6 +127,18 @@ pub trait Provider: Send + Sync {
 
     /// The remote for an account that has been connected.
     fn remote(&self, token: &RefreshToken) -> Result<Arc<dyn RemoteStore>, String>;
+
+    /// Revokes `token` at the provider, so a login this app no longer uses
+    /// stops working there too (SEC-2).
+    ///
+    /// Best effort: it blocks on the network, and a failure is only logged by
+    /// the caller, never surfaced to the user — the local disconnect or
+    /// reconnect has already succeeded by the time this runs. The default does
+    /// nothing, for a provider with no revoke endpoint.
+    fn revoke(&self, token: &RefreshToken) -> Result<(), String> {
+        let _ = token;
+        Ok(())
+    }
 }
 
 /// The running worker, present exactly while a provider is connected.
@@ -241,6 +254,35 @@ impl SyncControl {
             .ok_or_else(|| format!("unknown sync provider {id:?}"))
     }
 
+    /// Revokes `credential`'s token at its provider, on a background thread
+    /// (SEC-2): the local change (a disconnect or a reconnect) has already
+    /// succeeded by the time this is called, and revoking is best effort, so
+    /// nothing here can be allowed to hold that up on the network. A failure to
+    /// revoke, or to find the provider or start the thread, is only logged —
+    /// never the token itself.
+    fn revoke_later(&self, credential: Credential) {
+        let Some(provider) = self
+            .config
+            .providers
+            .iter()
+            .find(|p| p.id() == credential.provider)
+            .cloned()
+        else {
+            return;
+        };
+        let name = provider.name();
+        let spawned = thread::Builder::new()
+            .name("sync-revoke".to_owned())
+            .spawn(move || {
+                if let Err(e) = provider.revoke(&credential.token) {
+                    log::warn!("could not revoke the old {} login: {e}", provider.name());
+                }
+            });
+        if let Err(e) = spawned {
+            log::warn!("could not start a thread to revoke the old {name} login: {e}");
+        }
+    }
+
     /// Starts syncing if an account was connected in an earlier run. Scans the
     /// whole local store, so call it off the main thread.
     pub fn resume(&self) {
@@ -316,7 +358,17 @@ impl SyncControl {
             .try_with_account(account)
             .ok_or_else(|| format!("{} returned an unusable account id", provider.name()))?;
 
+        // Read before `install` so a failed install (the old login may still
+        // be the one in use) revokes nothing.
+        let old = cfg.credentials.load().ok().flatten();
         let worker = self.install(provider, &credential, Login::New)?;
+        // A new grant leaves the old token valid at the provider even when it
+        // is the same account, so compare tokens, not accounts.
+        if let Some(old) = old {
+            if old.token.expose() != credential.token.expose() {
+                self.revoke_later(old);
+            }
+        }
         if let Err(e) = worker.sync_now() {
             log::warn!("the first sync after connecting failed: {e}");
         }
@@ -327,6 +379,9 @@ impl SyncControl {
     /// state go. The journal on this device is not touched.
     pub fn disconnect(&self) -> Result<(), String> {
         let _turn = self.turn();
+        // Read before it is cleared: once `clear` succeeds there is nothing
+        // left to revoke.
+        let saved = self.config.credentials.load().ok().flatten();
         // Out of the slot before it is stopped: stopping waits for a pass, and
         // a pass's resolver saves through the store whose callback takes the
         // slot's lock.
@@ -337,7 +392,13 @@ impl SyncControl {
         let state = erase_state(&self.config.state_path)
             .map_err(|e| format!("could not remove the sync state: {e}"));
         (self.coalescer.poker())();
-        login.and(state)
+        let result = login.and(state);
+        if result.is_ok() {
+            if let Some(credential) = saved {
+                self.revoke_later(credential);
+            }
+        }
+        result
     }
 
     fn turn(&self) -> std::sync::MutexGuard<'_, ()> {

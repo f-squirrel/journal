@@ -8,7 +8,7 @@
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, TcpStream};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -67,6 +67,14 @@ impl Events for Recorder {
 struct Fake {
     id: &'static str,
     account: Mutex<(&'static str, Arc<dyn RemoteStore>)>,
+    /// Each connection gets its own token, so a test can tell which one a
+    /// revoke named.
+    next_token: AtomicUsize,
+    /// Every token `revoke` was called with, in order.
+    revoked: Mutex<Vec<String>>,
+    /// Makes the next `revoke` call fail, then resets itself: a revoke is
+    /// fire-and-forget, so a test checks it does not stop the local change.
+    fail_next_revoke: AtomicBool,
 }
 
 impl Fake {
@@ -74,6 +82,9 @@ impl Fake {
         Arc::new(Self {
             id,
             account: Mutex::new(("account-1", remote)),
+            next_token: AtomicUsize::new(1),
+            revoked: Mutex::new(Vec::new()),
+            fail_next_revoke: AtomicBool::new(false),
         })
     }
 
@@ -84,6 +95,15 @@ impl Fake {
     /// The user signs in to the provider as someone else next time.
     fn sign_in_as(&self, account: &'static str, remote: Arc<dyn RemoteStore>) {
         *self.account.lock().unwrap() = (account, remote);
+    }
+
+    /// The tokens `revoke` has been called with so far.
+    fn revoked(&self) -> Vec<String> {
+        self.revoked.lock().unwrap().clone()
+    }
+
+    fn fail_next_revoke(&self) {
+        self.fail_next_revoke.store(true, Ordering::SeqCst);
     }
 }
 
@@ -101,11 +121,15 @@ impl Provider for Fake {
         url.query_pairs_mut()
             .append_pair("redirect_uri", redirect_uri)
             .append_pair("state", "fake-state");
+        // A fresh token per connection, like a real OAuth grant: reconnecting
+        // the same account still gets a new one, which is exactly the login
+        // SEC-2 revokes.
+        let token = format!("refresh-{}", self.next_token.fetch_add(1, Ordering::SeqCst));
         Ok(Connection {
             url,
             state: "fake-state".to_owned(),
-            redeem: Box::new(|code| match code {
-                "the-code" => Ok(RefreshToken::new("refresh")),
+            redeem: Box::new(move |code| match code {
+                "the-code" => Ok(RefreshToken::new(token)),
                 other => Err(format!("unexpected code {other}")),
             }),
         })
@@ -117,6 +141,14 @@ impl Provider for Fake {
 
     fn remote(&self, _: &RefreshToken) -> Result<Arc<dyn RemoteStore>, String> {
         Ok(self.account.lock().unwrap().1.clone())
+    }
+
+    fn revoke(&self, token: &RefreshToken) -> Result<(), String> {
+        self.revoked.lock().unwrap().push(token.expose().to_owned());
+        if self.fail_next_revoke.swap(false, Ordering::SeqCst) {
+            return Err("could not reach Fake Cloud".to_owned());
+        }
+        Ok(())
     }
 }
 
@@ -443,6 +475,14 @@ impl Rig {
             .load()
             .unwrap()
             .map(|login| login.provider)
+    }
+
+    /// The token in the login file, if one is saved.
+    fn saved_token(&self) -> Option<String> {
+        FileCredentialStore::new(self.dir.join("config").join("login"))
+            .load()
+            .unwrap()
+            .map(|login| login.token.expose().to_owned())
     }
 }
 
@@ -877,6 +917,109 @@ fn disconnecting_forgets_the_account_and_leaves_the_journal() {
     assert!(rig.invoke("sync_now", json!({})).is_err());
     // Disconnecting when nothing is connected is not an error.
     rig.ok("disconnect_remote", json!({}));
+}
+
+/// SEC-2: disconnecting revokes the token it forgets, so a login this app no
+/// longer uses stops working at the provider too. Best effort and on a
+/// background thread, so the test waits for it rather than expecting it done
+/// by the time the command returns.
+#[test]
+fn disconnecting_revokes_the_forgotten_token() {
+    let remote = Arc::new(MemoryRemote::new());
+    let fake = Fake::new("fake", remote);
+    let rig = Rig::with_providers(vec![fake.clone()]);
+    rig.unlock();
+    rig.connect();
+    let token = rig.saved_token().expect("a login was saved");
+
+    rig.ok("disconnect_remote", json!({}));
+
+    wait_for("the revoke", || !fake.revoked().is_empty());
+    assert_eq!(fake.revoked(), [token]);
+}
+
+/// SEC-2: a fresh grant leaves the old token valid at the provider even for
+/// the same account, so reconnecting must revoke it — but never the token
+/// that was just issued.
+#[test]
+fn reconnecting_the_same_account_revokes_only_the_old_token() {
+    let remote = Forgetful::new(Arc::new(MemoryRemote::new()));
+    let fake = Fake::new("fake", remote.clone());
+    let rig = Rig::with_providers(vec![fake.clone()]);
+    rig.unlock();
+    rig.connect();
+    let old_token = rig.saved_token().expect("a login was saved");
+
+    rig.connect();
+    let new_token = rig.saved_token().expect("a login was saved");
+
+    assert_ne!(old_token, new_token, "each connection gets its own token");
+    wait_for("the revoke", || !fake.revoked().is_empty());
+    assert_eq!(fake.revoked(), [old_token]);
+}
+
+/// SEC-2 also covers switching to a different account of the same provider:
+/// the old account's token is revoked, with the old credential's provider.
+#[test]
+fn switching_accounts_revokes_the_old_token() {
+    let first = Arc::new(MemoryRemote::new());
+    let second = Arc::new(MemoryRemote::new());
+    let fake = Fake::new("fake", first);
+    let rig = Rig::with_providers(vec![fake.clone()]);
+    rig.unlock();
+    rig.connect();
+    let old_token = rig.saved_token().expect("a login was saved");
+
+    fake.sign_in_as("account-2", second);
+    rig.connect();
+    let new_token = rig.saved_token().expect("a login was saved");
+
+    assert_ne!(old_token, new_token);
+    wait_for("the revoke", || !fake.revoked().is_empty());
+    assert_eq!(fake.revoked(), [old_token]);
+}
+
+/// Revoking is best effort: a network failure while forgetting the account
+/// must not bring the credential back or fail the command.
+#[test]
+fn a_failed_revoke_does_not_stop_the_disconnect() {
+    let remote = Arc::new(MemoryRemote::new());
+    let fake = Fake::new("fake", remote);
+    let rig = Rig::with_providers(vec![fake.clone()]);
+    rig.unlock();
+    rig.connect();
+    fake.fail_next_revoke();
+    let login = rig.dir.join("config").join("login");
+
+    rig.ok("disconnect_remote", json!({}));
+
+    assert!(
+        !login.exists(),
+        "the login is gone even though the revoke failed"
+    );
+    wait_for("the failed revoke attempt", || !fake.revoked().is_empty());
+}
+
+/// `resume` reuses the login that was already in effect: nothing was replaced
+/// or forgotten, so nothing is revoked.
+#[test]
+fn resuming_a_saved_login_revokes_nothing() {
+    let remote = Arc::new(MemoryRemote::new());
+    let fake = Fake::new("fake", remote.clone());
+    let rig = Rig::with_providers(vec![fake.clone()]);
+    rig.unlock();
+    rig.save(ID, "Today", "words", "2026-03-01T10:00:00Z");
+    FileCredentialStore::new(rig.dir.join("config").join("login"))
+        .save(&Credential::new("fake", RefreshToken::new("refresh")))
+        .unwrap();
+
+    rig.control.resume();
+
+    wait_for("the startup pass", || rig.status()["state"] == "synced");
+    // No event marks "nothing happened"; give a would-be revoke thread time
+    // to run before checking that none did.
+    thread::sleep(Duration::from_millis(100));
+    assert!(fake.revoked().is_empty());
 }
 
 #[test]

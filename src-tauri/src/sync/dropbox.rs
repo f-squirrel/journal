@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use journal_credential::RefreshToken;
-use journal_dropbox::{account_id, authorize_url, finish, DropboxRemote};
+use journal_dropbox::{account_id, authorize_url, finish, revoke, DropboxRemote};
 use journal_remote::RemoteStore;
 
 use super::{Connection, Provider};
@@ -78,5 +78,9 @@ impl Provider for Dropbox {
 
     fn remote(&self, token: &RefreshToken) -> Result<Arc<dyn RemoteStore>, String> {
         Ok(Arc::new(DropboxRemote::new(self.key()?, token)))
+    }
+
+    fn revoke(&self, token: &RefreshToken) -> Result<(), String> {
+        revoke(self.key()?, token).map_err(|e| e.to_string())
     }
 }
