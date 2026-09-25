@@ -383,12 +383,24 @@ impl Rig {
         self.ok("unlock", json!({ "passphrase": PASSPHRASE }));
     }
 
+    /// The `updated_at` this device's vault currently holds for `id`, or
+    /// `None` if it has no such entry yet — what an honest frontend sends as
+    /// its precondition on the next save (`useAutosave`'s `base` ref).
+    fn current_updated_at(&self, id: &str) -> Option<String> {
+        let entry = self.ok("get_entry", json!({ "id": id }));
+        (!entry.is_null()).then(|| entry["updated_at"].as_str().unwrap().to_owned())
+    }
+
     fn save(&self, id: &str, title: &str, markdown: &str, updated_at: &str) {
+        let expected = self.current_updated_at(id);
         self.ok(
             "save_entry",
-            json!({ "entry": {
-                "id": id, "title": title, "markdown": markdown, "updated_at": updated_at,
-            }}),
+            json!({
+                "entry": {
+                    "id": id, "title": title, "markdown": markdown, "updated_at": updated_at,
+                },
+                "expected_updated_at": expected,
+            }),
         );
     }
 

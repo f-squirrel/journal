@@ -8,6 +8,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
+use chrono::{DateTime, Utc};
 use journal_api::{Entry, Header, Id, SearchMatch};
 use journal_credential::FileCredentialStore;
 use journal_fs_store::FsStore;
@@ -176,10 +177,14 @@ async fn get_entry(state: State<'_, VaultState>, id: Id) -> Result<Option<Entry>
     blocking(move || vault.get_entry(&id)).await
 }
 
-#[tauri::command]
-async fn save_entry(state: State<'_, VaultState>, entry: Entry) -> Result<(), String> {
+#[tauri::command(rename_all = "snake_case")]
+async fn save_entry(
+    state: State<'_, VaultState>,
+    entry: Entry,
+    expected_updated_at: Option<DateTime<Utc>>,
+) -> Result<(), String> {
     let vault = vault(&state)?;
-    blocking(move || vault.save_entry(&entry)).await
+    blocking(move || vault.save_entry_if(&entry, expected_updated_at)).await
 }
 
 #[tauri::command]
@@ -642,6 +647,101 @@ mod tests {
 
         std::fs::remove_dir_all(dir).ok();
         std::fs::remove_dir_all(out).ok();
+    }
+
+    /// The wire contract of `save_entry`, as `src/api/entries.ts` calls it —
+    /// `invoke("save_entry", { entry, expected_updated_at })`. `expected_updated_at`
+    /// is the one field a camelCase slip would silently turn into "missing", so
+    /// this exercises all three shapes over the real IPC bridge rather than
+    /// trusting `Vault::save_entry_if`'s own tests to stand in for it.
+    #[test]
+    fn save_entry_takes_the_precondition_the_frontend_sends() {
+        let app = tauri::test::mock_builder()
+            .invoke_handler(tauri::generate_handler![save_entry])
+            .build(context_allowing(&["save_entry"]))
+            .expect("mock app builds");
+
+        let (state, dir) = unlocked_state();
+        let id = Id::new();
+        let original = Entry {
+            header: Header {
+                id: id.clone(),
+                title: "Tuesday".to_string(),
+                updated_at: chrono::Utc::now(),
+                entry_date: chrono::Utc::now(),
+            },
+            markdown: "First draft.".to_string(),
+        };
+        vault(&state)
+            .expect("the state is unlocked")
+            .save_entry(&original)
+            .expect("the entry saves");
+        app.manage(state);
+
+        let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("mock webview builds");
+
+        // Saving with the precondition it was actually opened at succeeds.
+        // The edit carries a later `updated_at` too, the way a real save
+        // does — otherwise the disk copy would still match `original`'s
+        // timestamp and the "now-stale" call below would not actually be
+        // stale.
+        let edited = Entry {
+            header: Header {
+                title: "Tuesday, edited".to_string(),
+                updated_at: original.header.updated_at + chrono::Duration::seconds(1),
+                ..original.header.clone()
+            },
+            markdown: "Second draft.".to_string(),
+        };
+        answered(tauri::test::get_ipc_response(
+            &webview,
+            request(
+                "save_entry",
+                serde_json::json!({
+                    "entry": edited,
+                    "expected_updated_at": original.header.updated_at,
+                }),
+            ),
+        ));
+
+        // The same call again, with the now-stale precondition, is refused
+        // with exactly the message `src/utils/errors.ts` matches.
+        let stale = tauri::test::get_ipc_response(
+            &webview,
+            request(
+                "save_entry",
+                serde_json::json!({
+                    "entry": edited,
+                    "expected_updated_at": original.header.updated_at,
+                }),
+            ),
+        )
+        .expect_err("a stale precondition is refused");
+        assert_eq!(
+            stale,
+            serde_json::json!("this entry was changed on another device since it was opened")
+        );
+
+        // A missing `expected_updated_at` means "new entry" — over an entry
+        // that already exists, that is Stale too, not a silent overwrite.
+        let missing_key = tauri::test::get_ipc_response(
+            &webview,
+            request(
+                "save_entry",
+                serde_json::json!({
+                    "entry": edited,
+                }),
+            ),
+        )
+        .expect_err("a missing precondition over an existing entry is refused");
+        assert_eq!(
+            missing_key,
+            serde_json::json!("this entry was changed on another device since it was opened")
+        );
+
+        std::fs::remove_dir_all(dir).ok();
     }
 
     /// R1-2: `unlock` opens the vault with the guard free, so a `lock` — an
