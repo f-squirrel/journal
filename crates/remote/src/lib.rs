@@ -1,6 +1,6 @@
 //! A cloud provider's copy of the journal — the abstraction only.
 //!
-//! [`RemoteStore`] is what the sync engine (`journal-sync`) needs from a
+//! [`RemoteStore`] is what the sync engine (`journal-sync-engine`) needs from a
 //! provider, and it is *not* a [`BlobStore`](journal_store::BlobStore). A local
 //! store answers "what is here?" and overwrites on request. A remote is shared
 //! with other devices, so it also has to answer "what changed since I last

@@ -8,7 +8,7 @@ use std::sync::Arc;
 use common::*;
 use journal_remote::{MemoryRemote, RemoteError};
 use journal_store::{BlobName, BlobStore};
-use journal_sync::SyncErrorKind;
+use journal_sync_engine::SyncErrorKind;
 
 fn names(list: &[&str]) -> BTreeSet<BlobName> {
     list.iter().map(|name| n(name)).collect()

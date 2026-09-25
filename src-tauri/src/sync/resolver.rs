@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use journal_entry::{Entry, Header, Id};
 use journal_store::BlobName;
-use journal_sync::{ConflictResolver, Resolution};
+use journal_sync_engine::{ConflictResolver, Resolution};
 use journal_vault::{entry_id, Vault, VaultError};
 
 /// The unlocked vault, if there is one, as a handle the caller owns.

@@ -1,7 +1,7 @@
 //! Cloud sync, wired into the app: the worker thread, the connect flow, the
 //! status the frontend sees, and the commands that drive them.
 //!
-//! The crates below do the work — `journal-sync` reconciles blobs, an adapter
+//! The crates below do the work — `journal-sync-engine` reconciles blobs, an adapter
 //! such as `journal-dropbox` speaks to one provider — and know nothing of
 //! Tauri. This module
 //! is the glue, and holds the parts that are the app's own decisions: when to
@@ -30,10 +30,10 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use journal_credential::{Credential, CredentialStore, RefreshToken};
-use journal_sync_status::{ProviderInfo, SyncStatusPayload};
 use journal_remote::RemoteStore;
 use journal_store::{BlobName, BlobStore};
-use journal_sync::{erase_state, SyncEngine, SyncStatus};
+use journal_sync_engine::{erase_state, SyncEngine, SyncStatus};
+use journal_sync_status::{ProviderInfo, SyncStatusPayload};
 use tauri::State;
 use url::Url;
 

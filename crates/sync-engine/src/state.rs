@@ -240,7 +240,8 @@ mod tests {
 
     #[test]
     fn erasing_removes_the_state_and_its_parked_bytes_and_nothing_else() {
-        let dir = std::env::temp_dir().join(format!("journal-sync-erase-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("journal-sync-engine-erase-{}", std::process::id()));
         let path = dir.join("state.json");
         let name = BlobName::try_from("a.json").unwrap();
         let mut state = State::load(path.clone()).unwrap();

@@ -12,7 +12,7 @@ what fixing it would take. When one is fixed, delete its entry.
 **When it happens.** Each journal has its own key, sealed in the
 `.vault-key` blob that syncs with the entries. The sync engine never merges
 that blob. If this device and the cloud hold different keys, a pass fails
-with `SyncError::KeyMismatch` and changes nothing (`crates/sync`, decision D5
+with `SyncError::KeyMismatch` and changes nothing (`crates/sync-engine`, decision D5
 in `.claude/plans/cloud-sync.md`). Two journals cannot be merged, because
 neither can decrypt the other's entries. In practice that means one of these
 happened:

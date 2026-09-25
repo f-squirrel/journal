@@ -14,13 +14,13 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use journal_credential::{Credential, FileCredentialStore};
-use journal_sync_status::SyncState;
 use journal_fs_store::FsStore;
 use journal_remote::{
     ChangePage, Cursor, MemoryRemote, Precondition, RemoteError, RemoteStore, Revision,
 };
 use journal_store::BlobName;
-use journal_sync::NotifyingStore;
+use journal_sync_engine::NotifyingStore;
+use journal_sync_status::SyncState;
 use serde_json::{json, Value};
 use tauri::test::MockRuntime;
 use tauri::utils::acl::ExecutionContext;

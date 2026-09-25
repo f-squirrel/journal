@@ -348,8 +348,8 @@ field-name mismatches — a class of bug neither the Playwright suite nor
   `crates/sync-status` (`journal-sync-status`) is the shape of the sync
   status sent to the frontend (`SyncStatusPayload`, `SyncState`,
   `ProviderInfo`) and nothing else: wire types only, depending on
-  `journal-entry` for `Id` and not on `journal-sync`, which knows blobs
-  rather than entries. `src-tauri/src/sync/status.rs` fills it in.
+  `journal-entry` for `Id` and not on `journal-sync-engine`, which knows
+  blobs rather than entries. `src-tauri/src/sync/status.rs` fills it in.
   `crates/store` (`journal-store`) defines the `BlobStore` trait — named
   opaque byte blobs (`get`/`put`/`put_new`/`delete`/`list`/`contains`) — and
   `BlobName`, the validated newtype its methods take, so a name cannot
@@ -376,8 +376,8 @@ field-name mismatches — a class of bug neither the Playwright suite nor
   a lost race as `RemoteError::Conflict` rather than overwriting. It is
   synchronous and holds no implementation; its `testing` feature provides
   `MemoryRemote` for the sync engine's tests.
-  `crates/sync` (`journal-sync`) is the engine over the two traits: local-first,
-  key-less, one blocking `sync_once` pass at a time. It compares each blob with
+  `crates/sync-engine` (`journal-sync-engine`) is the engine over the two
+  traits: local-first, key-less, one blocking `sync_once` pass at a time. It compares each blob with
   a per-device *base* (never synced) rather than clocks, so an edit always
   outranks a delete and a conflict is parked for a `ConflictResolver` the app
   supplies (it needs plaintext). `.vault-key` is never merged — a mismatch

@@ -8,8 +8,8 @@ use std::thread;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
+use journal_sync_engine::{SyncErrorKind, SyncStatus};
 use journal_sync_status::{SyncState, SyncStatusPayload};
-use journal_sync::{SyncErrorKind, SyncStatus};
 use journal_vault::entry_id;
 
 use super::Events;
@@ -303,9 +303,9 @@ mod tests {
     /// "connect again" alone would not fix.
     #[test]
     fn a_missing_permission_is_reauth_and_names_the_permission() {
-        let error = journal_sync::SyncError::from(journal_remote::RemoteError::MissingPermission(
-            "files.content.write".to_owned(),
-        ));
+        let error = journal_sync_engine::SyncError::from(
+            journal_remote::RemoteError::MissingPermission("files.content.write".to_owned()),
+        );
         let status = SyncStatus {
             last_error: Some(error.kind()),
             ..SyncStatus::default()

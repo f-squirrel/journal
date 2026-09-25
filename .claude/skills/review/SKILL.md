@@ -23,7 +23,7 @@ Read the argument the user gave (`$ARGUMENTS`, or the words of the request):
 | *(none)*, "changes", "uncommitted", "diff" | Uncommitted work | `git diff HEAD` plus untracked files from `git status --porcelain` (read those whole). If both are empty, say so and stop. |
 | "all", "repo", "whole repo", "everything" | Whole repository | `git ls-files`, excluding `src/bindings/`, `Cargo.lock`, `package-lock.json`, `src-tauri/gen/`, `src-tauri/icons/`, and other generated or binary files. |
 | a commit range or ref (`main..`, `HEAD~3`, a SHA) | Those commits | `git diff <range>` and `git log --oneline <range>` |
-| paths, crate names, or a feature ("crates/sync", "the OAuth flow", "idle lock") | The named thing | Map names to paths yourself (crate `sync` → `crates/sync/`; a feature → grep for it and use CLAUDE.md's architecture section). Confirm the file list only if the mapping is genuinely ambiguous. |
+| paths, crate names, or a feature ("crates/sync-engine", "the OAuth flow", "idle lock") | The named thing | Map names to paths yourself (crate `sync-engine` → `crates/sync-engine/`; a feature → grep for it and use CLAUDE.md's architecture section). Confirm the file list only if the mapping is genuinely ambiguous. |
 
 Create the run directory:
 

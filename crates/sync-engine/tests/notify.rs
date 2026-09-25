@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use common::TempDir;
 use journal_fs_store::FsStore;
 use journal_store::{BlobName, BlobStore, StoreError};
-use journal_sync::NotifyingStore;
+use journal_sync_engine::NotifyingStore;
 
 fn n(name: &str) -> BlobName {
     BlobName::try_from(name).unwrap()

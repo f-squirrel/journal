@@ -1,4 +1,4 @@
-# journal-sync
+# journal-sync-engine
 
 The sync engine: replicates the journal's encrypted blobs between the local
 `BlobStore` and a `journal-remote` `RemoteStore`. Local-first (ADR 0009) — the

@@ -2507,7 +2507,7 @@ dependencies = [
  "journal-key",
  "journal-remote",
  "journal-store",
- "journal-sync",
+ "journal-sync-engine",
  "journal-sync-status",
  "journal-vault",
  "log",
@@ -2594,7 +2594,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "journal-sync"
+name = "journal-sync-engine"
 version = "0.1.0"
 dependencies = [
  "journal-fs-store",

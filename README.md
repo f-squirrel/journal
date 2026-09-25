@@ -112,7 +112,7 @@ and `cargo-llvm-cov` (`cargo binstall cargo-llvm-cov`), and writes
 flowchart LR
     UI["React + TypeScript"] --> IPC["Tauri commands"]
     IPC --> Vault["journal-vault"]
-    IPC --> Sync["journal-sync"]
+    IPC --> Sync["journal-sync-engine"]
     IPC --> Dropbox["journal-dropbox"]
     IPC --> FS["journal-fs-store"]
     Vault --> Key["journal-key<br/>age + X25519"]
@@ -140,7 +140,7 @@ workspace crates:
 | `crates/store` | Abstract local blob-store interface |
 | `crates/fs-store` | Filesystem blob-store implementation |
 | `crates/remote` | Revision-aware remote-store interface |
-| `crates/sync` | Local-first, clock-free synchronization engine |
+| `crates/sync-engine` | Local-first, clock-free synchronization engine |
 | `crates/credential` | Provider-neutral saved login (refresh token) |
 | `crates/dropbox` | Dropbox remote store and OAuth PKCE flow |
 | `e2e/` | Playwright UI tests |
@@ -175,5 +175,5 @@ not implemented.
 - [`docs/adrs/`](docs/adrs/README.md) — decisions and their trade-offs
 - [`docs/known-issues.md`](docs/known-issues.md) — known problems left
   unfixed, with workarounds
-- [`crates/sync/README.md`](crates/sync/README.md) — synchronization model
+- [`crates/sync-engine/README.md`](crates/sync-engine/README.md) — synchronization model
 - [`crates/dropbox/README.md`](crates/dropbox/README.md) — Dropbox integration

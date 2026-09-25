@@ -13,7 +13,7 @@ use journal_remote::{
     ChangePage, Cursor, MemoryRemote, Precondition, RemoteError, RemoteStore, Revision,
 };
 use journal_store::{BlobName, BlobStore};
-use journal_sync::{
+use journal_sync_engine::{
     ConflictResolver, NotifyingStore, Resolution, SyncEngine, SyncError, SyncReport, SyncStatus,
 };
 
@@ -32,7 +32,10 @@ impl TempDir {
     pub fn new() -> Self {
         static COUNTER: AtomicUsize = AtomicUsize::new(0);
         let n = COUNTER.fetch_add(1, Ordering::SeqCst);
-        Self(std::env::temp_dir().join(format!("journal-sync-test-{}-{n}", std::process::id())))
+        Self(std::env::temp_dir().join(format!(
+            "journal-sync-engine-test-{}-{n}",
+            std::process::id()
+        )))
     }
 }
 

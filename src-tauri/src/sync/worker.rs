@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 
 use journal_remote::RemoteError;
 use journal_store::BlobName;
-use journal_sync::{SyncEngine, SyncError, SyncErrorKind};
+use journal_sync_engine::{SyncEngine, SyncError, SyncErrorKind};
 
 use super::resolver::VaultResolver;
 use super::Events;

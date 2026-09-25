@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use common::*;
 use journal_remote::{ConflictMode, MemoryRemote, RemoteError, RemoteStore};
-use journal_sync::{SyncEngine, SyncError, SyncErrorKind, SyncReport, KEY_BLOB};
+use journal_sync_engine::{SyncEngine, SyncError, SyncErrorKind, SyncReport, KEY_BLOB};
 
 const BOTH_MODES: [ConflictMode; 2] = [ConflictMode::Atomic, ConflictMode::DetectAfterWrite];
 

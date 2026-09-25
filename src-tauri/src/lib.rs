@@ -13,7 +13,7 @@ use journal_entry::{Entry, Header, Id, SearchMatch};
 use journal_fs_store::FsStore;
 use journal_key::Keyring;
 use journal_store::BlobStore;
-use journal_sync::NotifyingStore;
+use journal_sync_engine::NotifyingStore;
 use journal_vault::Vault;
 use secrecy::SecretString;
 use sync::SyncControl;
