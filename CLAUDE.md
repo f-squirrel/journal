@@ -141,9 +141,9 @@ field-name mismatches — a class of bug neither the Playwright suite nor
     current by `sync://status`. Sync is not gated on the vault — it runs while
     locked, and connecting is how a second device gets its key — so the
     subscription is live from the first render, on the login screen too.
-    `sync://changed` bumps a version that re-runs the list effect, so the
-    list reloads; the entry open in the pane is left alone, since autosave
-    owns its draft. A reload does not simply replace the list: every local
+    `sync://changed` bumps a version (exposed as `syncVersion`) that re-runs
+    the list effect, so the list reloads; the entry pane reloads too, but
+    only when it holds nothing unsaved (see the autosave paragraph). A reload does not simply replace the list: every local
     save and delete is kept (the `mutations` ref) until no listing that
     could have missed it is open, and laid over each listing's result —
     otherwise a save landing mid-reload put the row's older title back. `connectSync`/`disconnectSync`/`syncNow` re-read the
@@ -166,11 +166,15 @@ field-name mismatches — a class of bug neither the Playwright suite nor
     (`npm run dev`, Playwright) a **development** build serves the seeded
     in-memory vault in `src/api/fallback.ts`. That module also carries the
     fault-injection hook it parses once at load: `?fail=<ops>` (the ops
-    include `export`, `connect`, `sync` and `resolve`), `?failMessage=<text>`, `?slow=<ops>`,
+    include `export`, `connect`, `sync` and `resolve`), `?failAfter=<n>` and
+    `?failTimes=<n>` (fail only calls `n` through `n + times - 1`),
+    `?failMessage=<text>`, `?slow=<ops>`,
     `?vault=new` (`?vault=arrives`: the same, but the first unlock reports the
     journal's key arriving from the cloud) and
-    `?sync=on|conflict|busy|reauth|key_mismatch` (`busy`: every pass fires `sync://changed`; the last two start halted, with the
-    message the backend sends). Its listing reads the vault when called, not when it
+    `?sync=on|conflict|busy|pull|reauth|key_mismatch` (`busy`: every pass fires `sync://changed`; `pull`: the first pass rewrites
+    the first seed entry, as another device would; the last two start halted, with the
+    message the backend sends). Its `saveEntry` refuses a stale precondition
+    as the vault does. Its listing reads the vault when called, not when it
     answers, as the real one does, so `?slow=list` exposes races with it.
     It simulates sync too, in the
     sequence the backend produces — a save marks its entry pending at once,
@@ -289,7 +293,17 @@ field-name mismatches — a class of bug neither the Playwright suite nor
     forever — the next keystroke or Retry does it), and `cancel()` before a
     delete keeps a pending save from resurrecting the entry — with
     `whenSettled()` after it, so a write already in flight lands before the
-    delete rather than after.
+    delete rather than after, and a second `cancel()` after that, since a
+    write that failed meanwhile marked the draft dirty again.
+    **Every save is conditional** on the `updated_at` the pane last saw (the
+    hook's `base`; `save_entry`'s `expected_updated_at`,
+    `Vault::save_entry_if`), so the pane never overwrites an edit sync
+    pulled in underneath it. A refused save (`VaultError::Stale`, matched by
+    its message in `utils/errors.ts`) writes the draft as a new
+    "(conflicted copy)" entry and the pane reloads what is on disk, with an
+    info alert; a pane with nothing unsaved reloads itself on
+    `sync://changed` without remounting the editor. See ADR 0012's
+    amendment for why the disk, not the newer version, keeps the id.
     `hooks/useNewEntry.ts` generates the entry's id before navigating, so
     the draft's URL never changes under the keyed pane.
   - `src/bindings/` is **generated** — do not edit by hand. ts-rs derives
@@ -408,7 +422,9 @@ field-name mismatches — a class of bug neither the Playwright suite nor
   `crates/credential` (`journal-credential`) is the provider-neutral login:
   `RefreshToken`, `Credential` (the token plus the id of the provider that
   issued it) and `CredentialStore`, with a 0600 `FileCredentialStore` that keeps
-  the one saved credential. A new provider's adapter takes a `RefreshToken` and
+  the one saved credential (its scratch file is created exclusively, already
+  0600). `CredentialStoreError` is an enum with an `Other` variant for a store
+  implemented elsewhere. A new provider's adapter takes a `RefreshToken` and
   needs nothing else from it.
   `crates/vault` (`journal-vault`) is the layer that knows what an
   entry *is*, and is what the rest of the app means by "the vault":
@@ -489,7 +505,8 @@ field-name mismatches — a class of bug neither the Playwright suite nor
   (`SyncControl`, the connect/disconnect flow, the `list_providers`,
   `connect_remote(provider)`, `disconnect_remote`, `sync_now` and
   `sync_status` commands, and the
-  `Provider` trait — an `id`, a display `name`, `begin` and `remote` — that a
+  `Provider` trait — an `id`, a display `name`, `begin`, `remote` and a
+  best-effort `revoke` — that a
   build lists in `SyncConfig::providers` and that lets tests stand in a fake),
   `dropbox.rs` (the one `Provider` there is; adding Google Drive is another
   file like it plus a line in `lib.rs`, and nothing else names a provider),
@@ -518,7 +535,10 @@ field-name mismatches — a class of bug neither the Playwright suite nor
   the data dir, both outside the synced `entries/`. The engine state is one
   account's cursor and revisions, so `install` keeps it only while provider
   *and* account (`Provider::account`, asked once per connect) match the saved
-  login; anything else erases it. Kept across accounts it is data loss — the
+  login; anything else erases it. Disconnecting, or connecting with a new
+  token, revokes the one it replaces on a background thread after the local
+  change succeeded; a failure is only logged. No thread spawn in `src-tauri`
+  may `expect` — a failure is an error or a log line, never an abort. Kept across accounts it is data loss — the
   new folder's listing reads as every entry deleted — and a test holds that.
   A cursor the remote forgets (Dropbox's `reset`) is `RemoteError::CursorExpired`;
   the engine then lists from scratch, and a blob missing from that listing is a

@@ -97,3 +97,24 @@ that needs plaintext, so it is the one step left to the app.
   `account_info.read` scope. Reading the id out of the token response instead
   was also possible, but the SDK drops it, so that would have meant doing the
   code exchange by hand.
+
+## Amendment — 2026-09-26: the open entry pane
+
+D1 governs the resolver, the one writer that sees both sides of a conflict. The
+entry pane is a second writer, and until now its autosave overwrote whatever
+the vault held, including an edit a sync pass had just pulled from another
+device. The next pass then pushed the pane's version, so the pulled edit was
+lost everywhere. Every save from the pane is now conditional on the
+`updated_at` the pane last saw: `save_entry` takes `expected_updated_at`,
+`Vault::save_entry_if` checks it, and a mismatch is `VaultError::Stale`.
+
+When a save is refused, the version on disk keeps the id. The pane's latest
+draft is saved as a new "<title> (conflicted copy)", and the pane reloads what
+is on disk and says so. A pane with no unsaved edits reloads itself on
+`sync://changed` instead. This differs from D1, where the *newer* version keeps
+the id. The pane cannot order its draft against a write made on another
+device, so it never overwrites anything, which keeps D1's guarantee that no
+text is lost. D1 is unchanged for the resolver. One known limit: the check and
+the write are not atomic against the engine's pulls, which write beneath the
+vault, so a pull landing in that window of a few milliseconds is still
+overwritten.
