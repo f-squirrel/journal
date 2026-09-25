@@ -8,7 +8,7 @@ use std::thread;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use journal_entry::{SyncState, SyncStatusPayload};
+use journal_sync_status::{SyncState, SyncStatusPayload};
 use journal_sync::{SyncErrorKind, SyncStatus};
 use journal_vault::entry_id;
 

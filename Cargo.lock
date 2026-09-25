@@ -2508,6 +2508,7 @@ dependencies = [
  "journal-remote",
  "journal-store",
  "journal-sync",
+ "journal-sync-status",
  "journal-vault",
  "log",
  "secrecy",
@@ -2606,6 +2607,17 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "thiserror 2.0.20",
+]
+
+[[package]]
+name = "journal-sync-status"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "journal-entry",
+ "serde",
+ "serde_json",
+ "ts-rs",
 ]
 
 [[package]]

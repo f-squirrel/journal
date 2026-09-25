@@ -30,7 +30,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use journal_credential::{Credential, CredentialStore, RefreshToken};
-use journal_entry::{ProviderInfo, SyncStatusPayload};
+use journal_sync_status::{ProviderInfo, SyncStatusPayload};
 use journal_remote::RemoteStore;
 use journal_store::{BlobName, BlobStore};
 use journal_sync::{erase_state, SyncEngine, SyncStatus};

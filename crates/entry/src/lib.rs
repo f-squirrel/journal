@@ -1,9 +1,5 @@
 #![cfg_attr(all(test, coverage_nightly), feature(coverage_attribute))]
 
-mod sync;
-
-pub use sync::{ProviderInfo, SyncState, SyncStatusPayload};
-
 use std::fmt;
 use std::str::FromStr;
 

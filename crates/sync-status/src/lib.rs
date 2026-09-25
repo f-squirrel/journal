@@ -1,15 +1,18 @@
+#![cfg_attr(all(test, coverage_nightly), feature(coverage_attribute))]
+
 //! What the app tells the frontend about sync: one payload, sent over both the
-//! `sync_status` command and the `sync://status` event.
+//! `sync_status` command and the `sync://status` event, and the list of
+//! providers the connect dialog offers.
 //!
-//! It lives beside the entry types because the frontend's wire types are
-//! generated from this crate (`make bindings`), and it names entries by
-//! [`Id`]. Deriving the state from the sync engine's own status is the
-//! backend's job (`src-tauri`); this is only the shape.
+//! Only the shape lives here, so that `make bindings` can generate its
+//! TypeScript; deriving the state from the sync engine's own status is the
+//! backend's job (`src-tauri`). It depends on `journal-entry` for [`Id`] alone,
+//! and on nothing from `journal-sync`, which knows blobs rather than entries.
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 
-use crate::Id;
+use journal_entry::Id;
 
 /// The one word the rail's sync button is drawn from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

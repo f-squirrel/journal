@@ -21,9 +21,9 @@ test-e2e:
 	npm run test:e2e -- $(ARGS)
 
 # Regenerate the TypeScript wire types in src/bindings/ from the Rust
-# definitions in crates/entry.
+# definitions in crates/entry and crates/sync-status.
 bindings:
-	cargo test -p journal-entry --features ts
+	cargo test -p journal-entry -p journal-sync-status --features ts
 
 # Fail if the committed bindings are stale. Without this the generated types
 # silently drift from the Rust ones and `tsc` stops catching bridge mismatches.

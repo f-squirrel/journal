@@ -34,7 +34,8 @@ the user rather than assuming a migration must be written.
 - `npm run preview` — preview the production frontend build.
 - `npm run tauri <args>` — passthrough to the Tauri CLI (e.g. `npm run tauri build` for native installers).
 - `make bindings` — regenerate `src/bindings/*.ts` (the TypeScript wire
-  types) from the Rust definitions in `crates/entry` via ts-rs.
+  types) from the Rust definitions in `crates/entry` and
+  `crates/sync-status` via ts-rs.
   `make check-bindings` regenerates and fails if the result differs from
   what is committed; run it after changing any type that crosses the
   `invoke` bridge. `make run` and `make build` already do this for you, as
@@ -292,10 +293,10 @@ field-name mismatches — a class of bug neither the Playwright suite nor
     `hooks/useNewEntry.ts` generates the entry's id before navigating, so
     the draft's URL never changes under the keyed pane.
   - `src/bindings/` is **generated** — do not edit by hand. ts-rs derives
-    it from `crates/entry` (behind that crate's off-by-default `ts`
-    feature, so the codegen crate stays out of the shipped binary). That
-    includes `SyncStatusPayload`/`SyncState`, the sync status the backend
-    sends over `sync_status` and `sync://status`.
+    it from `crates/entry` and `crates/sync-status` (behind each crate's
+    off-by-default `ts` feature, so the codegen crate stays out of the
+    shipped binary). The latter holds `SyncStatusPayload`/`SyncState`, the
+    sync status the backend sends over `sync_status` and `sync://status`.
     `src/types.ts` re-exports it under the names the app uses
     (`EntryHeader`, `JournalEntry`), so imports stay pointed at
     `../types`. Rename a field in Rust without running `make bindings`
@@ -344,6 +345,11 @@ field-name mismatches — a class of bug neither the Playwright suite nor
   more idiomatically. One serde impl serves both the `invoke` wire format
   and the encrypted on-disk payload, so renaming a field changes the
   on-disk format too.
+  `crates/sync-status` (`journal-sync-status`) is the shape of the sync
+  status sent to the frontend (`SyncStatusPayload`, `SyncState`,
+  `ProviderInfo`) and nothing else: wire types only, depending on
+  `journal-entry` for `Id` and not on `journal-sync`, which knows blobs
+  rather than entries. `src-tauri/src/sync/status.rs` fills it in.
   `crates/store` (`journal-store`) defines the `BlobStore` trait — named
   opaque byte blobs (`get`/`put`/`put_new`/`delete`/`list`/`contains`) — and
   `BlobName`, the validated newtype its methods take, so a name cannot

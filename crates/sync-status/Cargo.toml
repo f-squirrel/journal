@@ -1,0 +1,21 @@
+[package]
+name = "journal-sync-status"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+chrono = { workspace = true }
+serde = { workspace = true }
+journal-entry = { path = "../entry" }
+ts-rs = { workspace = true, optional = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+
+[features]
+# Enables the `TS` derives that generate `src/bindings/*.ts`, as in
+# `journal-entry`, whose `ts` feature it turns on for `Id`.
+ts = ["dep:ts-rs", "journal-entry/ts"]
+
+[lints]
+workspace = true
