@@ -12,12 +12,12 @@ import { STALE_ENTRY_MESSAGE } from "../utils/errors";
 // Playwright suite, where there is no Rust backend to talk to.
 //
 // This module is reached only through a dynamic `import()` that
-// `src/api/entries.ts` guards with `import.meta.env.DEV`, so none of it —
+// `src/api/backend.ts` guards with `import.meta.env.DEV`, so none of it —
 // not the fabricated entries below, not the URL fault hook — exists in a
 // production bundle. `make check-no-fallback` is what holds that: the
 // guard is only as good as the bundler dropping this chunk. Keep the
 // import dynamic, and keep every module-scope constant here rather than
-// in `entries.ts`, or the two come back.
+// in `backend.ts`, or the two come back.
 
 const seedEntries: JournalEntry[] = [
   {
