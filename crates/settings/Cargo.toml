@@ -1,0 +1,22 @@
+[package]
+name = "journal-settings"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+chrono = { workspace = true }
+log = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+ts-rs = { workspace = true, optional = true }
+
+[features]
+# Enables the `TS` derives that generate `src/bindings/*.ts`, as in
+# `journal-entry`. Off by default so the codegen crate stays out of the
+# shipped app binary; the generation itself runs as
+# `cargo test -p journal-settings --features ts`.
+ts = ["dep:ts-rs"]
+
+[lints]
+workspace = true

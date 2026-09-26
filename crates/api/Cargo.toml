@@ -7,6 +7,7 @@ edition = "2021"
 chrono = { workspace = true }
 serde = { workspace = true }
 journal-entry = { path = "../entry" }
+journal-settings = { path = "../settings" }
 ts-rs = { workspace = true, optional = true }
 
 [dev-dependencies]
@@ -14,8 +15,9 @@ serde_json = { workspace = true }
 
 [features]
 # Enables the `TS` derives that generate `src/bindings/*.ts`, as in
-# `journal-entry`, whose `ts` feature it turns on for `Id`.
-ts = ["dep:ts-rs", "journal-entry/ts"]
+# `journal-entry`, whose `ts` feature it turns on for `Id`, and
+# `journal-settings`, whose `ts` feature it turns on for the settings types.
+ts = ["dep:ts-rs", "journal-entry/ts", "journal-settings/ts"]
 
 [lints]
 workspace = true

@@ -2528,6 +2528,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "journal-entry",
+ "journal-settings",
  "serde",
  "serde_json",
  "ts-rs",
@@ -2594,6 +2595,18 @@ dependencies = [
  "serde",
  "sha2 0.10.9",
  "thiserror 2.0.20",
+]
+
+[[package]]
+name = "journal-settings"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "log",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "ts-rs",
 ]
 
 [[package]]
