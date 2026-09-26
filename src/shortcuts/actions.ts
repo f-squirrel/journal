@@ -19,25 +19,72 @@ export const ACTIONS = {
 
 export type ActionId = keyof typeof ACTIONS;
 
-/// Chords CodeMirror's own keymap (`@codemirror/commands`'s `defaultKeymap` +
-/// `historyKeymap`, wired up in `MarkdownEditor`) or the OS already give a
-/// meaning to. Phase B (`setBinding`) refuses to rebind an action onto one of
-/// these; phase A's fixed defaults above already avoid them, so WP1 only
-/// needs the list to exist for that later work.
+/// Chords CodeMirror's own keymap (`@codemirror/commands`'s `standardKeymap`,
+/// `defaultKeymap` and `historyKeymap`, wired up in `MarkdownEditor`) or the
+/// OS already give a meaning to. `setBinding` refuses to rebind an action onto
+/// one of these, and a stored override naming one is dropped. The list is the
+/// union of every platform's keymap (CodeMirror's `mac:` variants become
+/// `Control+…`/`Alt+…` here), so a chord that is free on one platform but
+/// taken on another is refused everywhere.
+///
+/// One default overlaps on purpose: `help.shortcuts`' `$mod+Slash` is
+/// CodeMirror's `Mod-/` (`toggleComment`, which wraps markdown in `<!-- -->`
+/// — rarely wanted in a journal), and the global listener wins it. It is left
+/// out of this list so that chord can still be recorded back onto an action.
 export const RESERVED: readonly string[] = [
-  "$mod+KeyZ",
-  "$mod+KeyY",
-  "$mod+Shift+KeyZ",
-  "$mod+KeyA",
+  // Clipboard and window chords the OS owns.
   "$mod+KeyC",
   "$mod+KeyV",
   "$mod+KeyX",
   "$mod+KeyQ",
   "$mod+KeyW",
+  // History.
+  "$mod+KeyZ",
+  "$mod+KeyY",
+  "$mod+Shift+KeyZ",
   "$mod+KeyU",
+  "$mod+Shift+KeyU",
+  "Alt+KeyU",
+  // Selection and editing.
+  "$mod+KeyA",
   "$mod+KeyI",
+  "$mod+KeyM",
+  "$mod+Enter",
   "$mod+BracketLeft",
   "$mod+BracketRight",
-  "$mod+Enter",
   "$mod+Shift+KeyK",
+  "$mod+Shift+Backslash",
+  "$mod+Alt+Backslash",
+  "$mod+Alt+ArrowUp",
+  "$mod+Alt+ArrowDown",
+  "$mod+Backspace",
+  "$mod+Delete",
+  "Alt+KeyL",
+  "Alt+Shift+KeyA",
+  "Alt+Shift+KeyM",
+  "Alt+Backspace",
+  "Alt+Delete",
+  // Cursor movement, each with its Shift-extends-the-selection twin.
+  ...["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].flatMap(
+    (code) => [`$mod+${code}`, `$mod+Shift+${code}`],
+  ),
+  ...["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].flatMap((code) => [
+    `Alt+${code}`,
+    `Alt+Shift+${code}`,
+    `Control+${code}`,
+    `Control+Shift+${code}`,
+  ]),
+  // macOS's Emacs-style Ctrl chords (plain `Control`, not `$mod`, on Apple).
+  ...["KeyB", "KeyF", "KeyP", "KeyN", "KeyA", "KeyE"].flatMap((code) => [
+    `Control+${code}`,
+    `Control+Shift+${code}`,
+  ]),
+  "Control+KeyD",
+  "Control+KeyH",
+  "Control+KeyK",
+  "Control+KeyO",
+  "Control+KeyT",
+  "Control+KeyV",
+  "Control+KeyL",
+  "Control+Alt+KeyH",
 ];

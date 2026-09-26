@@ -200,7 +200,7 @@ export default function ShortcutsDialog({
                           size="small"
                           onClick={() => {
                             cancelRecording();
-                            resetBinding(id);
+                            setError(resetBinding(id));
                           }}
                         >
                           Reset

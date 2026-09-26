@@ -350,6 +350,65 @@ test("an unknown action id and a non-string binding are dropped, and the known d
   await expect(page).toHaveURL(/#\/entries\/[0-9a-f-]{36}$/);
 });
 
+test("a stored override on an editor-owned chord is dropped", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem(
+      "journal.shortcuts",
+      JSON.stringify({ "entry.new": "Alt+ArrowUp" }),
+    );
+  });
+  await login(page);
+
+  await page.keyboard.press("ControlOrMeta+n");
+
+  await expect(page).toHaveURL(/#\/entries\/[0-9a-f-]{36}$/);
+});
+
+test("a stored override that clashes with another action's chord is unbound, leaving that action on it", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem(
+      "journal.shortcuts",
+      JSON.stringify({ "vault.lock": "$mod+KeyN" }),
+    );
+  });
+  await login(page);
+
+  await page.keyboard.press("ControlOrMeta+n");
+  await expect(page).toHaveURL(/#\/entries\/[0-9a-f-]{36}$/);
+
+  await page.keyboard.press("ControlOrMeta+/");
+  await expect(
+    shortcutRow(page, "vault.lock").getByTestId("shortcut-keys"),
+  ).toHaveText("—");
+});
+
+test("a storage write that throws doesn't take the app down", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    // Only for this key: other modules persist their own settings too.
+    const setItem = Storage.prototype.setItem;
+    Storage.prototype.setItem = function (key, value) {
+      if (key === "journal.shortcuts") {
+        throw new DOMException("quota", "QuotaExceededError");
+      }
+      setItem.call(this, key, value);
+    };
+  });
+  await login(page);
+  await page.keyboard.press("ControlOrMeta+/");
+
+  await recordChord(page, "entry.new", "ControlOrMeta+Shift+n");
+
+  await expect(
+    shortcutRow(page, "entry.new").getByTestId("shortcut-keys"),
+  ).toContainText(/Shift|⇧/);
+});
+
 test("the shortcuts dialog works at phone width, opened from the drawer", async ({
   page,
 }) => {
@@ -392,9 +451,7 @@ function noOverflow(page: Page) {
 /// presses `chord`. Doesn't assert the outcome — refused chords need to
 /// inspect the Alert first.
 async function recordChord(page: Page, id: string, chord: string) {
-  await shortcutRow(page, id)
-    .getByRole("button", { name: "Change" })
-    .click();
+  await shortcutRow(page, id).getByRole("button", { name: "Change" }).click();
   await expect(
     shortcutRow(page, id).getByPlaceholder("Press keys…"),
   ).toBeFocused();
@@ -473,6 +530,17 @@ test("rebinding to a chord the editor owns is refused", async ({ page }) => {
   await expect(
     shortcutRow(page, "entry.new").getByPlaceholder("Press keys…"),
   ).toBeFocused();
+});
+
+test("rebinding to an Alt chord the editor owns is refused", async ({
+  page,
+}) => {
+  await login(page);
+  await page.keyboard.press("ControlOrMeta+/");
+
+  await recordChord(page, "entry.new", "Alt+ArrowUp");
+
+  await expect(page.getByRole("alert")).toContainText("used by the editor");
 });
 
 test("a bare Escape cancels the recorder without closing the dialog", async ({
@@ -556,9 +624,7 @@ test("Clear, Reset and Reset all restore what they should", async ({
   await expect(row.getByTestId("shortcut-keys")).toHaveText(/^(Ctrl\+N|⌘N)$/);
   await expect(row.getByRole("button", { name: "Reset" })).toHaveCount(0);
   await expect(lockRow.getByTestId("shortcut-keys")).not.toHaveText("—");
-  await expect(
-    lockRow.getByRole("button", { name: "Reset" }),
-  ).toHaveCount(0);
+  await expect(lockRow.getByRole("button", { name: "Reset" })).toHaveCount(0);
 
   // Reset all actually took effect on the live bindings, not just the rows —
   // close the dialog first, since shortcuts are suppressed while one is open.
@@ -568,9 +634,25 @@ test("Clear, Reset and Reset all restore what they should", async ({
   await expect(page).toHaveURL(/#\/entries\/[0-9a-f-]{36}$/);
 });
 
-test("Change, Clear and Reset stay usable at phone width", async ({
+test("Reset is refused while another action holds the default chord", async ({
   page,
 }) => {
+  await login(page);
+  await page.keyboard.press("ControlOrMeta+/");
+  const row = shortcutRow(page, "entry.new");
+  await row.getByRole("button", { name: "Clear" }).click();
+  await recordChord(page, "vault.lock", "ControlOrMeta+n");
+  await expect(
+    shortcutRow(page, "vault.lock").getByPlaceholder("Press keys…"),
+  ).toHaveCount(0);
+
+  await row.getByRole("button", { name: "Reset" }).click();
+
+  await expect(page.getByRole("alert")).toContainText("Lock journal");
+  await expect(row.getByTestId("shortcut-keys")).toHaveText("—");
+});
+
+test("Change, Clear and Reset stay usable at phone width", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 800 });
   await login(page);
   await page.getByRole("button", { name: "Open menu" }).click();

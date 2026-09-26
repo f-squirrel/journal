@@ -26,20 +26,32 @@ interface ShortcutsContextValue {
   register(id: ActionId, handler: Handler): void;
   unregister(id: ActionId, handler: Handler): void;
   setBinding(id: ActionId, b: string | null): string | null;
-  resetBinding(id: ActionId): void;
+  resetBinding(id: ActionId): string | null;
   resetAll(): void;
 }
 
 const ShortcutsContext = createContext<ShortcutsContextValue | null>(null);
 
+/// Every action's chord once `overrides` is applied over `ACTIONS`' defaults.
+function effectiveOf(overrides: Overrides): Record<ActionId, string | null> {
+  const result = {} as Record<ActionId, string | null>;
+  for (const id of Object.keys(ACTIONS) as ActionId[]) {
+    result[id] =
+      id in overrides ? (overrides[id] ?? null) : ACTIONS[id].default;
+  }
+  return result;
+}
+
 /// Reads `localStorage["journal.shortcuts"]` once, defensively: this is a
 /// preference file, not a format with a migration path, so anything that
 /// doesn't look right is dropped rather than repaired. An id not in `ACTIONS`
 /// is dropped. A value is kept only if it's `null` (an explicit unbind) or a
-/// string that is both well-shaped (`isWellFormedBinding`) and carries a real
-/// modifier (`hasModifier`) — the same two checks `setBinding` itself
-/// enforces on a fresh rebind. `JSON.parse` or storage access throwing (bad
-/// JSON, a private-mode browser, a quota error) yields no overrides at all.
+/// string that is well-shaped (`isWellFormedBinding`), carries a real
+/// modifier (`hasModifier`) and isn't `RESERVED` — the checks `setBinding`
+/// itself enforces on a fresh rebind. An override whose chord another action
+/// also ends up on is stored as unbound instead, so no chord ever fires one
+/// action while the dialog shows it on two. `JSON.parse` or storage access
+/// throwing (bad JSON, a private-mode browser) yields no overrides at all.
 function readStoredOverrides(): Overrides {
   if (typeof window === "undefined") return {};
   try {
@@ -64,9 +76,23 @@ function readStoredOverrides(): Overrides {
       } else if (
         typeof value === "string" &&
         isWellFormedBinding(value) &&
-        hasModifier(value)
+        hasModifier(value) &&
+        !RESERVED.includes(value)
       ) {
         result[actionId] = value;
+      }
+    }
+    const effective = effectiveOf(result);
+    for (const id of Object.keys(result) as ActionId[]) {
+      const b = result[id];
+      if (
+        b != null &&
+        (Object.keys(ACTIONS) as ActionId[]).some(
+          (other) => other !== id && effective[other] === b,
+        )
+      ) {
+        result[id] = null;
+        effective[id] = null;
       }
     }
     return result;
@@ -89,18 +115,18 @@ export function ShortcutsProvider({ children }: { children: ReactNode }) {
 
   const [overrides, setOverrides] = useState<Overrides>(readStoredOverrides);
 
+  // Best effort, like the read: a private-mode browser or a full quota
+  // throws here, and that must cost only the persistence of these
+  // overrides — never the provider, which wraps the whole app.
   useEffect(() => {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(overrides));
+    try {
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(overrides));
+    } catch {
+      // Keep the in-memory overrides; they just won't survive a reload.
+    }
   }, [overrides]);
 
-  const effectiveBindings = useMemo<Record<ActionId, string | null>>(() => {
-    const result = {} as Record<ActionId, string | null>;
-    for (const id of Object.keys(ACTIONS) as ActionId[]) {
-      result[id] =
-        id in overrides ? (overrides[id] ?? null) : ACTIONS[id].default;
-    }
-    return result;
-  }, [overrides]);
+  const effectiveBindings = useMemo(() => effectiveOf(overrides), [overrides]);
 
   useEffect(() => {
     const map: Record<string, (event: KeyboardEvent) => void> = {};
@@ -148,8 +174,17 @@ export function ShortcutsProvider({ children }: { children: ReactNode }) {
     });
   }, [effectiveBindings]);
 
-  const value = useMemo<ShortcutsContextValue>(
-    () => ({
+  const value = useMemo<ShortcutsContextValue>(() => {
+    // The refusal for putting `b` on `id` when another action already has it.
+    const conflictFor = (id: ActionId, b: string): string | null => {
+      const conflictId = (Object.keys(ACTIONS) as ActionId[]).find(
+        (other) => other !== id && effectiveBindings[other] === b,
+      );
+      return conflictId
+        ? `${formatBinding(b)} is already used by ${ACTIONS[conflictId].label}.`
+        : null;
+    };
+    return {
       bindingFor: (id) => effectiveBindings[id],
       labelFor: (id) => ACTIONS[id].label,
       register: (id, handler) => {
@@ -177,12 +212,8 @@ export function ShortcutsProvider({ children }: { children: ReactNode }) {
           if (RESERVED.includes(b)) {
             return `${formatBinding(b)} is used by the editor.`;
           }
-          const conflictId = (Object.keys(ACTIONS) as ActionId[]).find(
-            (other) => other !== id && effectiveBindings[other] === b,
-          );
-          if (conflictId) {
-            return `${formatBinding(b)} is already used by ${ACTIONS[conflictId].label}.`;
-          }
+          const conflict = conflictFor(id, b);
+          if (conflict) return conflict;
         }
         setOverrides((prev) => {
           // Storing a copy of the default would be indistinguishable from a
@@ -198,18 +229,26 @@ export function ShortcutsProvider({ children }: { children: ReactNode }) {
         });
         return null;
       },
+      // Refused when another action has since taken the default chord (e.g.
+      // New entry cleared, Lock journal moved onto its Ctrl+N): restoring it
+      // would put two actions on one chord.
       resetBinding: (id) => {
+        const b = ACTIONS[id].default;
+        if (b !== null) {
+          const conflict = conflictFor(id, b);
+          if (conflict) return conflict;
+        }
         setOverrides((prev) => {
           if (!(id in prev)) return prev;
           const next = { ...prev };
           delete next[id];
           return next;
         });
+        return null;
       },
       resetAll: () => setOverrides({}),
-    }),
-    [effectiveBindings],
-  );
+    };
+  }, [effectiveBindings]);
 
   return (
     <ShortcutsContext.Provider value={value}>
@@ -229,8 +268,8 @@ function useShortcutsContext(): ShortcutsContextValue {
 /// Access to the registry and its per-device overrides: `bindingFor` and
 /// `labelFor` for showing a chord (rail tooltips, the `⋯` menu,
 /// `ShortcutsDialog`); `setBinding`, `resetBinding` and `resetAll` for
-/// rebinding it (WP5's dialog). `setBinding` returns a user-facing refusal
-/// string, or `null` once the override is saved.
+/// rebinding it (WP5's dialog). `setBinding` and `resetBinding` return a
+/// user-facing refusal string, or `null` once the change is saved.
 export function useShortcuts(): Pick<
   ShortcutsContextValue,
   "bindingFor" | "labelFor" | "setBinding" | "resetBinding" | "resetAll"
