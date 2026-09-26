@@ -47,6 +47,8 @@ import {
   type SaveStatus,
 } from "../hooks/useAutosave";
 import { useNewEntry } from "../hooks/useNewEntry";
+import { formatBinding } from "../shortcuts/binding";
+import { useShortcut, useShortcuts } from "../shortcuts/ShortcutsContext";
 import { formatAgo, formatEntryHeading, formatTime } from "../utils/date";
 import { errorMessage } from "../utils/errors";
 
@@ -197,6 +199,16 @@ function EntryPane({ id, draft }: { id: string; draft: boolean }) {
     }
     refreshFromDisk();
   }, [syncVersion, refreshFromDisk]);
+
+  const { bindingFor } = useShortcuts();
+  // Read through `mode` on every render (via `useShortcut`'s ref), so this
+  // always toggles the mode the pane is in *now* — the same explicit act as
+  // the `⋯` menu items below, which call the very same two functions.
+  // `stopEditing` runs `saveNow` before switching, same as a menu click.
+  useShortcut("entry.toggleMode", () => {
+    if (mode === "edit") stopEditing();
+    else startEditing();
+  });
 
   useEffect(() => {
     if (draft) return;
@@ -525,14 +537,24 @@ function EntryPane({ id, draft }: { id: string; draft: boolean }) {
         onClose={() => setMenuAnchor(null)}
       >
         {mode === "read" ? (
-          <MenuItem onClick={startEditing}>
-            <EditIcon fontSize="small" sx={{ mr: 1.5 }} />
-            Edit
+          <MenuItem onClick={startEditing} sx={{ gap: 3 }}>
+            <Stack direction="row" alignItems="center" sx={{ flex: 1 }}>
+              <EditIcon fontSize="small" sx={{ mr: 1.5 }} />
+              Edit
+            </Stack>
+            <Typography variant="caption" color="text.secondary">
+              {formatBinding(bindingFor("entry.toggleMode"))}
+            </Typography>
           </MenuItem>
         ) : (
-          <MenuItem onClick={stopEditing}>
-            <VisibilityIcon fontSize="small" sx={{ mr: 1.5 }} />
-            Preview
+          <MenuItem onClick={stopEditing} sx={{ gap: 3 }}>
+            <Stack direction="row" alignItems="center" sx={{ flex: 1 }}>
+              <VisibilityIcon fontSize="small" sx={{ mr: 1.5 }} />
+              Preview
+            </Stack>
+            <Typography variant="caption" color="text.secondary">
+              {formatBinding(bindingFor("entry.toggleMode"))}
+            </Typography>
           </MenuItem>
         )}
         <MenuItem

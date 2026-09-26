@@ -12,6 +12,7 @@ import {
 import { getTheme } from "./theme";
 import { AppStateProvider, useAppState } from "./context/AppStateContext";
 import { ColorModeProvider, useColorMode } from "./context/ColorModeContext";
+import { ShortcutsProvider } from "./shortcuts/ShortcutsContext";
 import JournalLayout from "./components/JournalLayout";
 import CalendarPage from "./pages/CalendarPage";
 import LoginPage from "./pages/LoginPage";
@@ -71,9 +72,11 @@ function ThemedApp() {
           date type ever enters the codebase. */}
       <LocalizationProvider dateAdapter={AdapterDateFns}>
         <AppStateProvider>
-          <HashRouter>
-            <AppRoutes />
-          </HashRouter>
+          <ShortcutsProvider>
+            <HashRouter>
+              <AppRoutes />
+            </HashRouter>
+          </ShortcutsProvider>
         </AppStateProvider>
       </LocalizationProvider>
     </ThemeProvider>

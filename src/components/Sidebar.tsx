@@ -9,6 +9,7 @@ import CloudSyncIcon from "@mui/icons-material/CloudSync";
 import CloudUploadIcon from "@mui/icons-material/CloudUpload";
 import DarkModeIcon from "@mui/icons-material/DarkMode";
 import ExportIcon from "@mui/icons-material/FileDownload";
+import KeyboardIcon from "@mui/icons-material/Keyboard";
 import LightModeIcon from "@mui/icons-material/LightMode";
 import LogoutIcon from "@mui/icons-material/Logout";
 import SyncProblemIcon from "@mui/icons-material/SyncProblem";
@@ -17,12 +18,14 @@ import { useAppState } from "../context/AppStateContext";
 import { useColorMode } from "../context/ColorModeContext";
 import { useNewEntry } from "../hooks/useNewEntry";
 import { useNow } from "../hooks/useNow";
+import { ariaKeyshortcuts, formatBinding } from "../shortcuts/binding";
+import { useShortcuts } from "../shortcuts/ShortcutsContext";
 import type { SyncState } from "../types";
 import { onThisDay } from "../utils/date";
 import { syncSummary } from "../utils/sync";
 import ExportDialog from "./ExportDialog";
 import SyncDialog from "./SyncDialog";
-import { HEADER_HEIGHT, SIDEBAR_WIDTH } from "./chrome";
+import { HEADER_HEIGHT, SIDEBAR_WIDTH, rem } from "./chrome";
 
 /// One rail button: an icon, and the label only on hover. The label is also
 /// the accessible name, so the button is still addressable by the name a user
@@ -36,6 +39,7 @@ function RailButton({
   badge,
   tone,
   testId,
+  shortcut,
 }: {
   label: string;
   icon: ReactElement;
@@ -49,12 +53,33 @@ function RailButton({
   /// Colours the icon for a state that needs the user; plain otherwise.
   tone?: "warning" | "error";
   testId?: string;
+  /// The chord that triggers this button's action, if any — shown muted
+  /// beside the label in the tooltip, and reported to assistive tech through
+  /// `aria-keyshortcuts`. `aria-label` stays exactly `label` either way: the
+  /// e2e suite finds these buttons by that name.
+  shortcut?: string | null;
 }) {
   return (
-    <Tooltip title={label} placement="right" arrow>
+    <Tooltip
+      title={
+        shortcut ? (
+          <Stack direction="row" alignItems="baseline" spacing={0.5}>
+            <span>{label}</span>
+            <Box component="span" sx={{ opacity: 0.7, fontSize: rem(11) }}>
+              {formatBinding(shortcut)}
+            </Box>
+          </Stack>
+        ) : (
+          label
+        )
+      }
+      placement="right"
+      arrow
+    >
       <IconButton
         aria-label={label}
         aria-current={active ? "page" : undefined}
+        aria-keyshortcuts={ariaKeyshortcuts(shortcut ?? null)}
         data-testid={testId}
         onClick={onClick}
         sx={{
@@ -136,7 +161,13 @@ function SyncButton({ onClick }: { onClick: () => void }) {
 /// before opening it — how many entries the journal holds for today's date in
 /// earlier years — and a dot on the icon says the same to the eye, so the
 /// feature shows itself on the day it has something to show.
-function CalendarButton({ onClick }: { onClick: () => void }) {
+function CalendarButton({
+  onClick,
+  shortcut,
+}: {
+  onClick: () => void;
+  shortcut?: string | null;
+}) {
   const { entries } = useAppState();
   const active = useMatch("/calendar") !== null;
   // Re-read each minute so the dot survives midnight in a window left open.
@@ -156,6 +187,7 @@ function CalendarButton({ onClick }: { onClick: () => void }) {
       active={active}
       badge={count > 0}
       onClick={onClick}
+      shortcut={shortcut}
     />
   );
 }
@@ -164,11 +196,21 @@ function CalendarButton({ onClick }: { onClick: () => void }) {
 /// controls, collapsed to an icon rail one button wide — each button names
 /// itself in a tooltip on hover. It lists no Media/Map rows, because there is
 /// nothing behind them yet.
-export default function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
+export default function Sidebar({
+  onNavigate,
+  onShowShortcuts,
+}: {
+  onNavigate?: () => void;
+  /// Opens `ShortcutsDialog`, which `JournalLayout` owns — the sidebar itself
+  /// is unmounted while its drawer is closed on phones, so it can't hold that
+  /// state.
+  onShowShortcuts: () => void;
+}) {
   const { logout } = useAppState();
   const { mode, toggleMode } = useColorMode();
   const navigate = useNavigate();
   const newEntry = useNewEntry();
+  const { bindingFor } = useShortcuts();
   const [syncOpen, setSyncOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
 
@@ -210,12 +252,14 @@ export default function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
             newEntry();
             onNavigate?.();
           }}
+          shortcut={bindingFor("entry.new")}
         />
         <CalendarButton
           onClick={() => {
             navigate("/calendar");
             onNavigate?.();
           }}
+          shortcut={bindingFor("view.calendar")}
         />
       </Stack>
 
@@ -239,12 +283,19 @@ export default function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
             onClick={toggleMode}
           />
           <RailButton
+            label="Keyboard shortcuts"
+            icon={<KeyboardIcon fontSize="small" />}
+            onClick={onShowShortcuts}
+            shortcut={bindingFor("help.shortcuts")}
+          />
+          <RailButton
             label="Log out"
             icon={<LogoutIcon fontSize="small" />}
             onClick={() => {
               logout();
               navigate("/login");
             }}
+            shortcut={bindingFor("vault.lock")}
           />
         </Stack>
       </Box>

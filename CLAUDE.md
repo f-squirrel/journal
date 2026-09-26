@@ -54,6 +54,10 @@ Frontend:
   changes at phone width (below `md` the layout collapses to one column).
 - Entry list rows never show excerpts (would decrypt the whole journal);
   rows sort by `entry_date`, not `updated_at`.
+- Keyboard shortcuts: defaults only in `src/shortcuts/actions.ts`; components
+  use `useShortcut(id, …)`, never key strings. Bindings are `$mod`+`event.code`
+  (layout-independent) and always carry a modifier; none fire while a dialog
+  is open (ADR 0015).
 - Markdown links open via `openUrl`, never in the webview.
 - Date pickers need `reduceAnimations` (ADR 0013).
 - E2E specs import `test`/`expect`/`Page` from `./coverage`, not

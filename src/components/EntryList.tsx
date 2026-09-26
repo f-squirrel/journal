@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useRef } from "react";
 import {
   Alert,
   Box,
@@ -18,6 +18,7 @@ import NotesIcon from "@mui/icons-material/Notes";
 import SearchIcon from "@mui/icons-material/Search";
 import { useAppState } from "../context/AppStateContext";
 import { useNewEntry } from "../hooks/useNewEntry";
+import { useShortcut } from "../shortcuts/ShortcutsContext";
 import { groupByMonth } from "../utils/date";
 import {
   HEADER_HEIGHT,
@@ -30,25 +31,19 @@ import EntryRow from "./EntryRow";
 
 /// The search field, above the journal and below the column header.
 ///
-/// Ctrl/Cmd-F focuses it from anywhere in the app — including from inside the
-/// editor, which is where the user will be when they want it — and Escape
-/// clears it, then gives the keyboard back.
+/// `search.focus` (Ctrl/Cmd-F by default) focuses it from anywhere in the
+/// app — including from inside the editor, which is where the user will be
+/// when they want it — and Escape clears it, then gives the keyboard back.
 function SearchField() {
   const { searchQuery, setSearchQuery, searching } = useAppState();
   const input = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
-    function onKeyDown(event: KeyboardEvent) {
-      if (!(event.ctrlKey || event.metaKey) || event.key !== "f") return;
-      // The browser's own find bar would search the rendered DOM, which holds
-      // one entry and a list of titles — not the journal.
-      event.preventDefault();
-      input.current?.focus();
-      input.current?.select();
-    }
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
+  useShortcut("search.focus", () => {
+    // The browser's own find bar would search the rendered DOM, which holds
+    // one entry and a list of titles — not the journal.
+    input.current?.focus();
+    input.current?.select();
+  });
 
   return (
     <Box
