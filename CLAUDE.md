@@ -68,7 +68,12 @@ Backend:
 - New backend code goes in a `crates/<name>/` workspace member with
   `[lints] workspace = true`; `src-tauri` stays thin glue. A type the vault
   stores belongs in `journal-entry`; one that only crosses `invoke`, in
-  `journal-api`. Layering and sync design: ADRs 0009, 0010, 0012.
+  `journal-api`. A setting is a field with a default on `DeviceSettings`
+  (device-only, plaintext `device-settings.json`) or `JournalSettings`
+  (synced, encrypted `.journal-settings` blob, per-field merge) in
+  `journal-settings`; the frontend sees one flat `Settings` via
+  `useSettings()` and writes patches — never a `localStorage` key (ADR 0016).
+  Layering and sync design: ADRs 0009, 0010, 0012.
 - Every Tauri command is `async` and does storage work through the
   `blocking` helper; crates below `src-tauri` stay synchronous.
 - `Vault::open` is the only caller of `Keyring::create`/`unlock` — a fresh
