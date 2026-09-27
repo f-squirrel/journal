@@ -343,6 +343,12 @@ export default function SettingsPage() {
               multiline
               minRows={4}
               maxRows={12}
+              // Keeps the label floated from mount: WebKitGTK doesn't
+              // reliably re-open the outline's notch when the label
+              // animates from placeholder to shrunk, leaving it struck
+              // through by the border once this field (the only one here
+              // that starts empty) gets a value.
+              slotProps={{ inputLabel: { shrink: true } }}
               inputProps={{
                 "data-testid": "entry-template",
                 maxLength: ENTRY_TEMPLATE_LIMIT,
