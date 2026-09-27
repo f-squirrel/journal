@@ -14,6 +14,7 @@ export const ACTIONS = {
   "entry.toggleMode": { label: "Switch edit / read", default: "$mod+KeyE" },
   "vault.lock": { label: "Lock journal", default: "$mod+KeyL" },
   "view.calendar": { label: "Calendar", default: "$mod+Shift+KeyC" },
+  "view.settings": { label: "Settings", default: "$mod+Comma" },
   "help.shortcuts": { label: "Keyboard shortcuts", default: "$mod+Slash" },
 } as const satisfies Record<string, { label: string; default: string | null }>;
 

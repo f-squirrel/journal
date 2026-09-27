@@ -8,7 +8,6 @@ declare global {
   interface Window {
     __settingsTestHooks?: {
       current(): Settings;
-      update(patch: SettingsPatch): Promise<Settings>;
       calls: { patch: SettingsPatch; at: number }[];
       loads(): number;
     };
@@ -17,13 +16,15 @@ declare global {
 
 // WP4's plumbing: `SettingsContext` (one promise queue, `confirmed ⊕
 // pending`, reload on rejection) sitting on top of `src/api/settings.ts` and
-// the fallback's device/journal split. There is no Settings page yet (WP5),
-// so these tests drive the two controls WP4 already wires onto real
-// settings — the rail's colour-mode toggle (`color_mode`) and the shortcuts
-// dialog's rebind (`shortcuts`) — plus, for the journal half, a debug hook
-// the fallback exposes only for this file (`window.__settingsTestHooks`; see
-// `src/api/fallback.ts`), since nothing on screen reads a journal setting
-// until WP5.
+// the fallback's device/journal split. These tests drive the controls WP4
+// wires onto real settings directly — the rail's colour-mode toggle
+// (`color_mode`) and the shortcuts dialog's rebind (`shortcuts`) — and, since
+// WP5, the Settings page's own "Time format" control for the journal half.
+// A debug hook the fallback exposes only for this file
+// (`window.__settingsTestHooks`; see `src/api/fallback.ts`) fills the one gap
+// no UI can: reading the backend's own settings while the vault is locked,
+// since the Settings page sits behind unlock (see the plan, Non-goals), and
+// counting `getSettings` calls to prove a reload actually happened.
 
 async function login(page: Page, query = "") {
   await page.goto(`/${query}`);
@@ -269,12 +270,20 @@ test("journal settings read as defaults after lock and come back after unlock", 
   await login(page);
   const initial = await backendSettings(page);
 
-  // Written directly, since nothing on screen reads a journal setting until
-  // WP5's Settings page.
-  await page.evaluate(
-    (value) => window.__settingsTestHooks!.update({ time_format: value }),
-    initial.time_format === "h24" ? "h12" : "h24",
-  );
+  // Written through the real control now that WP5's Settings page has one,
+  // rather than the debug hook `settings-store.spec.ts` needed before it
+  // existed. The hook stays for what still has no UI: reading the backend's
+  // own value while locked (the Settings page sits behind unlock — see the
+  // plan, Non-goals) and counting `getSettings` calls, below.
+  await page.getByRole("button", { name: "Settings" }).click();
+  const timeFormatField = page
+    .getByTestId("settings-page")
+    .getByLabel("Time format");
+  const nextLabel = initial.time_format === "h24" ? "12-hour" : "24-hour";
+  await timeFormatField.click();
+  await page.getByRole("option", { name: nextLabel }).click();
+  await expect(timeFormatField).toHaveText(nextLabel);
+
   const changed = await backendSettings(page);
   expect(changed.time_format).not.toBe(initial.time_format);
 
@@ -299,4 +308,11 @@ test("journal settings read as defaults after lock and come back after unlock", 
     .poll(() => backendLoads(page))
     .toBeGreaterThan(loadsBeforeUnlock);
   expect((await backendSettings(page)).time_format).toBe(changed.time_format);
+
+  // And the Settings page itself shows the value that survived the round
+  // trip, not just the backend the hook reads directly.
+  await page.getByRole("button", { name: "Settings" }).click();
+  await expect(
+    page.getByTestId("settings-page").getByLabel("Time format"),
+  ).toHaveText(nextLabel);
 });

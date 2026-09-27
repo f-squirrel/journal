@@ -70,6 +70,13 @@ export function useAutosave(
   /// True for an entry that has never reached the vault, so an empty draft is
   /// "nothing was started" rather than "this was cleared on purpose".
   isNew = false,
+  /// The entry template a new draft was pre-filled with (`""` for one that
+  /// opened blank, and always `""` for an existing entry). A body that still
+  /// reads exactly as the template — the user typed nothing, or typed and then
+  /// deleted back to it — counts as "nothing was started" too, in the "nothing
+  /// was started" guard below: only whitespace differs from an untouched
+  /// draft, but the *content* is still the one the user never actually wrote.
+  template = "",
   /// Called after a stale save was kept as a conflicted copy, once the copy
   /// itself has been written. The pane uses it to reload the entry from disk
   /// and reset `base`. Held in a ref, not a dependency: the pane's own
@@ -125,8 +132,19 @@ export function useAutosave(
     // A draft that was never written and holds nothing is not an entry.
     // Without this, opening "New entry" and navigating away would leave an
     // empty row in the journal. Emptying an entry that *is* on disk is an edit
-    // like any other, and is written.
-    if (!written.current && !title.trim() && !markdown.trim()) return;
+    // like any other, and is written. A body that still reads exactly as the
+    // template it opened with, or was cleared entirely, counts as empty too —
+    // the user typed and then deleted back to the template, or deleted past
+    // it to nothing, and neither must write an entry holding only the
+    // template (or nothing at all). A title is still enough on its own to
+    // make the draft real.
+    if (
+      !written.current &&
+      !title.trim() &&
+      (!markdown.trim() || markdown.trim() === template.trim())
+    ) {
+      return;
+    }
 
     draft.current.dirty = false;
     saving.current = true;
@@ -206,7 +224,7 @@ export function useAutosave(
       // backend every 800 ms forever. The next keystroke or Retry does it.
       if (draft.current.dirty && !failed) schedule();
     }
-  }, [id, schedule, upsertEntry]);
+  }, [id, schedule, template, upsertEntry]);
 
   useEffect(() => {
     saveRef.current = save;
@@ -256,8 +274,13 @@ export function useAutosave(
     clearTimeout(timer.current);
     await saveRef.current();
     const { title, markdown, dirty } = draft.current;
-    return !dirty || (!written.current && !title.trim() && !markdown.trim());
-  }, []);
+    return (
+      !dirty ||
+      (!written.current &&
+        !title.trim() &&
+        (!markdown.trim() || markdown.trim() === template.trim()))
+    );
+  }, [template]);
 
   const whenSettled = useCallback(async () => {
     if (inflight.current) await inflight.current;

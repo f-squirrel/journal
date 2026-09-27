@@ -922,18 +922,21 @@ export async function updateSettings(patch: SettingsPatch): Promise<Settings> {
   return currentSettings();
 }
 
-// `settings-store.spec.ts` needs two things no UI exposes yet: the backend's
-// own settings, bypassing the frontend's optimistic overlay (`confirmed ⊕
-// pending` in `SettingsContext`), and a way to write a journal field, since
-// WP5's Settings page (which is what would otherwise do that) is out of
-// scope here. Both live only on `window`, and only in this DEV-only chunk —
-// `make check-no-fallback` greps the production bundle for other constants
-// in this file, so this never ships either.
+// `settings-store.spec.ts` needs one thing no UI exposes, even now that
+// WP5's Settings page can write and read every setting through the ordinary
+// controls: the backend's own settings, bypassing the frontend's optimistic
+// overlay (`confirmed ⊕ pending` in `SettingsContext`) — needed because the
+// Settings page sits behind unlock (see the plan, Non-goals), so nothing on
+// screen can show what the backend holds while the vault is locked. `calls`
+// and `loads` back the same file's checks that the request queue and the
+// lock/unlock reloads actually ran, which reading rendered text can't prove
+// either. Lives only on `window`, and only in this DEV-only chunk — `make
+// check-no-fallback` greps the production bundle for other constants in this
+// file, so this never ships either.
 declare global {
   interface Window {
     __settingsTestHooks?: {
       current(): Settings;
-      update(patch: SettingsPatch): Promise<Settings>;
       calls: { patch: SettingsPatch; at: number }[];
       /// Live count of `getSettings` calls (a function, not a number, so it
       /// reflects calls made after this hook was installed).
@@ -945,7 +948,6 @@ declare global {
 if (typeof window !== "undefined") {
   window.__settingsTestHooks = {
     current: currentSettings,
-    update: updateSettings,
     calls: settingsCalls,
     loads: () => settingsLoads,
   };

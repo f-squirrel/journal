@@ -3,6 +3,7 @@ import CloudUploadOutlinedIcon from "@mui/icons-material/CloudUploadOutlined";
 import WarningAmberIcon from "@mui/icons-material/WarningAmber";
 import { useMatch, useNavigate } from "react-router-dom";
 import { useAppState } from "../context/AppStateContext";
+import { useSettings } from "../context/SettingsContext";
 import type { EntryHeader } from "../types";
 import { formatDayNumber, formatTime, formatWeekday } from "../utils/date";
 import { TRACKING, TYPE, rem } from "./chrome";
@@ -62,6 +63,7 @@ export default function EntryRow({
   snippet?: string;
 }) {
   const navigate = useNavigate();
+  const { settings } = useSettings();
   // `useParams` would be empty here: this column is rendered by the layout
   // route, which has no path of its own, so the child's `:id` never reaches it.
   const selectedId = useMatch("/entries/:id")?.params.id;
@@ -111,7 +113,7 @@ export default function EntryRow({
         </Typography>
         <Stack direction="row" alignItems="center" spacing={0.75}>
           <Typography sx={{ fontSize: TYPE.meta, opacity: 0.7 }}>
-            {formatTime(entry.entry_date)}
+            {formatTime(entry.entry_date, settings.time_format)}
           </Typography>
           <SyncMark id={entry.id} />
         </Stack>

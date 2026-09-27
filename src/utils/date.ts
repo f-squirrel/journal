@@ -1,13 +1,4 @@
-import type { EntryHeader } from "../types";
-
-export function formatUpdatedAt(updatedAt: string): string {
-  const date = new Date(updatedAt);
-  if (Number.isNaN(date.getTime())) return updatedAt;
-  return date.toLocaleString(undefined, {
-    dateStyle: "medium",
-    timeStyle: "short",
-  });
-}
+import type { EntryHeader, TimeFormat } from "../types";
 
 /// The entry pane's heading: "Wednesday, September 17, 2026".
 export function formatEntryHeading(timestamp: string): string {
@@ -21,13 +12,20 @@ export function formatEntryHeading(timestamp: string): string {
   });
 }
 
-export function formatTime(timestamp: string): string {
+/// `locale` (the default) leaves `hour12` unset, so the browser's own locale
+/// decides — deliberately not the date pickers' locale (see the plan, WP5,
+/// step 3): the two are allowed to disagree, as they already did before this
+/// setting existed. `h12` and `h24` override it explicitly.
+export function formatTime(timestamp: string, format: TimeFormat): string {
   const date = new Date(timestamp);
   if (Number.isNaN(date.getTime())) return "";
-  return date.toLocaleTimeString(undefined, {
+  const options: Intl.DateTimeFormatOptions = {
     hour: "numeric",
     minute: "2-digit",
-  });
+  };
+  if (format === "h12") options.hour12 = true;
+  else if (format === "h24") options.hourCycle = "h23";
+  return date.toLocaleTimeString(undefined, options);
 }
 
 /// The numeral in a list row's date block.

@@ -28,7 +28,9 @@ export default function JournalLayout() {
   // renders and break the rules of hooks.
   const entryMatch = useMatch("/entries/:id");
   const calendarMatch = useMatch("/calendar");
-  const paneOpen = entryMatch !== null || calendarMatch !== null;
+  const settingsMatch = useMatch("/settings");
+  const paneOpen =
+    entryMatch !== null || calendarMatch !== null || settingsMatch !== null;
 
   const { logout } = useAppState();
   const navigate = useNavigate();
@@ -50,6 +52,10 @@ export default function JournalLayout() {
   useShortcut("view.calendar", () => {
     setDrawerOpen(false);
     navigate("/calendar");
+  });
+  useShortcut("view.settings", () => {
+    setDrawerOpen(false);
+    navigate("/settings");
   });
   useShortcut("help.shortcuts", () => {
     setDrawerOpen(false);

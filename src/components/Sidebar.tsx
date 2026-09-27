@@ -12,6 +12,7 @@ import ExportIcon from "@mui/icons-material/FileDownload";
 import KeyboardIcon from "@mui/icons-material/Keyboard";
 import LightModeIcon from "@mui/icons-material/LightMode";
 import LogoutIcon from "@mui/icons-material/Logout";
+import SettingsIcon from "@mui/icons-material/SettingsOutlined";
 import SyncProblemIcon from "@mui/icons-material/SyncProblem";
 import { useMatch, useNavigate } from "react-router-dom";
 import { useAppState } from "../context/AppStateContext";
@@ -213,6 +214,7 @@ export default function Sidebar({
   const { bindingFor } = useShortcuts();
   const [syncOpen, setSyncOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
+  const settingsActive = useMatch("/settings") !== null;
 
   return (
     <Stack
@@ -287,6 +289,16 @@ export default function Sidebar({
             icon={<KeyboardIcon fontSize="small" />}
             onClick={onShowShortcuts}
             shortcut={bindingFor("help.shortcuts")}
+          />
+          <RailButton
+            label="Settings"
+            icon={<SettingsIcon fontSize="small" />}
+            active={settingsActive}
+            onClick={() => {
+              navigate("/settings");
+              onNavigate?.();
+            }}
+            shortcut={bindingFor("view.settings")}
           />
           <RailButton
             label="Log out"

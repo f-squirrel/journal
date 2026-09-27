@@ -198,6 +198,7 @@ const ACTION_IDS = [
   "entry.toggleMode",
   "vault.lock",
   "view.calendar",
+  "view.settings",
   "help.shortcuts",
 ];
 
@@ -234,7 +235,7 @@ test("ControlOrMeta+/ opens the shortcuts dialog from inside the editor, beating
   await expect(editor(page)).toContainText(before ?? "");
 });
 
-test("the shortcuts dialog lists all six actions with their default chords", async ({
+test("the shortcuts dialog lists all seven actions with their default chords", async ({
   page,
 }) => {
   await login(page);
@@ -248,7 +249,7 @@ test("the shortcuts dialog lists all six actions with their default chords", asy
   }
   const keys = dialog.getByTestId("shortcut-keys");
   await expect(keys).toHaveCount(ACTION_IDS.length);
-  // None of the six defaults is unbound, so no row should show the
+  // None of the seven defaults is unbound, so no row should show the
   // placeholder used for a `null` binding.
   for (const text of await keys.allTextContents()) {
     expect(text).not.toBe("—");

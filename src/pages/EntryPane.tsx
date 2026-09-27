@@ -41,6 +41,7 @@ import {
 } from "../components/chrome";
 import MarkdownEditor from "../components/MarkdownEditor";
 import { useAppState } from "../context/AppStateContext";
+import { useSettings } from "../context/SettingsContext";
 import {
   useAutosave,
   type Autosave,
@@ -97,16 +98,23 @@ export default function EntryPaneRoute() {
 
 function EntryPane({ id, draft }: { id: string; draft: boolean }) {
   const { loadEntry, removeEntry, syncVersion } = useAppState();
+  const { settings } = useSettings();
   const navigate = useNavigate();
   const theme = useTheme();
   const compact = useMediaQuery(theme.breakpoints.down("md"));
+
+  // Read once, when the draft opens — not on every render, or a template
+  // edited in the Settings page while this pane is open would rewrite text
+  // the user may already have started changing. An existing entry never gets
+  // one: only a brand-new draft is pre-filled.
+  const [template] = useState(() => (draft ? settings.entry_template : ""));
 
   const [loading, setLoading] = useState(!draft);
   const [loadError, setLoadError] = useState("");
   const [missing, setMissing] = useState(false);
   const [loadedAt, setLoadedAt] = useState("");
   const [title, setTitle] = useState("");
-  const [markdown, setMarkdown] = useState("");
+  const [markdown, setMarkdown] = useState(template);
   // Reading or writing, chosen from the menu and nowhere else. A draft has
   // nothing to render, so it opens in the editor.
   const [mode, setMode] = useState<"read" | "edit">(draft ? "edit" : "read");
@@ -173,8 +181,9 @@ function EntryPane({ id, draft }: { id: string; draft: boolean }) {
 
   const autosave = useAutosave(
     id,
-    { title: "", markdown: "", entryDate },
+    { title: "", markdown: template, entryDate },
     draft,
+    template,
     refreshFromDisk,
   );
 
@@ -438,7 +447,7 @@ function EntryPane({ id, draft }: { id: string; draft: boolean }) {
             {formatEntryHeading(entryDate)}
           </Button>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-            {formatTime(entryDate)}
+            {formatTime(entryDate, settings.time_format)}
           </Typography>
 
           <Popover
