@@ -50,7 +50,7 @@ impl FromStr for Id {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 #[cfg_attr(
     feature = "ts",
     derive(ts_rs::TS),
@@ -71,20 +71,34 @@ pub struct Header {
     // journal's chronology.
     //
     // An entry written before this field existed has no value on disk and
-    // takes `default_entry_date`. That is not the compatibility shim
-    // `CLAUDE.md` forbids: there is no format detection and no second code
-    // path, only the one current struct, and the entry's next save writes the
-    // field for good.
+    // takes its `updated_at`; see the `Deserialize` implementation below.
+    // The entry's next save writes the field for good.
     /// The day the entry is about, which is what the journal sorts by.
-    #[serde(default = "default_entry_date")]
     pub entry_date: DateTime<Utc>,
 }
 
-/// serde cannot default one field from another, so an entry predating
-/// `entry_date` gets "now" rather than its `updated_at`. Filling in the
-/// exact value would be a migration, which this app deliberately does not do.
-fn default_entry_date() -> DateTime<Utc> {
-    Utc::now()
+impl<'de> Deserialize<'de> for Header {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct WireHeader {
+            id: Id,
+            title: String,
+            updated_at: DateTime<Utc>,
+            #[serde(default)]
+            entry_date: Option<DateTime<Utc>>,
+        }
+
+        let wire = WireHeader::deserialize(deserializer)?;
+        Ok(Self {
+            id: wire.id,
+            title: wire.title,
+            updated_at: wire.updated_at,
+            entry_date: wire.entry_date.unwrap_or(wire.updated_at),
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -146,18 +160,16 @@ mod tests {
         );
     }
 
-    /// An entry blob written before `entry_date` existed. It parses into the
-    /// one current struct and takes a default rather than meeting a second
-    /// code path — see the field's doc comment.
+    /// An entry blob written before `entry_date` existed uses its stable
+    /// `updated_at`, rather than appearing to move to "now" on every read.
     #[test]
-    fn entry_without_entry_date_still_deserializes() {
+    fn entry_without_entry_date_uses_updated_at() {
         let json = r##"{"id":"5c1f7c9e-6e8b-4a2f-9c1a-1f6b9b6b0a01","title":"t",
                        "updated_at":"2026-09-07T20:17:50Z","markdown":"# h"}"##;
 
-        let before = Utc::now();
         let entry: Entry = serde_json::from_str(json).unwrap();
 
-        assert!(entry.header.entry_date >= before);
+        assert_eq!(entry.header.entry_date, entry.header.updated_at);
     }
 
     /// The `list_entries`/`get_entry` direction. Rust names the wire
