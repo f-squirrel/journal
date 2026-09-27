@@ -10,16 +10,20 @@
 #![cfg_attr(all(test, coverage_nightly), feature(coverage_attribute))]
 
 mod search;
+mod settings;
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Utc};
 use journal_entry::{Entry, Header, Id, SearchMatch};
 use journal_key::{Cipher, KeyError, Keyring};
+use journal_settings::SettingsError;
 use journal_store::{BlobName, BlobStore, StoreError};
 use search::Query;
 use secrecy::SecretString;
 use thiserror::Error;
+
+pub use settings::SETTINGS_BLOB;
 
 #[derive(Debug, Error)]
 pub enum VaultError {
@@ -39,6 +43,12 @@ pub enum VaultError {
     /// `Err(String)` an `invoke` call returns.
     #[error("this entry was changed on another device since it was opened")]
     Stale,
+    /// A journal setting refused by `validate()`, or (in
+    /// `merge_journal_settings`) both sides of a conflict failing to decode.
+    /// Transparent for the same reason `Key` is: `journal-settings`' messages
+    /// are already user-readable.
+    #[error(transparent)]
+    Settings(#[from] SettingsError),
 }
 
 /// The extension every entry blob's name ends in.
@@ -87,6 +97,12 @@ fn is_entry(name: &BlobName) -> bool {
 pub struct Vault {
     store: Arc<dyn BlobStore>,
     cipher: Box<dyn Cipher>,
+    /// Held from read to write by both `save_journal_settings` and
+    /// `merge_journal_settings` (see `settings.rs`), so a save and a
+    /// concurrent merge cannot interleave their read and write and drop one
+    /// side's change. It does not cover a plain sync pull, which the engine
+    /// writes to the bare store beneath this vault.
+    settings_lock: Mutex<()>,
 }
 
 impl Vault {
@@ -106,7 +122,7 @@ impl Vault {
     pub fn open(store: Arc<dyn BlobStore>, passphrase: &SecretString) -> Result<Self, VaultError> {
         let key = if Keyring::exists(&*store)? {
             Keyring::unlock(&*store, passphrase)?
-        } else if holds_entries(&*store)? {
+        } else if holds_content(&*store)? {
             return Err(KeyError::MissingKeyFile.into());
         } else {
             Keyring::create(&*store, passphrase)?
@@ -118,7 +134,11 @@ impl Vault {
     /// real [`Keyring`]: the tests below stand a fake one up through here, and
     /// nothing else can.
     fn with_cipher(store: Arc<dyn BlobStore>, cipher: Box<dyn Cipher>) -> Self {
-        Self { store, cipher }
+        Self {
+            store,
+            cipher,
+            settings_lock: Mutex::new(()),
+        }
     }
 
     /// Lists all entry headers, most recent entry date first.
@@ -297,9 +317,16 @@ impl Vault {
     }
 }
 
-/// Whether `store` holds at least one entry blob.
-fn holds_entries(store: &dyn BlobStore) -> Result<bool, VaultError> {
-    Ok(store.list()?.iter().any(is_entry))
+/// Whether `store` holds anything [`Vault::open`]'s orphan check must not
+/// mint a fresh key over: an entry blob, or the settings blob.
+///
+/// A store holding only [`SETTINGS_BLOB`] and no key would otherwise pass as
+/// an empty store and get a new key that can never read it.
+fn holds_content(store: &dyn BlobStore) -> Result<bool, VaultError> {
+    Ok(store
+        .list()?
+        .iter()
+        .any(|name| is_entry(name) || settings::is_settings_blob(name)))
 }
 
 #[cfg(test)]
@@ -325,7 +352,7 @@ mod tests {
         fs::remove_dir_all(store.dir()).ok();
     }
 
-    fn passphrase(s: &str) -> SecretString {
+    pub(crate) fn passphrase(s: &str) -> SecretString {
         SecretString::from(s.to_string())
     }
 
@@ -854,7 +881,7 @@ mod tests {
             .unwrap();
         // RUST-3: this used to pass `is_entry`'s old `.ends_with(".json")`
         // check even though it is not a `<uuid>.json` name, and so counted
-        // toward `holds_entries` too.
+        // toward `holds_content` too.
         store
             .put(&BlobName::literal("notes.json"), b"also not an entry")
             .unwrap();

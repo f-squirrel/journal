@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 chrono = { workspace = true }
 journal-entry = { path = "../entry" }
+journal-settings = { path = "../settings" }
 journal-store = { path = "../store" }
 journal-key = { path = "../key" }
 log = { workspace = true }

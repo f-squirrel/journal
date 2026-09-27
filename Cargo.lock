@@ -2640,6 +2640,7 @@ dependencies = [
  "journal-entry",
  "journal-fs-store",
  "journal-key",
+ "journal-settings",
  "journal-store",
  "log",
  "secrecy",
