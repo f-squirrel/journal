@@ -10,6 +10,7 @@ use serde_json::{Map, Value};
 
 use crate::decode::decode_tolerant;
 use crate::journal::JournalSettings;
+use crate::SettingsError;
 
 /// One field's value and when it was last set.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -43,31 +44,45 @@ impl StampedFields {
     /// `changed_at` is `now`, unless the field already has a stamp, in which
     /// case it is `max(now, previous changed_at + 1 ms)`: a device whose
     /// clock lags still wins over the value it is replacing.
-    pub fn record(&mut self, next: &JournalSettings, now: DateTime<Utc>) -> bool {
+    pub fn record(
+        &mut self,
+        next: &JournalSettings,
+        now: DateTime<Utc>,
+    ) -> Result<bool, SettingsError> {
         let current = self.view();
         let current_map = as_object(&current);
         let next_map = as_object(next);
 
-        let mut changed = false;
+        let mut changes = Vec::new();
         for (key, next_value) in next_map {
             let current_value = current_map.get(&key).cloned().unwrap_or(Value::Null);
             if current_value == next_value {
                 continue;
             }
             let changed_at = match self.0.get(&key) {
-                Some(stamped) => now.max(stamped.changed_at + Duration::milliseconds(1)),
+                Some(stamped) => now.max(
+                    stamped
+                        .changed_at
+                        .checked_add_signed(Duration::milliseconds(1))
+                        .ok_or_else(|| {
+                            SettingsError::InvalidValue(
+                                "the stored settings timestamp is out of range".to_owned(),
+                            )
+                        })?,
+                ),
                 None => now,
             };
-            self.0.insert(
+            changes.push((
                 key,
                 Stamped {
                     value: next_value,
                     changed_at,
                 },
-            );
-            changed = true;
+            ));
         }
-        changed
+        let changed = !changes.is_empty();
+        self.0.extend(changes);
+        Ok(changed)
     }
 
     /// Per key over the union of both maps: the later `changed_at` wins,
@@ -139,7 +154,7 @@ mod tests {
             ..Default::default()
         };
 
-        let changed = fields.record(&next, t(100));
+        let changed = fields.record(&next, t(100)).unwrap();
 
         assert!(changed);
         assert_eq!(fields.0.len(), 1);
@@ -150,7 +165,7 @@ mod tests {
     #[test]
     fn record_of_no_change_stamps_nothing() {
         let mut fields = StampedFields::default();
-        let changed = fields.record(&JournalSettings::default(), t(100));
+        let changed = fields.record(&JournalSettings::default(), t(100)).unwrap();
         assert!(!changed);
         assert!(fields.0.is_empty());
     }
@@ -158,24 +173,28 @@ mod tests {
     #[test]
     fn record_on_non_empty_touches_only_the_field_that_changed() {
         let mut fields = StampedFields::default();
-        fields.record(
-            &JournalSettings {
-                time_format: TimeFormat::H24,
-                week_starts_on: crate::journal::WeekStart::Monday,
-                ..Default::default()
-            },
-            t(100),
-        );
+        fields
+            .record(
+                &JournalSettings {
+                    time_format: TimeFormat::H24,
+                    week_starts_on: crate::journal::WeekStart::Monday,
+                    ..Default::default()
+                },
+                t(100),
+            )
+            .unwrap();
         let week_stamp_before = fields.0.get("week_starts_on").unwrap().changed_at;
 
-        fields.record(
-            &JournalSettings {
-                time_format: TimeFormat::H12,
-                week_starts_on: crate::journal::WeekStart::Monday,
-                ..Default::default()
-            },
-            t(200),
-        );
+        fields
+            .record(
+                &JournalSettings {
+                    time_format: TimeFormat::H12,
+                    week_starts_on: crate::journal::WeekStart::Monday,
+                    ..Default::default()
+                },
+                t(200),
+            )
+            .unwrap();
 
         assert_eq!(
             fields.0.get("week_starts_on").unwrap().changed_at,
@@ -200,13 +219,15 @@ mod tests {
             },
         );
 
-        fields.record(
-            &JournalSettings {
-                time_format: TimeFormat::H24,
-                ..Default::default()
-            },
-            t(100),
-        );
+        fields
+            .record(
+                &JournalSettings {
+                    time_format: TimeFormat::H24,
+                    ..Default::default()
+                },
+                t(100),
+            )
+            .unwrap();
 
         let stamped = fields.0.get("future_field").unwrap();
         assert_eq!(stamped.value, Value::Bool(true));
@@ -236,27 +257,59 @@ mod tests {
     #[test]
     fn record_gives_changed_at_past_a_lagging_clock_and_the_previous_stamp() {
         let mut fields = StampedFields::default();
-        fields.record(
-            &JournalSettings {
-                time_format: TimeFormat::H24,
-                ..Default::default()
-            },
-            t(1000),
-        );
+        fields
+            .record(
+                &JournalSettings {
+                    time_format: TimeFormat::H24,
+                    ..Default::default()
+                },
+                t(1000),
+            )
+            .unwrap();
         let prev_stamp = fields.0.get("time_format").unwrap().changed_at;
 
         // The clock now reports an earlier time than the previous stamp.
-        fields.record(
-            &JournalSettings {
-                time_format: TimeFormat::H12,
-                ..Default::default()
-            },
-            t(500),
-        );
+        fields
+            .record(
+                &JournalSettings {
+                    time_format: TimeFormat::H12,
+                    ..Default::default()
+                },
+                t(500),
+            )
+            .unwrap();
 
         let new_stamp = fields.0.get("time_format").unwrap().changed_at;
         assert!(new_stamp > t(500));
         assert!(new_stamp > prev_stamp);
+    }
+
+    #[test]
+    fn record_refuses_a_stamp_past_the_maximum_without_mutating_fields() {
+        let mut fields = StampedFields(BTreeMap::from([(
+            "time_format".to_owned(),
+            Stamped {
+                value: Value::String("h24".to_owned()),
+                changed_at: DateTime::<Utc>::MAX_UTC,
+            },
+        )]));
+        let before = fields.clone();
+
+        let error = fields
+            .record(
+                &JournalSettings {
+                    time_format: TimeFormat::H12,
+                    ..Default::default()
+                },
+                t(100),
+            )
+            .unwrap_err();
+
+        assert_eq!(
+            error,
+            SettingsError::InvalidValue("the stored settings timestamp is out of range".to_owned())
+        );
+        assert_eq!(fields, before);
     }
 
     #[test]
@@ -268,7 +321,8 @@ mod tests {
                 ..Default::default()
             },
             t(100),
-        );
+        )
+        .unwrap();
         let mut b = StampedFields::default();
         b.record(
             &JournalSettings {
@@ -276,7 +330,8 @@ mod tests {
                 ..Default::default()
             },
             t(200),
-        );
+        )
+        .unwrap();
 
         let merged = a.merge(&b);
         let view = merged.view();
@@ -293,7 +348,8 @@ mod tests {
                 ..Default::default()
             },
             t(100),
-        );
+        )
+        .unwrap();
         let mut b = StampedFields::default();
         b.record(
             &JournalSettings {
@@ -301,7 +357,8 @@ mod tests {
                 ..Default::default()
             },
             t(100),
-        );
+        )
+        .unwrap();
 
         assert_eq!(a.merge(&b), b.merge(&a));
     }
@@ -351,7 +408,8 @@ mod tests {
                 ..Default::default()
             },
             t(100),
-        );
+        )
+        .unwrap();
         let mut b = StampedFields::default();
         b.record(
             &JournalSettings {
@@ -359,7 +417,8 @@ mod tests {
                 ..Default::default()
             },
             t(200),
-        );
+        )
+        .unwrap();
 
         assert_eq!(a.merge(&b).view().time_format, TimeFormat::H12);
         assert_eq!(b.merge(&a).view().time_format, TimeFormat::H12);
@@ -397,7 +456,8 @@ mod tests {
                 ..Default::default()
             },
             t(100),
-        );
+        )
+        .unwrap();
         let b = StampedFields::default();
 
         let merged = a.merge(&b);

@@ -79,6 +79,7 @@ function toHeader(entry: JournalEntry): EntryHeader {
 //   ?slow=<ops>         the named ops resolve after SLOW_MS. settings-first
 //                       delays only the first updateSettings call after page
 //                       load, unlike settings, which delays every call
+//   ?slowMs=<n>         non-negative delay for slow operations (default SLOW_MS)
 //   ?sync=<mode>        start connected to a provider: on, pull, conflict,
 //                       busy, reauth, key_mismatch (see below)
 //
@@ -111,6 +112,7 @@ interface Faults {
   failAfter: number;
   failTimes: number;
   slow: Set<Op>;
+  slowMs: number;
   sync: SyncMode;
 }
 
@@ -130,6 +132,9 @@ function parseFaults(search: string): Faults {
   const params = new URLSearchParams(search);
   const ops = (value: string | null) =>
     new Set((value ?? "").split(",").filter(Boolean) as Op[]);
+  const rawSlowMs = params.get("slowMs");
+  const requestedSlowMs =
+    rawSlowMs === null || rawSlowMs.trim() === "" ? SLOW_MS : Number(rawSlowMs);
   return {
     newVault: ["new", "arrives"].includes(params.get("vault") ?? ""),
     keyArrives: params.get("vault") === "arrives",
@@ -140,6 +145,10 @@ function parseFaults(search: string): Faults {
       ? Number(params.get("failTimes"))
       : Infinity,
     slow: ops(params.get("slow")),
+    slowMs:
+      Number.isFinite(requestedSlowMs) && requestedSlowMs >= 0
+        ? requestedSlowMs
+        : SLOW_MS,
     sync: SYNC_MODES.find((mode) => mode === params.get("sync")) ?? "off",
   };
 }
@@ -179,7 +188,7 @@ async function run<T>(op: Op, work: () => T): Promise<T> {
     throw "vault is locked";
   }
   if (faults.slow.has(op)) {
-    await new Promise((resolve) => setTimeout(resolve, SLOW_MS));
+    await new Promise((resolve) => setTimeout(resolve, faults.slowMs));
   }
   if (faults.fail.has(op)) {
     const seen = failedCalls.get(op) ?? 0;
@@ -509,7 +518,7 @@ async function pass() {
   running = true;
   emitStatus();
   if (faults.slow.has("sync")) {
-    await new Promise((resolve) => setTimeout(resolve, SLOW_MS));
+    await new Promise((resolve) => setTimeout(resolve, faults.slowMs));
   }
   running = false;
   if (!connected) return;
@@ -538,7 +547,7 @@ function schedulePass() {
   clearTimeout(pushTimer);
   pushTimer = setTimeout(
     () => void pass(),
-    faults.slow.has("sync") ? SLOW_MS : PUSH_MS,
+    faults.slow.has("sync") ? faults.slowMs : PUSH_MS,
   );
 }
 
@@ -898,7 +907,7 @@ export async function updateSettings(patch: SettingsPatch): Promise<Settings> {
     faults.slow.has("settings") ||
     (first && faults.slow.has("settings-first"))
   ) {
-    await new Promise((resolve) => setTimeout(resolve, SLOW_MS));
+    await new Promise((resolve) => setTimeout(resolve, faults.slowMs));
   }
   if (faults.fail.has("settings")) {
     const seen = failedCalls.get("settings") ?? 0;

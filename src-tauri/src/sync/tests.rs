@@ -5,7 +5,7 @@
 //! Each [`Rig`] is one device — its own app, journal directory and login. Two
 //! rigs over one `MemoryRemote` are two devices of one account.
 
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 use std::net::{Ipv4Addr, TcpStream};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -14,7 +14,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use journal_api::SyncState;
-use journal_credential::{Credential, FileCredentialStore};
+use journal_credential::{Credential, CredentialStoreError, FileCredentialStore};
 use journal_fs_store::FsStore;
 use journal_remote::{
     ChangePage, Cursor, MemoryRemote, Precondition, RemoteError, RemoteStore, Revision,
@@ -151,6 +151,26 @@ impl Provider for Fake {
             return Err("could not reach Fake Cloud".to_owned());
         }
         Ok(())
+    }
+}
+
+#[derive(Default)]
+struct RefusingClearCredentials(Mutex<Option<Credential>>);
+
+impl CredentialStore for RefusingClearCredentials {
+    fn load(&self) -> Result<Option<Credential>, CredentialStoreError> {
+        Ok(self.0.lock().unwrap().clone())
+    }
+
+    fn save(&self, credential: &Credential) -> Result<(), CredentialStoreError> {
+        *self.0.lock().unwrap() = Some(credential.clone());
+        Ok(())
+    }
+
+    fn clear(&self) -> Result<(), CredentialStoreError> {
+        Err(CredentialStoreError::Other(Box::new(io::Error::other(
+            "credential clear refused",
+        ))))
     }
 }
 
@@ -317,6 +337,14 @@ impl Rig {
     }
 
     fn build(providers: Vec<Arc<dyn Provider>>, timing: Timing) -> Self {
+        Self::build_with_credentials(providers, timing, None)
+    }
+
+    fn build_with_credentials(
+        providers: Vec<Arc<dyn Provider>>,
+        timing: Timing,
+        credentials: Option<Arc<dyn CredentialStore>>,
+    ) -> Self {
         static COUNTER: AtomicUsize = AtomicUsize::new(0);
         let n = COUNTER.fetch_add(1, Ordering::SeqCst);
         let dir = std::env::temp_dir().join(format!("journal-sync-app-{}-{n}", std::process::id()));
@@ -365,6 +393,9 @@ impl Rig {
         )));
         let handle = app.handle().clone();
         let events = Arc::new(Recorder::default());
+        let credentials = credentials.unwrap_or_else(|| {
+            Arc::new(FileCredentialStore::new(dir.join("config").join("login")))
+        });
         let control = Arc::new(
             SyncControl::new(SyncConfig {
                 slot,
@@ -372,7 +403,7 @@ impl Rig {
                 vault: Arc::new(move || crate::vault(&handle.state::<VaultState>()).ok()),
                 events: events.clone(),
                 providers,
-                credentials: Arc::new(FileCredentialStore::new(dir.join("config").join("login"))),
+                credentials,
                 state_path: dir.join("sync-state.json"),
                 open_url: Arc::new(browser),
                 timing,
@@ -954,6 +985,49 @@ fn disconnecting_revokes_the_forgotten_token() {
 
     wait_for("the revoke", || !fake.revoked().is_empty());
     assert_eq!(fake.revoked(), [token]);
+}
+
+#[test]
+fn disconnect_revokes_after_login_clear_even_when_state_removal_fails() {
+    let fake = Fake::new("fake", Arc::new(MemoryRemote::new()));
+    let rig = Rig::with_providers(vec![fake.clone()]);
+    rig.unlock();
+    rig.connect();
+    let token = rig.saved_token().expect("a login was saved");
+    let login = rig.dir.join("config").join("login");
+    let state = rig.dir.join("sync-state.json");
+    std::fs::remove_file(&state).unwrap();
+    std::fs::create_dir(&state).unwrap();
+
+    let error = rig
+        .invoke("disconnect_remote", json!({}))
+        .expect_err("state removal should fail");
+
+    assert!(error.as_str().unwrap().contains("sync state"), "{error}");
+    assert!(!login.exists(), "credential clear still succeeded");
+    wait_for("the revoke", || !fake.revoked().is_empty());
+    assert_eq!(fake.revoked(), [token]);
+}
+
+#[test]
+fn disconnect_does_not_revoke_when_credential_clear_fails() {
+    let fake = Fake::new("fake", Arc::new(MemoryRemote::new()));
+    let credentials = Arc::new(RefusingClearCredentials::default());
+    let rig = Rig::build_with_credentials(vec![fake.clone()], timing(), Some(credentials.clone()));
+    rig.unlock();
+    rig.connect();
+
+    let error = rig
+        .invoke("disconnect_remote", json!({}))
+        .expect_err("credential clear should fail");
+
+    assert!(
+        error.as_str().unwrap().contains("credential clear refused"),
+        "{error}"
+    );
+    assert!(credentials.load().unwrap().is_some());
+    thread::sleep(Duration::from_millis(100));
+    assert!(fake.revoked().is_empty());
 }
 
 /// SEC-2: a fresh grant leaves the old token valid at the provider even for

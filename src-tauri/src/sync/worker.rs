@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 
 use journal_remote::RemoteError;
 use journal_store::BlobName;
-use journal_sync_engine::{SyncEngine, SyncError, SyncErrorKind};
+use journal_sync_engine::{SyncEngine, SyncError, SyncErrorKind, SyncReport};
 
 use super::resolver::VaultResolver;
 use super::Events;
@@ -212,6 +212,13 @@ struct Context {
     poke: Arc<dyn Fn() + Send + Sync>,
 }
 
+fn pass_changed_entries(result: &Result<SyncReport, SyncError>, resolved: usize) -> bool {
+    resolved > 0
+        || result
+            .as_ref()
+            .is_ok_and(|report| report.pulled + report.deleted > 0)
+}
+
 impl Worker {
     pub fn start(
         engine: Arc<SyncEngine>,
@@ -345,16 +352,15 @@ impl Context {
 
     fn pass(&self, schedule: &mut Schedule) -> Result<(), String> {
         let result = self.engine.sync_once(&*self.resolver);
+        let resolved = self.resolver.take_resolved();
+        if pass_changed_entries(&result, resolved) {
+            self.events.changed();
+        }
         let now = Instant::now();
         let outcome = match &result {
-            Ok(report) => {
+            Ok(_) => {
                 schedule.succeeded(now);
                 *self.detail.lock().unwrap_or_else(PoisonError::into_inner) = None;
-                // Entries the pass wrote or removed, or that the resolver
-                // merged: the list on screen is stale.
-                if report.pulled + report.deleted + self.resolver.take_resolved() > 0 {
-                    self.events.changed();
-                }
                 Ok(())
             }
             Err(e) => {
@@ -388,6 +394,26 @@ mod tests {
 
     fn transient() -> SyncError {
         RemoteError::Transient("down".into()).into()
+    }
+
+    #[test]
+    fn changed_notification_covers_resolutions_and_successful_disk_changes() {
+        let failed = Err(transient());
+        assert!(pass_changed_entries(&failed, 1));
+        assert!(!pass_changed_entries(&failed, 0));
+
+        let pulled = Ok(SyncReport {
+            pulled: 1,
+            ..Default::default()
+        });
+        assert!(pass_changed_entries(&pulled, 0));
+
+        let deleted = Ok(SyncReport {
+            deleted: 1,
+            ..Default::default()
+        });
+        assert!(pass_changed_entries(&deleted, 0));
+        assert!(!pass_changed_entries(&Ok(SyncReport::default()), 0));
     }
 
     fn schedule() -> (Schedule, Instant) {

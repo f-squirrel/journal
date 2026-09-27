@@ -26,6 +26,15 @@ function rows(page: Page) {
   return page.getByTestId("entry-row");
 }
 
+function editor(page: Page) {
+  return page.getByTestId("entry-body").locator(".cm-content");
+}
+
+async function openEditor(page: Page) {
+  await page.getByRole("button", { name: "Entry actions" }).click();
+  await page.getByRole("menuitem", { name: "Edit" }).click();
+}
+
 /// The case a frontend-side filter could never pass: `list_entries` returns
 /// headers with no markdown, so matching body text is only possible in the
 /// backend. "recipe" appears in one entry's body and in neither title.
@@ -129,4 +138,41 @@ test("a failed search shows the error and keeps the list", async ({ page }) => {
   await expect(page.getByText("Search broke.")).toBeVisible();
   await expect(rows(page)).toHaveCount(2);
   await expect(page.getByText("June 2026")).toBeVisible();
+});
+
+test("a successful save refreshes an active search and its snippet", async ({
+  page,
+}) => {
+  await login(page);
+  await page.getByText("First day back").click();
+  await openEditor(page);
+  await field(page).fill("kumquat");
+  await expect(page.getByText("Nothing matches “kumquat”.")).toBeVisible();
+
+  await editor(page).fill("A newly added kumquat sentence.");
+  await expect(page.getByTestId("save-status")).toHaveText("Saved");
+
+  await expect(rows(page)).toHaveCount(1);
+  await expect(rows(page)).toContainText("First day back");
+  await expect(page.getByTestId("search-snippet")).toContainText(
+    "newly added kumquat",
+  );
+});
+
+test("deleting a matching entry removes it from an active search", async ({
+  page,
+}) => {
+  await login(page);
+  await field(page).fill("recipe");
+  await expect(rows(page)).toHaveCount(1);
+  await rows(page).click();
+  await page.getByRole("button", { name: "Entry actions" }).click();
+  await page.getByRole("menuitem", { name: "Delete entry" }).click();
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "Delete" })
+    .click();
+
+  await expect(rows(page)).toHaveCount(0);
+  await expect(page.getByText("Nothing matches “recipe”.")).toBeVisible();
 });

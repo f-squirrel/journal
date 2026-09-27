@@ -71,11 +71,27 @@ interface Mutation {
 /// decrypts the whole journal to answer, so running one per keystroke would
 /// mean several passes over it for a single word.
 const SEARCH_DEBOUNCE_MS = 200;
+const LOGOUT_FLUSH_TIMEOUT_MS = 2_000;
 
 /// Writes whatever the caller has not saved yet. Resolves `true` when nothing
 /// is left unsaved, `false` when a write failed and the work is still only in
 /// memory.
 type Flush = () => Promise<boolean>;
+
+async function waitAtMost(
+  promise: Promise<unknown>,
+  timeoutMs: number,
+): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([
+    promise,
+    new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, timeoutMs);
+    }),
+  ]).finally(() => {
+    if (timer !== undefined) clearTimeout(timer);
+  });
+}
 
 interface AppStateContextValue {
   authenticated: boolean;
@@ -152,10 +168,15 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const [listError, setListError] = useState("");
   // Bumped when a pass changed entries on disk, to re-run the list effect.
   const [listVersion, setListVersion] = useState(0);
+  // Bumped only after a local mutation reaches disk, to invalidate an active
+  // decrypt-on-demand search without forcing another entry listing.
+  const [localMutationVersion, setLocalMutationVersion] = useState(0);
   // Set by the first `sync://status` event, so the seed read below cannot land
   // after a newer status and put an older one back.
   const heardStatus = useRef(false);
   const flushes = useRef(new Set<Flush>());
+  const pendingLock = useRef<Promise<void>>(Promise.resolve());
+  const loginAttempt = useRef(0);
   // A listing reads the disk once, and a `sync://changed` reload can start
   // while a save is in flight or land after one finished: replacing the list
   // with what it read put the row's older title back. So every local save and
@@ -215,7 +236,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     return saved.every(Boolean);
   }, []);
 
-  const lockSession = useCallback(() => {
+  const clearSessionUi = useCallback(() => {
     setAuthenticated(false);
     // Decrypted titles must not outlive the session in the webview heap. The
     // results go with them, and they carry snippets of the entries' text.
@@ -226,18 +247,35 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     // A backend message can carry a path; it must not outlive the session.
     setListError("");
     mutations.current.clear();
-    // The journal half of settings reads as defaults while locked (see the
-    // plan, "Commands"), but only once the vault is actually locked: Tauri
-    // runs commands in parallel, so firing the reload alongside `lockVault`
-    // races it — a `get_settings` that reaches the backend first would still
-    // see the vault unlocked and put the real values right back. Waiting for
-    // `lockVault` to settle (success or failure) closes that.
-    lockVault()
-      .catch(() => {
+  }, []);
+
+  const lockBackend = useCallback(
+    async (flush: Promise<unknown>, timeoutMs?: number) => {
+      if (timeoutMs === undefined) {
+        await flush;
+      } else {
+        await waitAtMost(flush, timeoutMs);
+      }
+      // The journal half of settings reads as defaults while locked (see the
+      // plan, "Commands"), but only once the vault is actually locked: Tauri
+      // runs commands in parallel, so firing the reload alongside `lockVault`
+      // races it — a `get_settings` that reaches the backend first would still
+      // see the vault unlocked and put the real values right back. Waiting for
+      // `lockVault` to settle (success or failure) closes that.
+      try {
+        await lockVault();
+      } catch {
         // Best-effort; nothing to lock into a UI state for.
-      })
-      .finally(() => void reloadSettings());
-  }, [reloadSettings]);
+      }
+      try {
+        await reloadSettings();
+      } catch {
+        // The login screen remains authoritative even if settings cannot
+        // reload. A following login must not be blocked by this transition.
+      }
+    },
+    [reloadSettings],
+  );
 
   // Unlike a manual log out, an idle lock is not something the user asked for,
   // so it does not go through over unsaved work: the pane is showing the error
@@ -248,10 +286,13 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     async (stillIdle: () => boolean) => {
       const saved = await flushAll();
       if (!saved || !stillIdle()) return false;
-      lockSession();
+      const locking = lockBackend(Promise.resolve());
+      pendingLock.current = locking;
+      clearSessionUi();
+      await locking;
       return true;
     },
-    [flushAll, lockSession],
+    [clearSessionUi, flushAll, lockBackend],
   );
 
   useIdleLock(
@@ -307,10 +348,9 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   // `Vault::search`). Debounced, because answering means decrypting the
   // journal.
   //
-  // It re-runs on `listVersion` — the same bump that reloads the list when a
-  // sync pass brought entries in — so results do not go on describing a
-  // journal that has changed underneath them. Not on `entries`, which
-  // autosave changes every couple of seconds while the user types.
+  // It re-runs on `listVersion` after sync changes and on a separate local
+  // mutation version after saves/deletes reach disk. Not on `entries`, which
+  // changes optimistically and on every autosave while the user types.
   useEffect(() => {
     const query = searchQuery.trim();
     if (!authenticated || !query) {
@@ -346,7 +386,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [authenticated, searchQuery, listVersion]);
+  }, [authenticated, searchQuery, listVersion, localMutationVersion]);
 
   // Sync is not gated on the vault: it runs while locked, and connecting is
   // how a second device gets its key, so this is live from the first render.
@@ -453,7 +493,10 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       // one, or a full disk. Every method on this context signals failure the
       // same way, so no caller has to remember which one returns what.
       login: async (passphrase) => {
+        const attempt = ++loginAttempt.current;
+        await pendingLock.current;
         await unlockVault(passphrase);
+        if (attempt !== loginAttempt.current) return;
         setAuthenticated(true);
         // The journal half of settings comes back now that the vault can
         // read it (see the plan, "Commands").
@@ -462,7 +505,11 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       // Locks whether or not the flush succeeded: the user asked, and a broken
       // backend must not be able to keep the journal open.
       logout: () => {
-        void flushAll().then(lockSession);
+        loginAttempt.current += 1;
+        const flush = flushAll();
+        const locking = lockBackend(flush, LOGOUT_FLUSH_TIMEOUT_MS);
+        pendingLock.current = locking;
+        clearSessionUi();
       },
       registerFlush,
       loadEntry,
@@ -514,6 +561,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         });
         try {
           await saveEntryBackend(entry, expectedUpdatedAt);
+          setLocalMutationVersion((n) => n + 1);
           settle(true);
         } catch (err) {
           settle(false);
@@ -535,6 +583,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         });
         try {
           await deleteEntryBackend(id);
+          setLocalMutationVersion((n) => n + 1);
           settle(true);
         } catch (err) {
           settle(false);
@@ -551,8 +600,9 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     [
       authenticated,
       entries,
+      clearSessionUi,
       flushAll,
-      lockSession,
+      lockBackend,
       registerFlush,
       recordMutation,
       loadEntry,

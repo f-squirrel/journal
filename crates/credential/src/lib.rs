@@ -181,10 +181,22 @@ impl FileCredentialStore {
     }
 
     fn fail(&self, action: &'static str, error: io::Error) -> CredentialStoreError {
+        Self::fail_at(action, self.path.clone(), error)
+    }
+
+    fn fail_at(action: &'static str, path: PathBuf, error: io::Error) -> CredentialStoreError {
         CredentialStoreError::Io {
             action,
-            path: self.path.clone(),
+            path,
             error,
+        }
+    }
+
+    fn remove(path: &Path) -> io::Result<()> {
+        match fs::remove_file(path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e),
         }
     }
 }
@@ -231,13 +243,13 @@ impl CredentialStore for FileCredentialStore {
     }
 
     fn save(&self, credential: &Credential) -> Result<(), CredentialStoreError> {
+        let temp = self.temp_path();
         let write = || -> io::Result<()> {
             if let Some(dir) = self.path.parent() {
                 fs::create_dir_all(dir)?;
             }
             // Written whole and renamed into place, so a crash leaves either
             // the old login or the new one and never half of one.
-            let temp = self.temp_path();
             // A stale scratch file from an interrupted save may still be
             // sitting here, at whatever permissions that run left it with.
             // Remove it first, so the file opened below is always a fresh
@@ -245,11 +257,7 @@ impl CredentialStore for FileCredentialStore {
             // another's) could still be holding open at the old, looser
             // permissions — rather than a name that already existed being
             // reused in place.
-            match fs::remove_file(&temp) {
-                Ok(()) => {}
-                Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-                Err(e) => return Err(e),
-            }
+            Self::remove(&temp)?;
             let mut options = fs::OpenOptions::new();
             options.write(true).create_new(true);
             #[cfg(unix)]
@@ -269,15 +277,22 @@ impl CredentialStore for FileCredentialStore {
             file.sync_all()?;
             fs::rename(&temp, &self.path)
         };
-        write().map_err(|e| self.fail("write", e))
+        match write() {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                let _ = Self::remove(&temp);
+                Err(self.fail("write", error))
+            }
+        }
     }
 
     fn clear(&self) -> Result<(), CredentialStoreError> {
-        match fs::remove_file(&self.path) {
-            Ok(()) => Ok(()),
-            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(self.fail("remove", e)),
-        }
+        let published = Self::remove(&self.path)
+            .map_err(|error| Self::fail_at("remove", self.path.clone(), error));
+        let temp = self.temp_path();
+        let temporary =
+            Self::remove(&temp).map_err(|error| Self::fail_at("remove", temp.clone(), error));
+        published.and(temporary)
     }
 }
 
@@ -389,6 +404,46 @@ mod tests {
         store.clear().unwrap();
 
         assert!(store.load().unwrap().is_none());
+    }
+
+    #[test]
+    fn a_failed_save_removes_the_scratch_file_and_returns_the_write_error() {
+        let store = store();
+        fs::create_dir_all(store.path()).unwrap();
+
+        let error = store
+            .save(&credential("dropbox", "simulated-secret"))
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("could not write the saved login"), "{error}");
+        assert!(!store.temp_path().exists(), "scratch file survived");
+    }
+
+    #[test]
+    fn clear_removes_an_interrupted_scratch_file() {
+        let store = store();
+        fs::create_dir_all(store.path().parent().unwrap()).unwrap();
+        fs::write(store.temp_path(), "simulated-secret").unwrap();
+
+        store.clear().unwrap();
+
+        assert!(!store.temp_path().exists());
+    }
+
+    #[test]
+    fn clear_still_removes_scratch_when_published_removal_fails() {
+        let store = store();
+        fs::create_dir_all(store.path()).unwrap();
+        fs::write(store.temp_path(), "simulated-secret").unwrap();
+
+        let error = store.clear().unwrap_err().to_string();
+
+        assert!(
+            error.contains(&store.path().display().to_string()),
+            "{error}"
+        );
+        assert!(!store.temp_path().exists(), "scratch file survived");
     }
 
     #[test]

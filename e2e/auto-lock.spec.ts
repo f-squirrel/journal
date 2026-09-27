@@ -214,6 +214,60 @@ test("manual log out flushes a pending draft first", async ({ page }) => {
   ).toBeVisible();
 });
 
+test("manual logout hides decrypted history while a save is in flight", async ({
+  page,
+}) => {
+  await login(page, "?slow=save");
+  await newDraft(page, "Private pending title", "Private pending body.");
+  await page.clock.runFor(800);
+  await expect(page.getByTestId("save-status")).toHaveText("Saving…");
+
+  await page.getByRole("button", { name: "Log out" }).click();
+
+  await locked(page);
+  await expect(page.getByText("Private pending title")).toHaveCount(0);
+  await page.goBack();
+  await locked(page);
+  await expect(page.getByText("First day back")).toHaveCount(0);
+});
+
+test("an immediate sign-in waits for the old logout and stays unlocked", async ({
+  page,
+}) => {
+  await login(page, "?slow=save");
+  await newDraft(page, "Slow logout", "Wait before signing in.");
+  await page.clock.runFor(800);
+  await page.getByRole("button", { name: "Log out" }).click();
+  await locked(page);
+
+  await page.getByLabel("Passphrase").fill("password123");
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await expect(page.getByRole("button", { name: "Sign in" })).toBeDisabled();
+
+  await page.clock.runFor(1_200);
+  await unlocked(page);
+  await page.clock.runFor(2_000);
+  await unlocked(page);
+});
+
+test("manual logout bounds a stalled flush to two seconds", async ({
+  page,
+}) => {
+  await login(page, "?slow=save&slowMs=10000");
+  await newDraft(page, "Very slow logout", "The lock must win.");
+  await page.clock.runFor(800);
+  await page.getByRole("button", { name: "Log out" }).click();
+  await locked(page);
+
+  await page.getByLabel("Passphrase").fill("password123");
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await page.clock.runFor(1_999);
+  await expect(page.getByRole("button", { name: "Sign in" })).toBeDisabled();
+
+  await page.clock.runFor(1);
+  await unlocked(page);
+});
+
 // WP4: `idle_lock_minutes: null` disables the idle lock entirely
 // (`AppStateContext` passes `authenticated && idle_lock_minutes !== null` as
 // `useIdleLock`'s `active`).

@@ -451,13 +451,12 @@ impl SyncControl {
         let state = erase_state(&self.config.state_path)
             .map_err(|e| format!("could not remove the sync state: {e}"));
         (self.coalescer.poker())();
-        let result = login.and(state);
-        if result.is_ok() {
+        if login.is_ok() {
             if let Some(credential) = saved {
                 self.revoke_later(credential);
             }
         }
-        result
+        login.and(state)
     }
 
     fn turn(&self) -> std::sync::MutexGuard<'_, ()> {

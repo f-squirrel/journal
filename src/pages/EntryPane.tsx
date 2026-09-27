@@ -202,6 +202,14 @@ function EntryPane({ id, draft }: { id: string; draft: boolean }) {
     autosaveRef.current = autosave;
   });
 
+  // Once the first write lands, this URL names an ordinary stored entry.
+  // Replace rather than push so Back cannot return to stale draft router state.
+  useEffect(() => {
+    if (draft && autosave.savedAt !== null) {
+      navigate(`/entries/${id}`, { replace: true, state: null });
+    }
+  }, [autosave.savedAt, draft, id, navigate]);
+
   // A new notice starts undismissed, even if the last one was closed.
   useEffect(() => {
     setNoticeDismissed(false);

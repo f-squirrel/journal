@@ -74,7 +74,7 @@ impl Vault {
         let mut fields = self.read_stamped_fields()?;
         if let Some(next) = f(&fields.view())? {
             next.validate()?;
-            if fields.record(&next, Utc::now()) {
+            if fields.record(&next, Utc::now())? {
                 self.write_stamped_fields(&fields)?;
             }
         }

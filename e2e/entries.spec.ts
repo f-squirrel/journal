@@ -101,6 +101,25 @@ test("creating a new entry adds it to the list", async ({ page }) => {
   await expect(row(page, "E2E test entry")).toBeVisible();
 });
 
+test("browser history reopens a saved draft as a stored entry", async ({
+  page,
+}) => {
+  await login(page);
+  await page.getByRole("button", { name: "New entry" }).first().click();
+  await page.getByPlaceholder("Title").fill("Saved history entry");
+  await editor(page).fill("Loaded back from disk.");
+  await expect(page.getByTestId("save-status")).toHaveText("Saved");
+
+  await page.getByRole("button", { name: "Settings" }).click();
+  await expect(page.getByTestId("settings-page")).toBeVisible();
+  await page.goBack();
+
+  await expect(
+    page.getByRole("heading", { name: "Saved history entry", level: 2 }),
+  ).toBeVisible();
+  await expect(body(page)).toContainText("Loaded back from disk.");
+});
+
 test("an untouched draft is never written", async ({ page }) => {
   await login(page);
   await page.getByRole("button", { name: "New entry" }).first().click();
