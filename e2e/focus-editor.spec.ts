@@ -96,7 +96,11 @@ test("the title can still be clicked into and typed in", async ({ page }) => {
   await page.getByRole("button", { name: "New entry" }).first().click();
   await expect(editor(page)).toBeFocused();
 
+  // Pre-filled with the entry's date (see `EntryPane`'s `title` state);
+  // cleared first so typing lands in an empty field, same as the other
+  // `keyboard.type` assertions in this file.
   const title = page.getByPlaceholder("Title");
+  await title.fill("");
   await title.click();
   await expect(title).toBeFocused();
   await page.keyboard.type("A title");

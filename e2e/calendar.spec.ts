@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "./coverage";
+import { formatEntryHeading } from "../src/utils/date";
 
 // The calendar is derived from the entry headers the app already holds, so
 // these run against the browser fallback like the rest. Two things are pinned
@@ -147,7 +148,12 @@ test("resurfaces earlier years on this day, and the rail says so", async ({
 });
 
 test("groups memories by year, nearest first", async ({ page }) => {
-  await login(page, "2027-06-12T12:00:00Z");
+  const now = "2027-06-12T12:00:00Z";
+  await login(page, now);
+  // A fresh draft's title defaults to its date (`EntryPane`'s `title`
+  // state); "now" is fixed for this whole test, so both drafts default to
+  // the same text.
+  const defaultTitle = formatEntryHeading(now);
 
   // Two entries dated the fixed "now", so a year on they share a group. Each
   // is waited for until it is saved, so the next one cannot race its flush.
@@ -155,7 +161,7 @@ test("groups memories by year, nearest first", async ({ page }) => {
     await page.getByRole("button", { name: "New entry" }).first().click();
     // The previous entry's pane is still mounted until the route switches;
     // typing before that would rename it instead.
-    await expect(page.getByPlaceholder("Title")).toHaveValue("");
+    await expect(page.getByPlaceholder("Title")).toHaveValue(defaultTitle);
     await page.getByPlaceholder("Title").fill(title);
     await expect(page.getByTestId("save-status")).toHaveText("Saved");
   }

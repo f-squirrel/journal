@@ -113,7 +113,20 @@ function EntryPane({ id, draft }: { id: string; draft: boolean }) {
   const [loadError, setLoadError] = useState("");
   const [missing, setMissing] = useState(false);
   const [loadedAt, setLoadedAt] = useState("");
-  const [title, setTitle] = useState("");
+  // A new entry is about today until the user says otherwise. Computed once,
+  // so it is stable for the life of the pane.
+  const [openedAt] = useState(() => new Date().toISOString());
+  // What an untouched draft's title defaults to, and — passed to
+  // `useAutosave` below — what still counts as "no title given" for its
+  // "was anything actually started" guard, the same way `template` does for
+  // the body. An existing entry always has a real title on disk, hence "".
+  const [defaultTitle] = useState(() =>
+    draft ? formatEntryHeading(openedAt) : "",
+  );
+  // Pre-filled with `defaultTitle` rather than left blank, so the field
+  // shows — and lets you edit — the name it's about to get instead of
+  // looking empty until the first save.
+  const [title, setTitle] = useState(defaultTitle);
   const [markdown, setMarkdown] = useState(template);
   // Reading or writing, chosen from the menu and nowhere else. A draft has
   // nothing to render, so it opens in the editor.
@@ -125,9 +138,6 @@ function EntryPane({ id, draft }: { id: string; draft: boolean }) {
   // Dismissible: a fresh notice un-dismisses itself, since it describes a new
   // event, not the one the user already closed.
   const [noticeDismissed, setNoticeDismissed] = useState(false);
-  // A new entry is about today until the user says otherwise. Computed once,
-  // so it is stable for the life of the pane.
-  const [openedAt] = useState(() => new Date().toISOString());
   // The entry's own date: what the heading shows, what the list sorts by, and
   // the one field here the user edits without typing.
   const [entryDate, setEntryDate] = useState(openedAt);
@@ -184,6 +194,7 @@ function EntryPane({ id, draft }: { id: string; draft: boolean }) {
     { title: "", markdown: template, entryDate },
     draft,
     template,
+    defaultTitle,
     refreshFromDisk,
   );
 
@@ -495,7 +506,7 @@ function EntryPane({ id, draft }: { id: string; draft: boolean }) {
                 component="h2"
                 sx={{ mb: 1.5, fontSize: TYPE.entryTitle }}
               >
-                {title || "Untitled entry"}
+                {title || formatEntryHeading(entryDate)}
               </Typography>
               {/* Same test id as the editor: the body is the body, whichever
                   mode is showing it. */}
@@ -582,7 +593,7 @@ function EntryPane({ id, draft }: { id: string; draft: boolean }) {
         <DialogTitle>Delete entry?</DialogTitle>
         <DialogContent>
           <DialogContentText>
-            {`"${title.trim() || "Untitled entry"}" will be permanently deleted. This can't be undone.`}
+            {`"${title.trim() || formatEntryHeading(entryDate)}" will be permanently deleted. This can't be undone.`}
           </DialogContentText>
           {deleteError && (
             <Alert severity="error" sx={{ mt: 2 }}>

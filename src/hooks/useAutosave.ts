@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useAppState } from "../context/AppStateContext";
+import { formatEntryHeading } from "../utils/date";
 import { errorMessage, isStaleEntry } from "../utils/errors";
 import { newEntryId } from "../utils/id";
 
@@ -77,6 +78,12 @@ export function useAutosave(
   /// was started" guard below: only whitespace differs from an untouched
   /// draft, but the *content* is still the one the user never actually wrote.
   template = "",
+  /// The same idea as `template`, for the title: what a new draft's title
+  /// field is pre-filled with (its date; `""` for an existing entry). A
+  /// title that still reads exactly as this counts as "no title given" too,
+  /// so typing only into the body doesn't turn the untouched default into a
+  /// title the user never actually chose.
+  defaultTitle = "",
   /// Called after a stale save was kept as a conflicted copy, once the copy
   /// itself has been written. The pane uses it to reload the entry from disk
   /// and reset `base`. Held in a ref, not a dependency: the pane's own
@@ -137,10 +144,12 @@ export function useAutosave(
     // the user typed and then deleted back to the template, or deleted past
     // it to nothing, and neither must write an entry holding only the
     // template (or nothing at all). A title is still enough on its own to
-    // make the draft real.
+    // make the draft real, but not one that still reads exactly as the date
+    // it was pre-filled with — the user typing only into the body must not
+    // turn that untouched default into a title they never actually chose.
     if (
       !written.current &&
-      !title.trim() &&
+      (!title.trim() || title.trim() === defaultTitle.trim()) &&
       (!markdown.trim() || markdown.trim() === template.trim())
     ) {
       return;
@@ -157,7 +166,7 @@ export function useAutosave(
       await upsertEntry(
         {
           id,
-          title: title.trim() || "Untitled entry",
+          title: title.trim() || formatEntryHeading(entryDate),
           updated_at: updatedAt,
           entry_date: entryDate,
           markdown,
@@ -178,7 +187,7 @@ export function useAutosave(
         // entry, under a fresh id so it never collides with anything.
         const copy = {
           id: newEntryId(),
-          title: `${draft.current.title.trim() || "Untitled entry"} (conflicted copy)`,
+          title: `${draft.current.title.trim() || formatEntryHeading(draft.current.entryDate)} (conflicted copy)`,
           updated_at: new Date().toISOString(),
           entry_date: draft.current.entryDate,
           markdown: draft.current.markdown,
@@ -224,7 +233,7 @@ export function useAutosave(
       // backend every 800 ms forever. The next keystroke or Retry does it.
       if (draft.current.dirty && !failed) schedule();
     }
-  }, [id, schedule, template, upsertEntry]);
+  }, [id, schedule, template, defaultTitle, upsertEntry]);
 
   useEffect(() => {
     saveRef.current = save;
@@ -277,10 +286,10 @@ export function useAutosave(
     return (
       !dirty ||
       (!written.current &&
-        !title.trim() &&
+        (!title.trim() || title.trim() === defaultTitle.trim()) &&
         (!markdown.trim() || markdown.trim() === template.trim()))
     );
-  }, [template]);
+  }, [template, defaultTitle]);
 
   const whenSettled = useCallback(async () => {
     if (inflight.current) await inflight.current;

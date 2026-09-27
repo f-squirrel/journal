@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "./coverage";
+import { formatEntryHeading } from "../src/utils/date";
 
 // These tests run against the Vite dev server without Tauri's `invoke` bridge,
 // so the app falls back to its seeded in-memory entries (see
@@ -122,7 +123,9 @@ test("clearing both fields on a saved entry is written", async ({ page }) => {
   await page.getByRole("button", { name: "Log out" }).click();
   await page.getByLabel("Passphrase").fill("password123");
   await page.getByRole("button", { name: "Sign in" }).click();
-  await row(page, "Untitled entry").click();
+  // A blank title falls back to the entry's own date, the same text the
+  // pane's heading shows — not a generic "Untitled entry".
+  await row(page, formatEntryHeading("2026-09-02T21:05:00.000Z")).click();
   await expect(body(page)).not.toContainText("Some things I want to build");
 });
 
