@@ -2,6 +2,7 @@
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 mod export;
+mod settings;
 mod sync;
 
 use std::path::Path;
@@ -276,6 +277,8 @@ pub fn run() {
             delete_entry,
             search_entries,
             export_entries,
+            settings::get_settings,
+            settings::update_settings,
             sync::list_providers,
             sync::connect_remote,
             sync::disconnect_remote,
@@ -302,6 +305,19 @@ pub fn run() {
                 generation: AtomicU64::new(0),
             });
 
+            // Plaintext, never synced, beside the credential for the same
+            // reason (see the comment on `credentials` below) — readable
+            // while the journal is locked, since the login screen needs the
+            // colour mode.
+            let device_settings = Arc::new(settings::DeviceSettingsState::load(
+                app.path().app_config_dir()?.join("device-settings.json"),
+            ));
+            let initial_interval = device_settings
+                .snapshot()
+                .sync_interval_minutes
+                .map(settings::minutes_to_duration);
+            app.manage(device_settings);
+
             let handle = app.handle().clone();
             let opener = app.handle().clone();
             let control = Arc::new(SyncControl::new(sync::SyncConfig {
@@ -324,7 +340,10 @@ pub fn run() {
                         .open_url(url.as_str(), None::<&str>)
                         .map_err(|e| e.to_string())
                 }),
-                timing: sync::worker::Timing::default(),
+                timing: sync::worker::Timing {
+                    interval: initial_interval,
+                    ..sync::worker::Timing::default()
+                },
             })?);
             app.manage(control.clone());
             // Scans every blob against the sync state: not on the main thread.

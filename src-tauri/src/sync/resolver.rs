@@ -11,7 +11,7 @@ use std::sync::Arc;
 use journal_api::{Entry, Header, Id};
 use journal_store::BlobName;
 use journal_sync_engine::{ConflictResolver, Resolution};
-use journal_vault::{entry_id, Vault, VaultError};
+use journal_vault::{entry_id, Vault, VaultError, SETTINGS_BLOB};
 
 /// The unlocked vault, if there is one, as a handle the caller owns.
 ///
@@ -58,7 +58,14 @@ impl ConflictResolver for VaultResolver {
         let Some(vault) = (self.vault)() else {
             return Resolution::Deferred;
         };
-        match merge(&vault, name, ours, theirs) {
+        let result = if *name == BlobName::literal(SETTINGS_BLOB) {
+            vault
+                .merge_journal_settings(ours, theirs)
+                .map_err(|e| e.to_string())
+        } else {
+            merge(&vault, name, ours, theirs)
+        };
+        match result {
             Ok(()) => {
                 self.resolved.fetch_add(1, Ordering::SeqCst);
                 Resolution::Resolved
@@ -327,6 +334,87 @@ mod tests {
             resolver(&vault).resolve(&name_of(Id::new()), &ours, &theirs),
             Resolution::Deferred
         );
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    fn settings_blob_name() -> BlobName {
+        BlobName::literal(SETTINGS_BLOB)
+    }
+
+    /// The bytes the settings blob has on disk after saving `settings` from
+    /// an empty store — one independent "side" of a conflict, sealed under
+    /// the vault's own key so the same vault can decrypt it back.
+    fn raw_settings(
+        vault: &Vault,
+        store: &FsStore,
+        settings: &journal_settings::JournalSettings,
+    ) -> Vec<u8> {
+        vault.save_journal_settings(settings).unwrap();
+        store.get(&settings_blob_name()).unwrap().unwrap()
+    }
+
+    #[test]
+    fn a_settings_conflict_merges_both_fields_and_counts_as_resolved() {
+        use journal_settings::{JournalSettings, TimeFormat, WeekStart};
+
+        let (vault, store, dir) = vault();
+        let ours = raw_settings(
+            &vault,
+            &store,
+            &JournalSettings {
+                time_format: TimeFormat::H24,
+                ..Default::default()
+            },
+        );
+        // Reset to the same empty starting point "ours" was saved from,
+        // so "theirs" is an independent change rather than one stacked on
+        // top of "ours".
+        store.delete(&settings_blob_name()).unwrap();
+        let theirs = raw_settings(
+            &vault,
+            &store,
+            &JournalSettings {
+                week_starts_on: WeekStart::Monday,
+                ..Default::default()
+            },
+        );
+        let resolver = resolver(&vault);
+
+        assert_eq!(
+            resolver.resolve(&settings_blob_name(), &ours, &theirs),
+            Resolution::Resolved
+        );
+
+        let merged = vault.journal_settings().unwrap();
+        assert_eq!(merged.time_format, TimeFormat::H24);
+        assert_eq!(merged.week_starts_on, WeekStart::Monday);
+        assert_eq!(resolver.take_resolved(), 1);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn a_settings_conflict_still_defers_while_locked() {
+        use journal_settings::{JournalSettings, TimeFormat};
+
+        let (vault, store, dir) = vault();
+        let ours = raw_settings(
+            &vault,
+            &store,
+            &JournalSettings {
+                time_format: TimeFormat::H24,
+                ..Default::default()
+            },
+        );
+        let theirs = ours.clone();
+        let locked = VaultResolver::new(Arc::new(|| None));
+
+        assert_eq!(
+            locked.resolve(&settings_blob_name(), &ours, &theirs),
+            Resolution::Deferred
+        );
+        assert_eq!(locked.take_resolved(), 0);
 
         std::fs::remove_dir_all(dir).ok();
     }

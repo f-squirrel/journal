@@ -2506,6 +2506,7 @@ dependencies = [
  "journal-fs-store",
  "journal-key",
  "journal-remote",
+ "journal-settings",
  "journal-store",
  "journal-sync-engine",
  "journal-vault",

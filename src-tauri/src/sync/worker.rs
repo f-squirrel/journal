@@ -31,8 +31,10 @@ pub struct Timing {
     pub debounce: Duration,
     /// The longest a steady stream of saves can postpone a pass.
     pub max_debounce: Duration,
-    /// Between passes when nothing prompts one.
-    pub interval: Duration,
+    /// Between passes when nothing prompts one, or `None` for no periodic
+    /// pass: sync still runs at startup, after a save, and on "Sync now"
+    /// (device settings' `sync_interval_minutes`, D8).
+    pub interval: Option<Duration>,
     /// The wait after a first failure; doubled for each further one.
     pub backoff_base: Duration,
     pub backoff_max: Duration,
@@ -45,8 +47,9 @@ impl Default for Timing {
             max_debounce: Duration::from_secs(10),
             // A provider's push channel (Dropbox's `list_folder/longpoll`)
             // would make this a push rather than a poll; a later
-            // optimisation.
-            interval: Duration::from_secs(60),
+            // optimisation. Matches `DeviceSettings::default()`'s
+            // `sync_interval_minutes` (1 minute).
+            interval: Some(Duration::from_secs(60)),
             backoff_base: Duration::from_secs(5),
             backoff_max: Duration::from_secs(300),
         }
@@ -56,8 +59,10 @@ impl Default for Timing {
 /// When the next pass is due. Pure, so the policy is tested without a clock.
 pub(super) struct Schedule {
     timing: Timing,
-    /// The periodic pass. Starts due, which is the startup pass.
-    timer: Instant,
+    /// The periodic pass. Starts `Some(now)`, which is the startup pass.
+    /// `None` while `timing.interval` is `None`: no periodic pass, only the
+    /// startup one, saves, "Sync now" and a failure's own backoff retry.
+    timer: Option<Instant>,
     /// A save is waiting to be uploaded: when, and the point past which more
     /// saves stop postponing it.
     dirty: Option<Dirty>,
@@ -78,7 +83,7 @@ impl Schedule {
     pub fn new(timing: Timing, now: Instant) -> Self {
         Self {
             timing,
-            timer: now,
+            timer: Some(now),
             dirty: None,
             not_before: now,
             failures: 0,
@@ -91,8 +96,27 @@ impl Schedule {
         if self.halted {
             return None;
         }
-        let due = self.dirty.map_or(self.timer, |d| d.due.min(self.timer));
-        Some(due.max(self.not_before))
+        let due = match (self.dirty, self.timer) {
+            (Some(dirty), Some(timer)) => Some(dirty.due.min(timer)),
+            (Some(dirty), None) => Some(dirty.due),
+            (None, timer) => timer,
+        };
+        due.map(|due| due.max(self.not_before))
+    }
+
+    /// Stores a new polling interval. Reschedules the periodic pass to
+    /// `now + interval` (or clears it, for `None`) only while no backoff
+    /// retry is pending — otherwise this would cancel that retry (`None`) or
+    /// bring it forward past the backoff (see the plan's "Runtime sync
+    /// interval") — and only while the current timer is not already due:
+    /// a settings change landing at (or after) the moment a pass, such as the
+    /// startup one, was already due must not cancel or delay it.
+    pub fn set_interval(&mut self, interval: Option<Duration>, now: Instant) {
+        self.timing.interval = interval;
+        let already_due = self.timer.is_some_and(|timer| timer <= now);
+        if self.failures == 0 && !already_due {
+            self.timer = interval.map(|interval| now + interval);
+        }
     }
 
     /// A blob was written. Each save moves the pass back by `debounce`, but
@@ -114,10 +138,13 @@ impl Schedule {
         self.failures = 0;
         self.halted = false;
         self.not_before = now;
-        self.timer = now + self.timing.interval;
+        self.timer = self.timing.interval.map(|interval| now + interval);
         self.dirty = None;
     }
 
+    /// A failed pass still schedules its own backoff retry even when
+    /// `timing.interval` is `None`: only a *successful* pass leaves no
+    /// periodic deadline (D8).
     pub fn failed(&mut self, now: Instant, error: &SyncError) {
         self.dirty = None;
         if matches!(
@@ -133,7 +160,7 @@ impl Schedule {
             delay = delay.max(*retry_after);
         }
         self.not_before = now + delay;
-        self.timer = now + delay;
+        self.timer = Some(now + delay);
     }
 
     fn backoff(&self) -> Duration {
@@ -152,6 +179,8 @@ enum Msg {
     Soon,
     /// Sync now, whatever the schedule says, and report how it went.
     Now(mpsc::Sender<Result<(), String>>),
+    /// The device settings' `sync_interval_minutes` changed.
+    Interval(Option<Duration>),
     Stop,
 }
 
@@ -165,6 +194,12 @@ pub struct Worker {
     detail: Arc<Mutex<Option<String>>>,
     /// The provider's name, for the words the status says about it.
     provider: &'static str,
+    /// The `Timing` this worker was started with — the schedule itself runs
+    /// on its own thread and is not otherwise observable, so tests that check
+    /// `install` read a freshly stored interval before starting a worker
+    /// (rather than a stale default) look here.
+    #[cfg(test)]
+    started_with: Timing,
 }
 
 struct Context {
@@ -204,7 +239,16 @@ impl Worker {
             thread: Mutex::new(Some(thread)),
             detail,
             provider,
+            #[cfg(test)]
+            started_with: timing,
         }))
+    }
+
+    /// The `Timing` this worker was started with. Test-only: see the field's
+    /// doc comment.
+    #[cfg(test)]
+    pub(crate) fn started_with(&self) -> Timing {
+        self.started_with
     }
 
     pub fn engine(&self) -> &SyncEngine {
@@ -234,6 +278,13 @@ impl Worker {
     /// the user can fix.
     pub fn soon(&self) {
         let _ = self.tx.send(Msg::Soon);
+    }
+
+    /// The device settings' `sync_interval_minutes` changed. Forwarded to the
+    /// running schedule, which leaves a pending backoff retry alone (see
+    /// `Schedule::set_interval`).
+    pub fn set_interval(&self, interval: Option<Duration>) {
+        let _ = self.tx.send(Msg::Interval(interval));
     }
 
     /// Runs a pass now and waits for it, whatever the schedule says. This is
@@ -281,6 +332,7 @@ impl Context {
                 Ok(Msg::Stop) | Err(RecvTimeoutError::Disconnected) => return,
                 Ok(Msg::Saved) => schedule.saved(Instant::now()),
                 Ok(Msg::Soon) => schedule.soon(Instant::now()),
+                Ok(Msg::Interval(interval)) => schedule.set_interval(interval, Instant::now()),
                 Ok(Msg::Now(reply)) => {
                     let _ = reply.send(self.pass(&mut schedule));
                 }
@@ -328,7 +380,7 @@ mod tests {
         Timing {
             debounce: 2 * S,
             max_debounce: 10 * S,
-            interval: 60 * S,
+            interval: Some(60 * S),
             backoff_base: 5 * S,
             backoff_max: 40 * S,
         }
@@ -467,5 +519,87 @@ mod tests {
         let (mut schedule, start) = schedule();
         schedule.failed(start, &RemoteError::Other("odd".into()).into());
         assert_eq!(schedule.deadline(), Some(start + 5 * S));
+    }
+
+    /// `interval: None`: the startup pass is still due, and there is no
+    /// periodic deadline afterwards — but a save still schedules a pass.
+    #[test]
+    fn no_interval_has_no_periodic_pass_but_a_save_still_schedules_one() {
+        let no_interval = Timing {
+            interval: None,
+            ..timing()
+        };
+        let start = Instant::now();
+        let mut schedule = Schedule::new(no_interval, start);
+        assert_eq!(schedule.deadline(), Some(start), "the startup pass");
+
+        schedule.succeeded(start);
+        assert_eq!(schedule.deadline(), None, "no periodic deadline");
+
+        schedule.saved(start + 5 * S);
+        assert_eq!(schedule.deadline(), Some(start + 7 * S));
+    }
+
+    #[test]
+    fn set_interval_moves_the_deadline() {
+        let (mut schedule, start) = schedule();
+        schedule.succeeded(start);
+        assert_eq!(schedule.deadline(), Some(start + 60 * S));
+
+        schedule.set_interval(Some(10 * S), start + 5 * S);
+        assert_eq!(schedule.deadline(), Some(start + 15 * S));
+
+        schedule.set_interval(None, start + 5 * S);
+        assert_eq!(schedule.deadline(), None);
+    }
+
+    /// A `set_interval` landing exactly when the startup pass is already due
+    /// must not cancel or delay it.
+    #[test]
+    fn set_interval_does_not_delay_a_pass_that_is_already_due() {
+        let (mut schedule, start) = schedule();
+        assert_eq!(schedule.deadline(), Some(start), "the startup pass is due");
+
+        schedule.set_interval(None, start);
+
+        assert_eq!(schedule.deadline(), Some(start));
+    }
+
+    /// With `interval: None`, a failed pass still schedules its own backoff
+    /// retry (D8): only a *successful* pass leaves no periodic deadline.
+    #[test]
+    fn a_failed_pass_still_backs_off_with_no_interval() {
+        let no_interval = Timing {
+            interval: None,
+            ..timing()
+        };
+        let start = Instant::now();
+        let mut schedule = Schedule::new(no_interval, start);
+        schedule.succeeded(start);
+        assert_eq!(schedule.deadline(), None);
+
+        schedule.failed(start, &transient());
+        assert_eq!(schedule.deadline(), Some(start + 5 * S));
+    }
+
+    /// `set_interval` during a pending backoff retry must not cancel it
+    /// (`None`) or bring it forward past the backoff: it only stores the new
+    /// interval, which the next `succeeded` applies.
+    #[test]
+    fn set_interval_during_a_backoff_keeps_the_pending_retry() {
+        let (mut schedule, start) = schedule();
+        schedule.failed(start, &transient());
+        assert_eq!(schedule.deadline(), Some(start + 5 * S));
+
+        schedule.set_interval(None, start + S);
+        assert_eq!(
+            schedule.deadline(),
+            Some(start + 5 * S),
+            "the backoff retry must survive"
+        );
+
+        // The next success applies the new interval.
+        schedule.succeeded(start + 5 * S);
+        assert_eq!(schedule.deadline(), None);
     }
 }

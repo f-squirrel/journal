@@ -30,7 +30,7 @@ use super::*;
 use crate::VaultState;
 
 const PASSPHRASE: &str = "correct horse";
-const COMMANDS: [&str; 12] = [
+const COMMANDS: [&str; 14] = [
     "has_vault",
     "unlock",
     "lock",
@@ -38,6 +38,8 @@ const COMMANDS: [&str; 12] = [
     "get_entry",
     "save_entry",
     "delete_entry",
+    "get_settings",
+    "update_settings",
     "list_providers",
     "connect_remote",
     "disconnect_remote",
@@ -289,7 +291,7 @@ fn timing() -> Timing {
     Timing {
         debounce: Duration::from_secs(5),
         max_debounce: Duration::from_secs(10),
-        interval: Duration::from_secs(3600),
+        interval: Some(Duration::from_secs(3600)),
         backoff_base: Duration::from_secs(5),
         backoff_max: Duration::from_secs(5),
     }
@@ -335,6 +337,8 @@ impl Rig {
                 crate::get_entry,
                 crate::save_entry,
                 crate::delete_entry,
+                crate::settings::get_settings,
+                crate::settings::update_settings,
                 list_providers,
                 connect_remote,
                 disconnect_remote,
@@ -356,6 +360,9 @@ impl Rig {
             vault: Mutex::new(None),
             generation: std::sync::atomic::AtomicU64::new(0),
         });
+        app.manage(Arc::new(crate::settings::DeviceSettingsState::load(
+            dir.join("device-settings.json"),
+        )));
         let handle = app.handle().clone();
         let events = Arc::new(Recorder::default());
         let control = Arc::new(
@@ -441,6 +448,14 @@ impl Rig {
 
     fn status(&self) -> Value {
         self.ok("sync_status", json!({}))
+    }
+
+    fn get_settings(&self) -> Value {
+        self.ok("get_settings", json!({}))
+    }
+
+    fn update_settings(&self, patch: Value) -> Result<Value, Value> {
+        self.invoke("update_settings", json!({ "patch": patch }))
     }
 
     fn titles(&self) -> Vec<String> {
@@ -1115,4 +1130,86 @@ fn a_pass_stuck_on_the_network_does_not_hold_up_the_vault() {
 
     gated.set_open(true);
     pass.join().unwrap().unwrap();
+}
+
+/// `SyncControl::set_interval` called before a worker exists (before the
+/// first `connect`) is picked up by the worker `connect` starts: `install`
+/// reads the stored interval under the same `lifecycle` lock `set_interval`
+/// stores it under, so a change cannot land in between.
+#[test]
+fn set_interval_before_connecting_is_picked_up_by_the_worker_that_starts() {
+    let rig = Rig::new(Arc::new(MemoryRemote::new()));
+
+    rig.control.set_interval(Some(Duration::from_secs(42)));
+    rig.connect();
+
+    assert_eq!(
+        rig.control
+            .running_worker_timing_for_test()
+            .expect("a worker is running")
+            .interval,
+        Some(Duration::from_secs(42))
+    );
+}
+
+/// The same, for a worker `resume` starts at launch rather than `connect`.
+#[test]
+fn set_interval_before_resuming_is_picked_up_by_the_worker_that_starts() {
+    let remote = Arc::new(MemoryRemote::new());
+    let rig = Rig::new(remote.clone());
+    rig.unlock();
+    FileCredentialStore::new(rig.dir.join("config").join("login"))
+        .save(&Credential::new("fake", RefreshToken::new("refresh")))
+        .unwrap();
+
+    rig.control.set_interval(Some(Duration::from_secs(17)));
+    rig.control.resume();
+
+    assert_eq!(
+        rig.control
+            .running_worker_timing_for_test()
+            .expect("a worker is running")
+            .interval,
+        Some(Duration::from_secs(17))
+    );
+}
+
+/// The journal half of settings syncs like any other blob, and a conflict on
+/// it merges per field (the resolver's `SETTINGS_BLOB` dispatch): two devices
+/// each change a different journal field, and both end up with both changes.
+#[test]
+fn two_devices_changing_different_journal_settings_both_end_up_with_both() {
+    let remote = Arc::new(MemoryRemote::new());
+    let laptop = Rig::new(remote.clone());
+    laptop.unlock();
+    laptop.connect();
+    let phone = Rig::new(remote.clone());
+    phone.connect();
+    phone.unlock();
+
+    laptop
+        .update_settings(json!({ "time_format": "h24" }))
+        .unwrap();
+    laptop.ok("sync_now", json!({})); // pushes the laptop's change
+
+    phone
+        .update_settings(json!({ "week_starts_on": "monday" }))
+        .unwrap();
+    // The phone's push loses the precondition race to the laptop's: this
+    // pass pulls the laptop's version, conflicts, and merges the two locally
+    // (`VaultResolver::resolve` dispatching `SETTINGS_BLOB` to
+    // `merge_journal_settings`). The merge write is only marked dirty here;
+    // it needs its own pass to actually reach the remote.
+    phone.ok("sync_now", json!({}));
+    phone.ok("sync_now", json!({})); // pushes the merged result
+
+    laptop.ok("sync_now", json!({})); // pulls the merged result
+
+    let laptop_settings = laptop.get_settings();
+    assert_eq!(laptop_settings["time_format"], "h24");
+    assert_eq!(laptop_settings["week_starts_on"], "monday");
+
+    let phone_settings = phone.get_settings();
+    assert_eq!(phone_settings["time_format"], "h24");
+    assert_eq!(phone_settings["week_starts_on"], "monday");
 }

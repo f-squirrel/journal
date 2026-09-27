@@ -225,6 +225,16 @@ pub struct SyncControl {
     /// Connecting, reconnecting and disconnecting take turns. Not held while
     /// waiting for the browser, which can take minutes.
     lifecycle: Mutex<()>,
+    /// The `Timing` a worker started from here uses, kept current by
+    /// `set_interval` for workers started later (on connect or resume) and
+    /// read by `install` under the same `lifecycle` lock a running worker's
+    /// update is sent under (see `set_interval`'s doc comment).
+    timing: Mutex<Timing>,
+    /// Test-only: how many times `set_interval` was called, so a test can
+    /// check `settings::DeviceSettingsState::update` skips the call when the
+    /// interval did not change.
+    #[cfg(test)]
+    set_interval_calls: std::sync::atomic::AtomicUsize,
 }
 
 impl SyncControl {
@@ -237,11 +247,60 @@ impl SyncControl {
                 config.events.clone(),
             )?
         };
+        let timing = Mutex::new(config.timing);
         Ok(Self {
             config,
             coalescer,
             lifecycle: Mutex::new(()),
+            timing,
+            #[cfg(test)]
+            set_interval_calls: std::sync::atomic::AtomicUsize::new(0),
         })
+    }
+
+    /// The device settings' `sync_interval_minutes` changed. Stores the value
+    /// for a worker started later, and forwards it to one already running.
+    ///
+    /// Holds `turn()` (the `lifecycle` lock) for both steps: without it, a
+    /// change made while `resume` is starting a worker at launch could be
+    /// stored after `install` read the old value but sent before the worker
+    /// is in the slot, so no one would get it until the next restart.
+    /// `settings::DeviceSettingsState::update` only calls this when the
+    /// interval actually changed, so a slow `connect`/`disconnect` holding
+    /// this same lock is not on the path of every unrelated settings change.
+    pub fn set_interval(&self, interval: Option<Duration>) {
+        #[cfg(test)]
+        self.set_interval_calls
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let _turn = self.turn();
+        self.timing
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .interval = interval;
+        if let Some(worker) = self.config.slot.get() {
+            worker.set_interval(interval);
+        }
+    }
+
+    /// Test-only: how many times `set_interval` has been called.
+    #[cfg(test)]
+    pub(crate) fn set_interval_call_count_for_test(&self) -> usize {
+        self.set_interval_calls
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Test-only: the `Timing` `install` would hand a freshly started worker
+    /// right now.
+    #[cfg(test)]
+    pub(crate) fn current_timing_for_test(&self) -> Timing {
+        *self.timing.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Test-only: the `Timing` the currently running worker, if any, was
+    /// started with.
+    #[cfg(test)]
+    pub(crate) fn running_worker_timing_for_test(&self) -> Option<Timing> {
+        self.config.slot.get().map(|worker| worker.started_with())
     }
 
     /// The provider with this id, if the build offers it.
@@ -465,13 +524,16 @@ impl SyncControl {
         };
         let engine = SyncEngine::open(cfg.local.clone(), remote, cfg.state_path.clone(), on_status)
             .map_err(|e| e.to_string())?;
+        // Read under the same `turn()` lock `set_interval` stores under: see
+        // its doc comment for the race this closes.
+        let timing = *self.timing.lock().unwrap_or_else(PoisonError::into_inner);
         // A failure here leaves the credential already saved above and sync
         // off: the next launch's `resume` retries starting the worker.
         let worker = Worker::start(
             Arc::new(engine),
             Arc::new(VaultResolver::new(cfg.vault.clone())),
             cfg.events.clone(),
-            cfg.timing,
+            timing,
             poke.clone(),
             provider.name(),
         )
