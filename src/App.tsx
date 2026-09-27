@@ -12,6 +12,7 @@ import {
 import { getTheme } from "./theme";
 import { AppStateProvider, useAppState } from "./context/AppStateContext";
 import { ColorModeProvider, useColorMode } from "./context/ColorModeContext";
+import { SettingsProvider } from "./context/SettingsContext";
 import { ShortcutsProvider } from "./shortcuts/ShortcutsContext";
 import JournalLayout from "./components/JournalLayout";
 import CalendarPage from "./pages/CalendarPage";
@@ -85,8 +86,10 @@ function ThemedApp() {
 
 export default function App() {
   return (
-    <ColorModeProvider>
-      <ThemedApp />
-    </ColorModeProvider>
+    <SettingsProvider>
+      <ColorModeProvider>
+        <ThemedApp />
+      </ColorModeProvider>
+    </SettingsProvider>
   );
 }

@@ -1,17 +1,32 @@
 import { test, expect, type Page } from "./coverage";
 
-// The idle lock (`useIdleLock`, wired up in `AppStateProvider`) runs on a
-// 10 s timer, so these tests drive it with Playwright's fake clock rather than
-// waiting. `install` goes before `goto` so the page's timers are the fake ones
-// from the first script.
+// The idle lock (`useIdleLock`, wired up in `AppStateProvider`) times out
+// after `idle_lock_minutes` (a device setting, `DeviceSettings.idle_lock_minutes`)
+// — these tests seed it to 1 minute, via the fallback's
+// `localStorage["journal.fallback.device"]`, and drive it with Playwright's
+// fake clock rather than waiting a real minute. `install` goes before `goto`
+// so the page's timers are the fake ones from the first script.
 //
 // `runFor` fires every timer that falls inside the span, in order, which is
 // what a chain of debounce -> write -> lock needs. `fastForward` jumps and
 // fires each due timer once, the way a webview resumes after being suspended.
 
-const IDLE_MS = 10_000;
+const IDLE_MS = 60_000;
 
-async function login(page: Page, query = "") {
+async function seedDeviceSettings(page: Page, device: Record<string, unknown>) {
+  await page.addInitScript((json) => {
+    window.localStorage.setItem("journal.fallback.device", json);
+  }, JSON.stringify(device));
+}
+
+/// `idleLockMinutes` seeds `DeviceSettings.idle_lock_minutes`; `null` means
+/// "never lock on idle" (see the plan, D7's neighbour in `DeviceSettings`).
+async function login(
+  page: Page,
+  query = "",
+  idleLockMinutes: number | null = 1,
+) {
+  await seedDeviceSettings(page, { idle_lock_minutes: idleLockMinutes });
   await page.clock.install();
   await page.goto(`/${query}`);
   await page.getByLabel("Passphrase").fill("password123");
@@ -50,7 +65,7 @@ async function newDraft(page: Page, title: string, body: string) {
   await editor(page).fill(body);
 }
 
-test("locks after ten idle seconds and clears the decrypted titles", async ({
+test("locks after one idle minute and clears the decrypted titles", async ({
   page,
 }) => {
   await login(page);
@@ -75,13 +90,13 @@ test("does not lock a moment before the deadline", async ({ page }) => {
 test("pointer activity restarts the countdown", async ({ page }) => {
   await login(page);
 
-  await page.clock.runFor(6_000);
+  await page.clock.runFor(36_000);
   await page.mouse.move(300, 300);
-  await page.clock.runFor(6_000);
-  // Twelve seconds since login, but only six since the last movement.
+  await page.clock.runFor(36_000);
+  // 72 idle seconds since login, but only 36 since the last movement.
   await unlocked(page);
 
-  await page.clock.runFor(5_000);
+  await page.clock.runFor(30_000);
   await locked(page);
 });
 
@@ -92,13 +107,13 @@ test("typing counts as activity", async ({ page }) => {
   await page.getByRole("menuitem", { name: "Edit" }).click();
   await editor(page).click();
 
-  await page.clock.runFor(6_000);
+  await page.clock.runFor(36_000);
   await page.keyboard.press("x");
-  await page.clock.runFor(6_000);
+  await page.clock.runFor(36_000);
   await unlocked(page);
   await expect(editor(page)).toContainText("x");
 
-  await page.clock.runFor(5_000);
+  await page.clock.runFor(30_000);
   await locked(page);
 });
 
@@ -108,15 +123,15 @@ test("typing in the search field counts as activity", async ({ page }) => {
   await login(page);
   await page.getByLabel("Search entries").click();
 
-  await page.clock.runFor(6_000);
+  await page.clock.runFor(36_000);
   await page.keyboard.type("recipe");
-  await page.clock.runFor(6_000);
-  // Twelve seconds since login, but only six since the last keystroke — and
+  await page.clock.runFor(36_000);
+  // 72 idle seconds since login, but only 36 since the last keystroke — and
   // the search behind them ran.
   await unlocked(page);
   await expect(page.getByTestId("entry-row")).toHaveCount(1);
 
-  await page.clock.runFor(5_000);
+  await page.clock.runFor(30_000);
   await locked(page);
 });
 
@@ -197,4 +212,17 @@ test("manual log out flushes a pending draft first", async ({ page }) => {
   await expect(
     page.getByTestId("entry-row").filter({ hasText: "Typed then left" }),
   ).toBeVisible();
+});
+
+// WP4: `idle_lock_minutes: null` disables the idle lock entirely
+// (`AppStateContext` passes `authenticated && idle_lock_minutes !== null` as
+// `useIdleLock`'s `active`).
+test("a null idle lock never locks", async ({ page }) => {
+  await login(page, "", null);
+  await expect(page.getByText("First day back")).toBeVisible();
+
+  await page.clock.runFor(IDLE_MS * 10);
+
+  await unlocked(page);
+  await expect(page.getByText("First day back")).toBeVisible();
 });

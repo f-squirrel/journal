@@ -16,6 +16,7 @@ import type {
   SyncStatusPayload,
 } from "../types";
 import { useIdleLock } from "../hooks/useIdleLock";
+import { useSettings } from "./SettingsContext";
 import { byEntryDate } from "../utils/date";
 import {
   deleteEntry as deleteEntryBackend,
@@ -65,9 +66,6 @@ interface Mutation {
   header: EntryHeader | null;
   settled: number | null;
 }
-
-/// Short on purpose, so the lock is easy to see working. It becomes a setting.
-const IDLE_LOCK_MS = 10_000;
 
 /// How long the typing has to stop before a search runs. `search_entries`
 /// decrypts the whole journal to answer, so running one per keystroke would
@@ -139,6 +137,7 @@ interface AppStateContextValue {
 const AppStateContext = createContext<AppStateContextValue | null>(null);
 
 export function AppStateProvider({ children }: { children: ReactNode }) {
+  const { settings, reload: reloadSettings } = useSettings();
   const [authenticated, setAuthenticated] = useState(false);
   const [entries, setEntries] = useState<EntryHeader[]>([]);
   const [sync, setSync] = useState<SyncStatusPayload>(SYNC_OFF);
@@ -227,10 +226,18 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     // A backend message can carry a path; it must not outlive the session.
     setListError("");
     mutations.current.clear();
-    lockVault().catch(() => {
-      // Best-effort; nothing to lock into a UI state for.
-    });
-  }, []);
+    // The journal half of settings reads as defaults while locked (see the
+    // plan, "Commands"), but only once the vault is actually locked: Tauri
+    // runs commands in parallel, so firing the reload alongside `lockVault`
+    // races it — a `get_settings` that reaches the backend first would still
+    // see the vault unlocked and put the real values right back. Waiting for
+    // `lockVault` to settle (success or failure) closes that.
+    lockVault()
+      .catch(() => {
+        // Best-effort; nothing to lock into a UI state for.
+      })
+      .finally(() => void reloadSettings());
+  }, [reloadSettings]);
 
   // Unlike a manual log out, an idle lock is not something the user asked for,
   // so it does not go through over unsaved work: the pane is showing the error
@@ -247,7 +254,11 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     [flushAll, lockSession],
   );
 
-  useIdleLock(authenticated, lockWhenIdle, IDLE_LOCK_MS);
+  useIdleLock(
+    authenticated && settings.idle_lock_minutes !== null,
+    lockWhenIdle,
+    (settings.idle_lock_minutes ?? 0) * 60_000,
+  );
 
   useEffect(() => {
     if (!authenticated) return;
@@ -444,6 +455,9 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       login: async (passphrase) => {
         await unlockVault(passphrase);
         setAuthenticated(true);
+        // The journal half of settings comes back now that the vault can
+        // read it (see the plan, "Commands").
+        void reloadSettings();
       },
       // Locks whether or not the flush succeeded: the user asked, and a broken
       // backend must not be able to keep the journal open.
@@ -542,6 +556,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       registerFlush,
       recordMutation,
       loadEntry,
+      reloadSettings,
       listVersion,
       sync,
       syncLoaded,

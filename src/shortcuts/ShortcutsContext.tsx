@@ -4,10 +4,10 @@ import {
   useEffect,
   useMemo,
   useRef,
-  useState,
   type ReactNode,
 } from "react";
 import { tinykeys } from "tinykeys";
+import { useSettings } from "../context/SettingsContext";
 import { ACTIONS, RESERVED, type ActionId } from "./actions";
 import { formatBinding, hasModifier, isWellFormedBinding } from "./binding";
 
@@ -17,8 +17,6 @@ type Handler = () => void;
 /// default"; a present id with value `null` means "unbound"; a present id
 /// with a string means that chord instead.
 type Overrides = Partial<Record<ActionId, string | null>>;
-
-const STORAGE_KEY = "journal.shortcuts";
 
 interface ShortcutsContextValue {
   bindingFor(id: ActionId): string | null;
@@ -42,63 +40,51 @@ function effectiveOf(overrides: Overrides): Record<ActionId, string | null> {
   return result;
 }
 
-/// Reads `localStorage["journal.shortcuts"]` once, defensively: this is a
-/// preference file, not a format with a migration path, so anything that
-/// doesn't look right is dropped rather than repaired. An id not in `ACTIONS`
-/// is dropped. A value is kept only if it's `null` (an explicit unbind) or a
-/// string that is well-shaped (`isWellFormedBinding`), carries a real
-/// modifier (`hasModifier`) and isn't `RESERVED` — the checks `setBinding`
-/// itself enforces on a fresh rebind. An override whose chord another action
-/// also ends up on is stored as unbound instead, so no chord ever fires one
-/// action while the dialog shows it on two. `JSON.parse` or storage access
-/// throwing (bad JSON, a private-mode browser) yields no overrides at all.
-function readStoredOverrides(): Overrides {
-  if (typeof window === "undefined") return {};
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (raw === null) return {};
-    const parsed: unknown = JSON.parse(raw);
-    if (
-      typeof parsed !== "object" ||
-      parsed === null ||
-      Array.isArray(parsed)
-    ) {
-      return {};
-    }
-    const result: Overrides = {};
-    for (const [id, value] of Object.entries(
-      parsed as Record<string, unknown>,
-    )) {
-      if (!(id in ACTIONS)) continue;
-      const actionId = id as ActionId;
-      if (value === null) {
-        result[actionId] = null;
-      } else if (
-        typeof value === "string" &&
-        isWellFormedBinding(value) &&
-        hasModifier(value) &&
-        !RESERVED.includes(value)
-      ) {
-        result[actionId] = value;
-      }
-    }
-    const effective = effectiveOf(result);
-    for (const id of Object.keys(result) as ActionId[]) {
-      const b = result[id];
-      if (
-        b != null &&
-        (Object.keys(ACTIONS) as ActionId[]).some(
-          (other) => other !== id && effective[other] === b,
-        )
-      ) {
-        result[id] = null;
-        effective[id] = null;
-      }
-    }
-    return result;
-  } catch {
+/// Sanitises `useSettings().settings.shortcuts` (the device setting), fed in
+/// as `unknown` because it crosses `invoke`/the fallback and is opaque to
+/// Rust beyond size limits (see the plan, `DeviceSettings.shortcuts`) — the
+/// action registry and its chord rules live only here. Defensive like a
+/// preference file with no migration path: anything that doesn't look right
+/// is dropped rather than repaired. An id not in `ACTIONS` is dropped. A
+/// value is kept only if it's `null` (an explicit unbind) or a string that is
+/// well-shaped (`isWellFormedBinding`), carries a real modifier
+/// (`hasModifier`) and isn't `RESERVED` — the checks `setBinding` itself
+/// enforces on a fresh rebind. An override whose chord another action also
+/// ends up on is sanitised to unbound instead, so no chord ever fires one
+/// action while the dialog shows it on two.
+function sanitizeOverrides(raw: unknown): Overrides {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
     return {};
   }
+  const result: Overrides = {};
+  for (const [id, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!(id in ACTIONS)) continue;
+    const actionId = id as ActionId;
+    if (value === null) {
+      result[actionId] = null;
+    } else if (
+      typeof value === "string" &&
+      isWellFormedBinding(value) &&
+      hasModifier(value) &&
+      !RESERVED.includes(value)
+    ) {
+      result[actionId] = value;
+    }
+  }
+  const effective = effectiveOf(result);
+  for (const id of Object.keys(result) as ActionId[]) {
+    const b = result[id];
+    if (
+      b != null &&
+      (Object.keys(ACTIONS) as ActionId[]).some(
+        (other) => other !== id && effective[other] === b,
+      )
+    ) {
+      result[id] = null;
+      effective[id] = null;
+    }
+  }
+  return result;
 }
 
 /// One capture-phase `window` listener, built with `tinykeys`, dispatches
@@ -113,18 +99,33 @@ export function ShortcutsProvider({ children }: { children: ReactNode }) {
   // the provider itself to re-render or the listener to be torn down.
   const handlers = useRef(new Map<ActionId, Handler[]>());
 
-  const [overrides, setOverrides] = useState<Overrides>(readStoredOverrides);
+  const { settings, update } = useSettings();
+  // `settings.shortcuts` already reflects `confirmed ⊕ pending`
+  // (`SettingsContext`), so a rebind shows at once, and a refused one reverts
+  // on its own once the context re-fetches — no local state needed here.
+  const overrides = useMemo(
+    () => sanitizeOverrides(settings.shortcuts),
+    [settings.shortcuts],
+  );
+  // Tracks the latest overrides `setBinding`/`resetBinding`/`resetAll` should
+  // build `next` from. Assigned on every render (so it never falls behind
+  // `settings.shortcuts`), *and* right after every write (so two calls made
+  // back to back, before React has committed the render that `update`'s
+  // `setPending` will eventually cause, still see each other's change —
+  // reading the closed-over `overrides` instead would let the second call
+  // start from the same stale snapshot the first one did, and undo it).
+  const overridesRef = useRef(overrides);
+  overridesRef.current = overrides;
 
-  // Best effort, like the read: a private-mode browser or a full quota
-  // throws here, and that must cost only the persistence of these
-  // overrides — never the provider, which wraps the whole app.
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(overrides));
-    } catch {
-      // Keep the in-memory overrides; they just won't survive a reload.
-    }
-  }, [overrides]);
+  // Fire-and-forget: `update` queues the write and, on refusal, re-fetches
+  // and drops the optimistic patch by itself (`SettingsContext`). Nothing
+  // here needs to await it or show its own error for that.
+  const writeOverrides = (next: Overrides) => {
+    overridesRef.current = next;
+    update({ shortcuts: next as Record<string, string | null> }).catch(() => {
+      // Nothing to do here; see above.
+    });
+  };
 
   const effectiveBindings = useMemo(() => effectiveOf(overrides), [overrides]);
 
@@ -215,18 +216,17 @@ export function ShortcutsProvider({ children }: { children: ReactNode }) {
           const conflict = conflictFor(id, b);
           if (conflict) return conflict;
         }
-        setOverrides((prev) => {
-          // Storing a copy of the default would be indistinguishable from a
-          // deliberate override once it stops being the default (it never
-          // does today, but the registry isn't a promise it never will).
-          if (b === ACTIONS[id].default) {
-            if (!(id in prev)) return prev;
-            const next = { ...prev };
-            delete next[id];
-            return next;
-          }
-          return { ...prev, [id]: b };
-        });
+        // Storing a copy of the default would be indistinguishable from a
+        // deliberate override once it stops being the default (it never
+        // does today, but the registry isn't a promise it never will).
+        if (b === ACTIONS[id].default) {
+          if (!(id in overridesRef.current)) return null;
+          const next = { ...overridesRef.current };
+          delete next[id];
+          writeOverrides(next);
+        } else {
+          writeOverrides({ ...overridesRef.current, [id]: b });
+        }
         return null;
       },
       // Refused when another action has since taken the default chord (e.g.
@@ -238,17 +238,16 @@ export function ShortcutsProvider({ children }: { children: ReactNode }) {
           const conflict = conflictFor(id, b);
           if (conflict) return conflict;
         }
-        setOverrides((prev) => {
-          if (!(id in prev)) return prev;
-          const next = { ...prev };
+        if (id in overridesRef.current) {
+          const next = { ...overridesRef.current };
           delete next[id];
-          return next;
-        });
+          writeOverrides(next);
+        }
         return null;
       },
-      resetAll: () => setOverrides({}),
+      resetAll: () => writeOverrides({}),
     };
-  }, [effectiveBindings]);
+  }, [effectiveBindings, overrides, update]);
 
   return (
     <ShortcutsContext.Provider value={value}>

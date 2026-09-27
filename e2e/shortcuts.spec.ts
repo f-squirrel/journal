@@ -14,8 +14,8 @@ import { test, expect, type Page } from "./coverage";
 // above already worked before this plan. Both reach the page as ordinary
 // keydown events, so no synthetic dispatch is needed for them.
 
-async function login(page: Page) {
-  await page.goto("/");
+async function login(page: Page, query = "") {
+  await page.goto(`/${query}`);
   await page.getByLabel("Passphrase").fill("password123");
   await page.getByRole("button", { name: "Sign in" }).click();
   await expect(
@@ -284,19 +284,24 @@ test("the rail button opens the shortcuts dialog", async ({ page }) => {
   await expect(shortcutsDialog(page)).toBeVisible();
 });
 
-// WP4: overrides, stored as JSON under `localStorage["journal.shortcuts"]`
-// and read once at provider init. Each override is seeded with
-// `page.addInitScript`, which runs before any of the app's own scripts, so
-// the provider's first read sees it.
+// WP4: overrides are the `shortcuts` field of the device settings, in the
+// fallback's `localStorage["journal.fallback.device"]`
+// (`DeviceSettings.shortcuts`), read through `useSettings()` rather than a
+// dedicated storage key. Each override is seeded with `page.addInitScript`,
+// which runs before any of the app's own scripts, so the first `getSettings`
+// call sees it.
+
+async function seedDeviceSettings(page: Page, device: Record<string, unknown>) {
+  await page.addInitScript((json) => {
+    window.localStorage.setItem("journal.fallback.device", json);
+  }, JSON.stringify(device));
+}
 
 test("an override rebinds the action, and the default chord it replaced stops working", async ({
   page,
 }) => {
-  await page.addInitScript(() => {
-    window.localStorage.setItem(
-      "journal.shortcuts",
-      JSON.stringify({ "entry.new": "$mod+Shift+KeyN" }),
-    );
+  await seedDeviceSettings(page, {
+    shortcuts: { "entry.new": "$mod+Shift+KeyN" },
   });
   await login(page);
 
@@ -308,12 +313,7 @@ test("an override rebinds the action, and the default chord it replaced stops wo
 });
 
 test("a null override unbinds the action entirely", async ({ page }) => {
-  await page.addInitScript(() => {
-    window.localStorage.setItem(
-      "journal.shortcuts",
-      JSON.stringify({ "entry.new": null }),
-    );
-  });
+  await seedDeviceSettings(page, { shortcuts: { "entry.new": null } });
   await login(page);
 
   await page.keyboard.press("ControlOrMeta+n");
@@ -325,7 +325,7 @@ test("garbage JSON in storage is ignored and every default still works", async (
   page,
 }) => {
   await page.addInitScript(() => {
-    window.localStorage.setItem("journal.shortcuts", "not json");
+    window.localStorage.setItem("journal.fallback.device", "not json");
   });
   await login(page);
 
@@ -337,11 +337,8 @@ test("garbage JSON in storage is ignored and every default still works", async (
 test("an unknown action id and a non-string binding are dropped, and the known default still works", async ({
   page,
 }) => {
-  await page.addInitScript(() => {
-    window.localStorage.setItem(
-      "journal.shortcuts",
-      JSON.stringify({ nope: "x", "entry.new": 5 }),
-    );
+  await seedDeviceSettings(page, {
+    shortcuts: { nope: "x", "entry.new": 5 },
   });
   await login(page);
 
@@ -353,11 +350,8 @@ test("an unknown action id and a non-string binding are dropped, and the known d
 test("a stored override on an editor-owned chord is dropped", async ({
   page,
 }) => {
-  await page.addInitScript(() => {
-    window.localStorage.setItem(
-      "journal.shortcuts",
-      JSON.stringify({ "entry.new": "Alt+ArrowUp" }),
-    );
+  await seedDeviceSettings(page, {
+    shortcuts: { "entry.new": "Alt+ArrowUp" },
   });
   await login(page);
 
@@ -369,11 +363,8 @@ test("a stored override on an editor-owned chord is dropped", async ({
 test("a stored override that clashes with another action's chord is unbound, leaving that action on it", async ({
   page,
 }) => {
-  await page.addInitScript(() => {
-    window.localStorage.setItem(
-      "journal.shortcuts",
-      JSON.stringify({ "vault.lock": "$mod+KeyN" }),
-    );
+  await seedDeviceSettings(page, {
+    shortcuts: { "vault.lock": "$mod+KeyN" },
   });
   await login(page);
 
@@ -386,27 +377,32 @@ test("a stored override that clashes with another action's chord is unbound, lea
   ).toHaveText("—");
 });
 
-test("a storage write that throws doesn't take the app down", async ({
+// The old test drove a `localStorage.setItem` that threw (a full quota, a
+// private-mode browser); overrides now live behind `getSettings`, whose
+// backend equivalent is a settings load, so the same "the app still works
+// on broken storage" guarantee is exercised through `?fail=settings-load`
+// instead (see the plan, WP4 item 9): the app renders with
+// `LOAD_FAILED_SETTINGS` — default bindings, dark mode, and the idle lock
+// still active.
+test("a failed settings load doesn't take the app down: default bindings, dark mode, idle lock active", async ({
   page,
 }) => {
-  await page.addInitScript(() => {
-    // Only for this key: other modules persist their own settings too.
-    const setItem = Storage.prototype.setItem;
-    Storage.prototype.setItem = function (key, value) {
-      if (key === "journal.shortcuts") {
-        throw new DOMException("quota", "QuotaExceededError");
-      }
-      setItem.call(this, key, value);
-    };
-  });
-  await login(page);
-  await page.keyboard.press("ControlOrMeta+/");
+  // `LOAD_FAILED_SETTINGS` (`SettingsContext.tsx`): dark mode, default
+  // bindings, and `idle_lock_minutes: 5` — never `null`, so the lock stays
+  // on even though settings could not be read.
+  await page.clock.install();
+  await login(page, "?fail=settings-load");
 
-  await recordChord(page, "entry.new", "ControlOrMeta+Shift+n");
+  await page.keyboard.press("ControlOrMeta+n");
+  await expect(page).toHaveURL(/#\/entries\/[0-9a-f-]{36}$/);
 
+  const sidebar = page.getByTestId("sidebar");
   await expect(
-    shortcutRow(page, "entry.new").getByTestId("shortcut-keys"),
-  ).toContainText(/Shift|⇧/);
+    sidebar.getByRole("button", { name: "Light mode" }),
+  ).toBeVisible();
+
+  await page.clock.runFor(5 * 60_000);
+  await expect(page.getByLabel("Passphrase")).toBeVisible();
 });
 
 test("the shortcuts dialog works at phone width, opened from the drawer", async ({

@@ -1,41 +1,45 @@
-import {
-  createContext,
-  useContext,
-  useEffect,
-  useMemo,
-  useState,
-  type ReactNode,
-} from "react";
-import type { PaletteMode } from "@mui/material";
+import { createContext, useContext, useMemo, type ReactNode } from "react";
+import { useMediaQuery, type PaletteMode } from "@mui/material";
+import type { ColorMode } from "../types";
+import { useSettings } from "./SettingsContext";
 
-const STORAGE_KEY = "journal.colorMode";
+// Colour mode is now a device setting (`color_mode`), not
+// `localStorage["journal.colorMode"]`: see the plan, D3. `system` resolves
+// here, through the OS media query, rather than in the backend, which has no
+// notion of it.
 
 interface ColorModeContextValue {
+  /// What the theme should actually use: `system` already resolved.
   mode: PaletteMode;
+  /// The stored three-way value, for the Settings page.
+  setting: ColorMode;
+  /// Writes an explicit `light` or `dark` — never `system` — so a manual
+  /// toggle always has a visible effect regardless of the OS setting.
   toggleMode: () => void;
 }
 
 const ColorModeContext = createContext<ColorModeContextValue | null>(null);
 
-function readStoredMode(): PaletteMode {
-  if (typeof window === "undefined") return "dark";
-  const stored = window.localStorage.getItem(STORAGE_KEY);
-  return stored === "light" || stored === "dark" ? stored : "dark";
-}
-
 export function ColorModeProvider({ children }: { children: ReactNode }) {
-  const [mode, setMode] = useState<PaletteMode>(readStoredMode);
-
-  useEffect(() => {
-    window.localStorage.setItem(STORAGE_KEY, mode);
-  }, [mode]);
+  const { settings, update } = useSettings();
+  const prefersDark = useMediaQuery("(prefers-color-scheme: dark)");
+  const setting = settings.color_mode;
+  const mode: PaletteMode =
+    setting === "system" ? (prefersDark ? "dark" : "light") : setting;
 
   const value = useMemo<ColorModeContextValue>(
     () => ({
       mode,
-      toggleMode: () => setMode((prev) => (prev === "dark" ? "light" : "dark")),
+      setting,
+      toggleMode: () => {
+        // Fire-and-forget: a refusal re-fetches inside `SettingsContext` and
+        // the rail button reverts on its own once `settings` updates.
+        update({ color_mode: mode === "dark" ? "light" : "dark" }).catch(() => {
+          // Nothing to do here; see above.
+        });
+      },
     }),
-    [mode],
+    [mode, setting, update],
   );
 
   return (

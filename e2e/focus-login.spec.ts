@@ -5,7 +5,11 @@ import { test, expect, type Page } from "./coverage";
 // sign-in, and after joining a journal from the cloud. The last two are the
 // places a disabled button would otherwise drop focus to the body.
 
-const IDLE_MS = 10_000;
+// The idle lock now times out after the device setting `idle_lock_minutes`
+// (WP4, `.claude/plans/device-and-journal-config.md`) rather than a
+// hard-coded 10 s; these two tests seed it to 1 minute through the
+// fallback's `localStorage["journal.fallback.device"]`.
+const IDLE_MS = 60_000;
 
 function passphrase(page: Page) {
   return page.getByLabel("Passphrase", { exact: true });
@@ -22,8 +26,14 @@ async function signIn(page: Page) {
 }
 
 /// `install` goes before `goto` so the page's timers are the fake ones from
-/// the first script (the idle lock runs on a 10 s timer).
+/// the first script (the idle lock runs on a 1 minute timer, seeded below).
 async function login(page: Page, query = "") {
+  await page.addInitScript(() => {
+    window.localStorage.setItem(
+      "journal.fallback.device",
+      JSON.stringify({ idle_lock_minutes: 1 }),
+    );
+  });
   await page.clock.install();
   await page.goto(`/${query}`);
   await signIn(page);

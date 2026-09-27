@@ -1,8 +1,12 @@
 import type {
+  DeviceSettings,
   EntryHeader,
   JournalEntry,
+  JournalSettings,
   ProviderInfo,
   SearchMatch,
+  Settings,
+  SettingsPatch,
   SyncStatusPayload,
 } from "../types";
 import { byEntryDate } from "../utils/date";
@@ -61,7 +65,8 @@ function toHeader(entry: JournalEntry): EntryHeader {
 //                       resolves true from then on
 //   ?fail=<ops>         comma-separated: has, unlock, list, get, save, delete,
 //                       search, export, connect, sync, resolve (see
-//                       "simulated sync" below)
+//                       "simulated sync" below), settings (updateSettings
+//                       rejects), settings-load (getSettings rejects)
 //   ?failMessage=<text> the rejection message (default "Injected fault.")
 //   ?failAfter=<n>      successful calls of each failing op before ?fail= bites
 //                       (default 0: fail from the first call), so a listing
@@ -71,7 +76,9 @@ function toHeader(entry: JournalEntry): EntryHeader {
 //                       unbounded, i.e. every call from ?failAfter= on fails).
 //                       ?fail=save&failTimes=1 is a one-shot fault: the next
 //                       save of the same op succeeds.
-//   ?slow=<ops>         the named ops resolve after SLOW_MS
+//   ?slow=<ops>         the named ops resolve after SLOW_MS. settings-first
+//                       delays only the first updateSettings call after page
+//                       load, unlike settings, which delays every call
 //   ?sync=<mode>        start connected to a provider: on, pull, conflict,
 //                       busy, reauth, key_mismatch (see below)
 //
@@ -89,7 +96,10 @@ type Op =
   | "export"
   | "connect"
   | "sync"
-  | "resolve";
+  | "resolve"
+  | "settings"
+  | "settings-load"
+  | "settings-first";
 
 const SLOW_MS = 1200;
 
@@ -156,7 +166,16 @@ async function run<T>(op: Op, work: () => T): Promise<T> {
   // out of `VaultState` at the start, so a write already running when the
   // lock lands still completes.
   // Connecting needs no vault, and neither does any part of sync.
-  if (locked && op !== "has" && op !== "unlock" && op !== "connect") {
+  // `get_settings` reads the device half unconditionally and the journal
+  // half as defaults while locked (see `currentSettings`), so it is never
+  // refused here either.
+  if (
+    locked &&
+    op !== "has" &&
+    op !== "unlock" &&
+    op !== "connect" &&
+    op !== "settings-load"
+  ) {
     throw "vault is locked";
   }
   if (faults.slow.has(op)) {
@@ -598,4 +617,336 @@ export function onSyncStatus(
 export function onSyncChanged(handler: () => void): () => void {
   changedListeners.add(handler);
   return () => changedListeners.delete(handler);
+}
+
+// --- settings ----------------------------------------------------------
+//
+// Mirrors the split in `journal-settings` (see the plan): the device half
+// persists to `localStorage["journal.fallback.device"]`, sanitised field by
+// field on read so garbage in storage falls back to a default rather than
+// breaking the app — the same tolerance `decode_tolerant` gives the real
+// backend. The journal half lives only in memory, like `fallbackEntries`,
+// and reads as defaults while `locked`, matching `get_settings`.
+
+const DEVICE_STORAGE_KEY = "journal.fallback.device";
+
+const DEFAULT_DEVICE_SETTINGS: DeviceSettings = {
+  color_mode: "system",
+  idle_lock_minutes: 5,
+  sync_interval_minutes: 1,
+  shortcuts: {},
+};
+
+const DEFAULT_JOURNAL_SETTINGS: JournalSettings = {
+  week_starts_on: "sunday",
+  time_format: "locale",
+  entry_template: "",
+};
+
+const COLOR_MODES = new Set(["system", "light", "dark"]);
+const WEEK_STARTS = new Set(["sunday", "monday", "saturday"]);
+const TIME_FORMATS = new Set(["locale", "h12", "h24"]);
+
+/// `undefined` means "not present or not valid": the caller falls back to the
+/// field's default rather than failing the whole read, the way a single bad
+/// field in a stored blob does not take the others down with it.
+function readMinutesOrDefault(
+  value: unknown,
+  max: number,
+): number | null | undefined {
+  if (value === null) return null;
+  if (
+    typeof value === "number" &&
+    Number.isInteger(value) &&
+    value >= 1 &&
+    value <= max
+  ) {
+    return value;
+  }
+  return undefined;
+}
+
+/// `idle_lock_minutes`/`sync_interval_minutes`/`shortcuts`' size limits are
+/// specified in bytes (see the plan, "Validation bounds"), not UTF-16 code
+/// units — a chord is ASCII in practice, but an id or value that wasn't
+/// would otherwise pass a `.length` check the real backend refuses.
+function byteLength(s: string): number {
+  return new TextEncoder().encode(s).length;
+}
+
+/// Tolerant, for `sanitizeDevice` (loading from storage): drops whatever
+/// doesn't fit rather than failing the whole read, and caps at 64 entries
+/// the same way the strict path does (see `assertShortcuts`), so a corrupted
+/// or hand-edited `localStorage` value can't grow the map without bound.
+function readShortcutsOrDefault(
+  value: unknown,
+): Record<string, string | null> | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  const result: Record<string, string | null> = {};
+  for (const [id, chord] of Object.entries(
+    value as Record<string, unknown>,
+  ).slice(0, 64)) {
+    if (typeof id !== "string" || byteLength(id) > 64) continue;
+    if (chord === null) {
+      result[id] = null;
+    } else if (typeof chord === "string" && byteLength(chord) <= 64) {
+      result[id] = chord;
+    }
+  }
+  return result;
+}
+
+/// Strict, for `applyPatch`: like Rust's `apply_patch`, an invalid entry
+/// refuses the whole patch rather than being dropped — the 64-entry cap is
+/// checked before looking at any entry, so a patch just over the limit is
+/// refused outright rather than silently truncated.
+function assertShortcuts(value: unknown): Record<string, string | null> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw "invalid value for shortcuts";
+  }
+  const entries = Object.entries(value as Record<string, unknown>);
+  if (entries.length > 64) throw "shortcuts: at most 64 entries";
+  const result: Record<string, string | null> = {};
+  for (const [id, chord] of entries) {
+    if (byteLength(id) > 64) {
+      throw `shortcuts: "${id}" is too long`;
+    }
+    if (chord === null) {
+      result[id] = null;
+    } else if (typeof chord === "string" && byteLength(chord) <= 64) {
+      result[id] = chord;
+    } else {
+      throw `shortcuts: invalid value for "${id}"`;
+    }
+  }
+  return result;
+}
+
+/// Tolerant, like `decode_tolerant`: a missing or malformed field takes its
+/// default, one field at a time, rather than the whole read failing.
+function sanitizeDevice(raw: unknown): DeviceSettings {
+  if (typeof raw !== "object" || raw === null) {
+    return { ...DEFAULT_DEVICE_SETTINGS };
+  }
+  const obj = raw as Record<string, unknown>;
+  const colorMode =
+    typeof obj.color_mode === "string" && COLOR_MODES.has(obj.color_mode)
+      ? (obj.color_mode as DeviceSettings["color_mode"])
+      : DEFAULT_DEVICE_SETTINGS.color_mode;
+  const idleLockMinutes = readMinutesOrDefault(obj.idle_lock_minutes, 240);
+  const syncIntervalMinutes = readMinutesOrDefault(
+    obj.sync_interval_minutes,
+    1440,
+  );
+  const shortcuts =
+    readShortcutsOrDefault(obj.shortcuts) ?? DEFAULT_DEVICE_SETTINGS.shortcuts;
+  return {
+    color_mode: colorMode,
+    idle_lock_minutes:
+      idleLockMinutes === undefined
+        ? DEFAULT_DEVICE_SETTINGS.idle_lock_minutes
+        : idleLockMinutes,
+    sync_interval_minutes:
+      syncIntervalMinutes === undefined
+        ? DEFAULT_DEVICE_SETTINGS.sync_interval_minutes
+        : syncIntervalMinutes,
+    shortcuts,
+  };
+}
+
+function loadDeviceSettings(): DeviceSettings {
+  if (typeof window === "undefined") return { ...DEFAULT_DEVICE_SETTINGS };
+  try {
+    const raw = window.localStorage.getItem(DEVICE_STORAGE_KEY);
+    if (raw === null) return { ...DEFAULT_DEVICE_SETTINGS };
+    return sanitizeDevice(JSON.parse(raw));
+  } catch {
+    return { ...DEFAULT_DEVICE_SETTINGS };
+  }
+}
+
+function saveDeviceSettings(device: DeviceSettings) {
+  try {
+    window.localStorage.setItem(DEVICE_STORAGE_KEY, JSON.stringify(device));
+  } catch {
+    // Best effort, as elsewhere in this file: the in-memory copy still
+    // answers for the rest of the session, it just won't survive a reload.
+  }
+}
+
+let deviceSettings: DeviceSettings = loadDeviceSettings();
+let journalSettings: JournalSettings = { ...DEFAULT_JOURNAL_SETTINGS };
+
+const DEVICE_KEYS = new Set<string>([
+  "color_mode",
+  "idle_lock_minutes",
+  "sync_interval_minutes",
+  "shortcuts",
+]);
+const JOURNAL_KEYS = new Set<string>([
+  "week_starts_on",
+  "time_format",
+  "entry_template",
+]);
+
+/// Strict, like `apply_patch`: an unknown key or a value that fails
+/// validation refuses the whole patch, and nothing is written.
+function applyPatch(patch: SettingsPatch): {
+  devicePatch: Partial<DeviceSettings> | null;
+  journalPatch: Partial<JournalSettings> | null;
+  /// True when the patch names any journal key, even one whose value would
+  /// come out unchanged — the locked check goes by this, not by whether the
+  /// journal half actually changed (see the plan, Commands, step 2).
+  namesJournal: boolean;
+} {
+  let devicePatch: Record<string, unknown> | null = null;
+  let journalPatch: Record<string, unknown> | null = null;
+  let namesJournal = false;
+
+  for (const [key, value] of Object.entries(patch)) {
+    if (JOURNAL_KEYS.has(key)) {
+      namesJournal = true;
+      journalPatch ??= {};
+      if (key === "week_starts_on") {
+        if (typeof value !== "string" || !WEEK_STARTS.has(value)) {
+          throw `invalid value for week_starts_on: ${JSON.stringify(value)}`;
+        }
+        journalPatch[key] = value;
+      } else if (key === "time_format") {
+        if (typeof value !== "string" || !TIME_FORMATS.has(value)) {
+          throw `invalid value for time_format: ${JSON.stringify(value)}`;
+        }
+        journalPatch[key] = value;
+      } else if (key === "entry_template") {
+        if (typeof value !== "string" || value.length > 10_000) {
+          throw "the entry template must be at most 10000 characters";
+        }
+        journalPatch[key] = value;
+      }
+    } else if (DEVICE_KEYS.has(key)) {
+      devicePatch ??= {};
+      if (key === "color_mode") {
+        if (typeof value !== "string" || !COLOR_MODES.has(value)) {
+          throw `invalid value for color_mode: ${JSON.stringify(value)}`;
+        }
+        devicePatch[key] = value;
+      } else if (key === "idle_lock_minutes") {
+        if (value !== null && !readMinutesOrDefault(value, 240)) {
+          throw "the idle lock must be between 1 and 240 minutes";
+        }
+        devicePatch[key] = value;
+      } else if (key === "sync_interval_minutes") {
+        if (value !== null && !readMinutesOrDefault(value, 1440)) {
+          throw "the sync interval must be between 1 and 1440 minutes";
+        }
+        devicePatch[key] = value;
+      } else if (key === "shortcuts") {
+        devicePatch[key] = assertShortcuts(value);
+      }
+    } else {
+      throw `unknown setting: "${key}"`;
+    }
+  }
+
+  return {
+    devicePatch: devicePatch as Partial<DeviceSettings> | null,
+    journalPatch: journalPatch as Partial<JournalSettings> | null,
+    namesJournal,
+  };
+}
+
+function currentSettings(): Settings {
+  return {
+    ...deviceSettings,
+    ...(locked ? DEFAULT_JOURNAL_SETTINGS : journalSettings),
+  };
+}
+
+/// Count of `getSettings` calls, for `settings-store.spec.ts` to check that
+/// `AppStateContext` actually reloads after a lock and after an unlock,
+/// rather than just reading its own settled state — which would pass even
+/// without those `reload()` calls, since the fallback's journal half never
+/// leaves memory.
+let settingsLoads = 0;
+
+export function getSettings(): Promise<Settings> {
+  settingsLoads++;
+  return run("settings-load", currentSettings);
+}
+
+/// Whether the next `updateSettings` call is the first one since page load,
+/// for `?slow=settings-first`. Module-scope, so it resets on a reload like
+/// every other piece of state here.
+let firstUpdateSettings = true;
+
+/// Every `updateSettings` call that reached this function, in the order it
+/// started running, with a real timestamp — not when `SettingsContext`
+/// queued it, which under `?slow=settings-first` can be much later than when
+/// the user acted. `settings-store.spec.ts` reads this (via
+/// `__settingsTestHooks`, below) to check that a second update is not sent
+/// until the first has settled.
+const settingsCalls: { patch: SettingsPatch; at: number }[] = [];
+
+export async function updateSettings(patch: SettingsPatch): Promise<Settings> {
+  settingsCalls.push({ patch, at: Date.now() });
+  const first = firstUpdateSettings;
+  firstUpdateSettings = false;
+
+  if (
+    faults.slow.has("settings") ||
+    (first && faults.slow.has("settings-first"))
+  ) {
+    await new Promise((resolve) => setTimeout(resolve, SLOW_MS));
+  }
+  if (faults.fail.has("settings")) {
+    const seen = failedCalls.get("settings") ?? 0;
+    failedCalls.set("settings", seen + 1);
+    if (
+      seen >= faults.failAfter &&
+      seen < faults.failAfter + faults.failTimes
+    ) {
+      throw faults.failMessage;
+    }
+  }
+
+  const { devicePatch, journalPatch, namesJournal } = applyPatch(patch);
+  if (namesJournal && locked) throw "vault is locked";
+
+  if (journalPatch) journalSettings = { ...journalSettings, ...journalPatch };
+  if (devicePatch) {
+    deviceSettings = { ...deviceSettings, ...devicePatch };
+    saveDeviceSettings(deviceSettings);
+  }
+  return currentSettings();
+}
+
+// `settings-store.spec.ts` needs two things no UI exposes yet: the backend's
+// own settings, bypassing the frontend's optimistic overlay (`confirmed ⊕
+// pending` in `SettingsContext`), and a way to write a journal field, since
+// WP5's Settings page (which is what would otherwise do that) is out of
+// scope here. Both live only on `window`, and only in this DEV-only chunk —
+// `make check-no-fallback` greps the production bundle for other constants
+// in this file, so this never ships either.
+declare global {
+  interface Window {
+    __settingsTestHooks?: {
+      current(): Settings;
+      update(patch: SettingsPatch): Promise<Settings>;
+      calls: { patch: SettingsPatch; at: number }[];
+      /// Live count of `getSettings` calls (a function, not a number, so it
+      /// reflects calls made after this hook was installed).
+      loads(): number;
+    };
+  }
+}
+
+if (typeof window !== "undefined") {
+  window.__settingsTestHooks = {
+    current: currentSettings,
+    update: updateSettings,
+    calls: settingsCalls,
+    loads: () => settingsLoads,
+  };
 }

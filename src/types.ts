@@ -13,3 +13,15 @@ export type { SearchMatch } from "./bindings/SearchMatch";
 export type { SyncStatusPayload } from "./bindings/SyncStatusPayload";
 export type { SyncState } from "./bindings/SyncState";
 export type { ProviderInfo } from "./bindings/ProviderInfo";
+export type { Settings } from "./bindings/Settings";
+export type { DeviceSettings } from "./bindings/DeviceSettings";
+export type { JournalSettings } from "./bindings/JournalSettings";
+export type { ColorMode } from "./bindings/ColorMode";
+export type { WeekStart } from "./bindings/WeekStart";
+export type { TimeFormat } from "./bindings/TimeFormat";
+
+// Not generated: ts-rs has no Rust struct for the patch `update_settings`
+// takes (see the plan, "No generated patch type"). A patch carries only the
+// fields the user changed.
+import type { Settings } from "./bindings/Settings";
+export type SettingsPatch = Partial<Settings>;
