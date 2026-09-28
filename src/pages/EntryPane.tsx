@@ -148,8 +148,8 @@ function EntryPane({ id, draft }: { id: string; draft: boolean }) {
   const [deleteError, setDeleteError] = useState("");
   const [historyOpen, setHistoryOpen] = useState(false);
   // The live entry's `updated_at` as of the flush `openHistory` runs before
-  // opening the dialog — captured once, not a live `autosave.savedAt ??
-  // loadedAt` expression, so the precondition the restore uses matches what
+  // opening the dialog — captured once from `autosave.getBase()`, not read
+  // live, so the precondition the restore uses matches what
   // was actually flushed rather than whatever the pane happens to hold by the
   // time the user clicks Restore.
   const [historyBase, setHistoryBase] = useState<string | null>(null);
@@ -393,7 +393,10 @@ function EntryPane({ id, draft }: { id: string; draft: boolean }) {
     // A failed or stale save leaves its own error/notice on the pane; don't
     // open a restore against a base we're no longer sure of.
     if (autosave.hasUnsaved()) return;
-    setHistoryBase(autosave.savedAt ?? loadedAt);
+    // Read from the hook at this moment: `autosave.savedAt` is this render's
+    // value, from before the flush above, and is never reset by a restore or
+    // a refresh from disk.
+    setHistoryBase(autosave.getBase());
     setHistoryOpen(true);
   }
 

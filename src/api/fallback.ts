@@ -69,7 +69,8 @@ function toHeader(entry: JournalEntry): EntryHeader {
 //                       resolves true from then on
 //   ?fail=<ops>         comma-separated: has, unlock, list, get, save, delete,
 //                       history, restore, search, export, connect, sync,
-//                       save-media, get-media, adopt-media,
+//                       save-media, get-media, adopt-media, version
+//                       (a history preview),
 //                       resolve (see "simulated sync" below), settings
 //                       (updateSettings rejects), settings-load (getSettings
 //                       rejects)
@@ -100,6 +101,7 @@ type Op =
   | "save"
   | "delete"
   | "history"
+  | "version"
   | "restore"
   | "search"
   | "export"
@@ -383,7 +385,7 @@ export function getHistoryEntry(
   const found = (fallbackHistory.get(id) ?? []).find(
     (entry) => entry.updated_at === at,
   );
-  return run("get", () => found ?? null);
+  return run("version", () => found ?? null);
 }
 
 /// Mirrors `Vault::restore_history`: refuses (as not-found) when there is no

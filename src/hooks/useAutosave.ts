@@ -27,6 +27,10 @@ export interface Autosave {
   /// it just read, and a clean-pane refresh (`sync://changed`) sets it again.
   /// `null` for a draft that has never reached the vault.
   setBase: (updatedAt: string | null) => void;
+  /// What the vault holds for this entry as far as the pane knows, read at
+  /// call time: the precondition for a write made outside autosave (a
+  /// restore). Unlike `savedAt` it follows loads, refreshes and restores too.
+  getBase: () => string | null;
   /// Whether there is anything this pane has not written yet: a dirty draft,
   /// or a write already in flight. The clean-pane refresh skips itself unless
   /// this is false, so it never discards unsaved text.
@@ -261,6 +265,8 @@ export function useAutosave(
     base.current = updatedAt;
   }, []);
 
+  const getBase = useCallback(() => base.current, []);
+
   const hasUnsaved = useCallback(
     () => draft.current.dirty || saving.current,
     [],
@@ -318,6 +324,7 @@ export function useAutosave(
     savedAt,
     notice,
     setBase,
+    getBase,
     hasUnsaved,
     noteChange,
     saveNow,

@@ -87,9 +87,7 @@ test("a failed listing shows the backend's error", async ({ page }) => {
   await openHistory(page);
 
   await expect(
-    historyDialog(page)
-      .getByRole("alert")
-      .filter({ hasText: "history broke" }),
+    historyDialog(page).getByRole("alert").filter({ hasText: "history broke" }),
   ).toBeVisible();
 });
 
@@ -137,4 +135,91 @@ test("opening history flushes a pending save first, and skips opening if it's st
   await expect(historyDialog(page)).toBeHidden();
   // The failed save's own error is still on the pane, untouched.
   await expect(page.getByTestId("save-status")).toHaveText("Couldn't save");
+});
+
+test("restoring right after typing, with the save still pending, is not refused", async ({
+  page,
+}) => {
+  await login(page);
+  await page.getByText("First day back").click();
+  await page.getByRole("button", { name: "Entry actions" }).click();
+  await page.getByRole("menuitem", { name: "Edit" }).click();
+  // No wait for "Saved": opening history flushes this edit itself, which
+  // moves the live entry's `updated_at` past what the pane loaded.
+  await editor(page).fill("Typed just before opening history");
+
+  await openHistory(page);
+  const dialog = historyDialog(page);
+  await dialog.getByText("First day back").click();
+  await expect(dialog.getByTestId("history-preview")).toContainText(
+    "Started journaling again",
+  );
+  await dialog.getByRole("button", { name: "Restore this version" }).click();
+
+  await expect(dialog).toBeHidden();
+  await expect(page.getByTestId("entry-body")).toContainText(
+    "Started journaling again",
+  );
+});
+
+test("a second restore in the same pane is not refused", async ({ page }) => {
+  await login(page);
+  await page.getByRole("button", { name: "New entry" }).first().click();
+  await page.getByPlaceholder("Title").fill("Twice restored");
+  await editor(page).fill("Version one");
+  await expect(page.getByTestId("save-status")).toHaveText("Saved");
+  await editor(page).fill("Version two");
+  await expect(page.getByTestId("save-status")).toHaveText("Saved");
+
+  const dialog = historyDialog(page);
+  for (const expected of ["Version one", "Version two"]) {
+    await openHistory(page);
+    // Newest first: after the first restore, "Version two" is the newest.
+    await dialog
+      .getByRole("button")
+      .filter({ hasText: "Twice restored" })
+      .first()
+      .click();
+    await expect(dialog.getByTestId("history-preview")).toContainText(expected);
+    await dialog.getByRole("button", { name: "Restore this version" }).click();
+    await expect(dialog).toBeHidden();
+    await expect(page.getByTestId("entry-body")).toContainText(expected);
+  }
+});
+
+test("a preview that arrives late for a version no longer selected is not shown", async ({
+  page,
+}) => {
+  // Only previews are slow (`version`), so the saves below are not.
+  await login(page, "?slow=version&slowMs=1000");
+  await page.getByRole("button", { name: "New entry" }).first().click();
+  await page.getByPlaceholder("Title").fill("Out of order");
+  for (const body of ["Older body", "Newer body", "Current body"]) {
+    await editor(page).fill(body);
+    await expect(page.getByTestId("save-status")).toHaveText("Saved");
+  }
+
+  await page.clock.install();
+
+  await openHistory(page);
+  const dialog = historyDialog(page);
+  const rows = dialog.getByRole("button").filter({ hasText: "Out of order" });
+  await expect(rows).toHaveCount(2);
+  // Pick the older version, then the newer one before the first arrives.
+  await rows.nth(1).click();
+  await page.clock.runFor(500);
+  await rows.nth(0).click();
+  // The first preview has arrived; the second has not.
+  await page.clock.runFor(600);
+  await expect(dialog.getByTestId("history-preview")).not.toContainText(
+    "Older body",
+  );
+  await expect(
+    dialog.getByRole("button", { name: "Restore this version" }),
+  ).toBeDisabled();
+
+  await page.clock.runFor(500);
+  await expect(dialog.getByTestId("history-preview")).toContainText(
+    "Newer body",
+  );
 });

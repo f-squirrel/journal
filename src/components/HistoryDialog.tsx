@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Alert,
   Box,
@@ -60,11 +60,16 @@ export default function HistoryDialog({
   const [preview, setPreview] = useState<JournalEntry | null>(null);
   const [busy, setBusy] = useState<Busy>(null);
   const [error, setError] = useState("");
+  // The version the user picked last. Previews resolve out of order, and
+  // only this one's may be shown: Restore writes `selected`, so a preview of
+  // any other version would let the user restore text they never saw.
+  const wanted = useRef<string | null>(null);
 
   useEffect(() => {
     if (!open) return;
     setBusy("list");
     setError("");
+    wanted.current = null;
     setVersions(null);
     setSelected(null);
     setPreview(null);
@@ -79,10 +84,18 @@ export default function HistoryDialog({
     setPreview(null);
     setBusy("preview");
     setError("");
+    wanted.current = header.updated_at;
+    const current = () => wanted.current === header.updated_at;
     getHistoryEntry(entryId, header.updated_at)
-      .then((entry) => setPreview(entry))
-      .catch((err) => setError(errorMessage(err)))
-      .finally(() => setBusy(null));
+      .then((entry) => {
+        if (current()) setPreview(entry);
+      })
+      .catch((err) => {
+        if (current()) setError(errorMessage(err));
+      })
+      .finally(() => {
+        if (current()) setBusy(null);
+      });
   }
 
   async function restore() {
