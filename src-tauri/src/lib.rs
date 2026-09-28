@@ -80,6 +80,9 @@ pub fn run() {
             entry::get_entry,
             entry::save_entry,
             entry::delete_entry,
+            entry::list_entry_history,
+            entry::get_history_entry,
+            entry::restore_entry_version,
             entry::search_entries,
             entry::export_entries,
             settings::get_settings,
@@ -169,7 +172,9 @@ pub fn run() {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
-    use crate::entry::{export_entries, list_entries, save_entry, search_entries};
+    use crate::entry::{
+        export_entries, list_entries, restore_entry_version, save_entry, search_entries,
+    };
     use crate::vault::{
         begin_unlock, clear as lock_vault, get as vault, install as install_vault, VaultState,
         LOCKED_ERROR,
@@ -573,6 +578,84 @@ mod tests {
         .expect_err("a missing precondition over an existing entry is refused");
         assert_eq!(
             missing_key,
+            serde_json::json!("this entry was changed on another device since it was opened")
+        );
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// The wire contract of `restore_entry_version`, as `src/api/entries.ts`
+    /// calls it — `invoke("restore_entry_version", { id, at,
+    /// expected_updated_at })`. Same reason `save_entry`'s own version of this
+    /// test exists: a camelCase slip in `expected_updated_at` would silently
+    /// read as "no precondition" rather than fail to compile.
+    #[test]
+    fn restore_entry_version_takes_the_wire_shape_the_frontend_sends() {
+        let app = tauri::test::mock_builder()
+            .invoke_handler(tauri::generate_handler![restore_entry_version])
+            .build(context_allowing(&["restore_entry_version"]))
+            .expect("mock app builds");
+
+        let (state, dir) = unlocked_state();
+        let id = Id::new();
+        let original = Entry {
+            header: Header {
+                id,
+                title: "Tuesday".to_string(),
+                updated_at: chrono::Utc::now() - chrono::Duration::minutes(45),
+                entry_date: chrono::Utc::now(),
+            },
+            markdown: "First draft.".to_string(),
+        };
+        let vault_ref = vault(&state).expect("the state is unlocked");
+        vault_ref.save_entry(&original).expect("the entry saves");
+        let edited = Entry {
+            header: Header {
+                title: "Tuesday, edited".to_string(),
+                updated_at: original.header.updated_at + chrono::Duration::minutes(31),
+                ..original.header.clone()
+            },
+            markdown: "Second draft.".to_string(),
+        };
+        vault_ref.save_entry(&edited).expect("the edit saves");
+        app.manage(state);
+
+        let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("mock webview builds");
+
+        let restored = answered(tauri::test::get_ipc_response(
+            &webview,
+            request(
+                "restore_entry_version",
+                serde_json::json!({
+                    "id": id,
+                    "at": original.header.updated_at,
+                    "expected_updated_at": edited.header.updated_at,
+                }),
+            ),
+        ));
+        let restored: Entry =
+            serde_json::from_value(restored).expect("restore_entry_version returns an entry");
+        assert_eq!(restored.markdown, "First draft.");
+
+        // The same call again, with the now-stale precondition (the restore
+        // above changed `updated_at`), is refused with the same message
+        // `save_entry`'s does.
+        let stale = tauri::test::get_ipc_response(
+            &webview,
+            request(
+                "restore_entry_version",
+                serde_json::json!({
+                    "id": id,
+                    "at": original.header.updated_at,
+                    "expected_updated_at": edited.header.updated_at,
+                }),
+            ),
+        )
+        .expect_err("a stale precondition is refused");
+        assert_eq!(
+            stale,
             serde_json::json!("this entry was changed on another device since it was opened")
         );
 

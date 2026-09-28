@@ -55,6 +55,40 @@ export async function deleteEntry(id: string): Promise<void> {
   return (await fallback()).deleteEntry(id);
 }
 
+/// Headers of `id`'s past versions, most recent first. Empty for an entry
+/// with no history yet.
+export async function listEntryHistory(id: string): Promise<EntryHeader[]> {
+  if (backend) return invoke("list_entry_history", { id });
+  return (await fallback()).listEntryHistory(id);
+}
+
+/// One past version's full content, or `null` if that exact snapshot is gone.
+export async function getHistoryEntry(
+  id: string,
+  at: string,
+): Promise<JournalEntry | null> {
+  if (backend) return invoke("get_history_entry", { id, at });
+  return (await fallback()).getHistoryEntry(id, at);
+}
+
+/// Restores `id` to how it read at `at`. `expectedUpdatedAt` is the
+/// `updated_at` the caller last saw for the *live* entry — the same
+/// conditional-write contract `saveEntry` uses, so a restore started against a
+/// pane that's gone stale is refused with `STALE_ENTRY_MESSAGE`.
+export async function restoreEntryVersion(
+  id: string,
+  at: string,
+  expectedUpdatedAt: string | null,
+): Promise<JournalEntry> {
+  if (backend)
+    return invoke("restore_entry_version", {
+      id,
+      at,
+      expected_updated_at: expectedUpdatedAt,
+    });
+  return (await fallback()).restoreEntryVersion(id, at, expectedUpdatedAt);
+}
+
 /// Matches the query against every entry's title *and* body, which is why it
 /// is a command and not a filter over the headers the app already holds: those
 /// carry no markdown. The backend decrypts the journal to answer, so this is

@@ -64,9 +64,10 @@ function toHeader(entry: JournalEntry): EntryHeader {
 //                       rejects with the backend's message, and hasVault()
 //                       resolves true from then on
 //   ?fail=<ops>         comma-separated: has, unlock, list, get, save, delete,
-//                       search, export, connect, sync, resolve (see
-//                       "simulated sync" below), settings (updateSettings
-//                       rejects), settings-load (getSettings rejects)
+//                       history, restore, search, export, connect, sync,
+//                       resolve (see "simulated sync" below), settings
+//                       (updateSettings rejects), settings-load (getSettings
+//                       rejects)
 //   ?failMessage=<text> the rejection message (default "Injected fault.")
 //   ?failAfter=<n>      successful calls of each failing op before ?fail= bites
 //                       (default 0: fail from the first call), so a listing
@@ -93,6 +94,8 @@ type Op =
   | "get"
   | "save"
   | "delete"
+  | "history"
+  | "restore"
   | "search"
   | "export"
   | "connect"
@@ -157,6 +160,26 @@ const faults: Faults = parseFaults(window.location.search);
 // Calls seen so far by each op named in `?fail=`, for `?failAfter=`.
 const failedCalls = new Map<Op, number>();
 const fallbackEntries = new Map(seedEntries.map((entry) => [entry.id, entry]));
+
+/// An entry's past versions, newest first, capped at `MAX_FALLBACK_HISTORY`.
+/// Mirrors `history::MAX_SNAPSHOTS_PER_ENTRY` in `crates/vault` loosely — it
+/// doesn't need to match exactly, just be documented (see below).
+const fallbackHistory = new Map<string, JournalEntry[]>();
+const MAX_FALLBACK_HISTORY = 20;
+
+/// Pushes `previous` onto `id`'s history.
+///
+/// **Does not replicate the real backend's 30-minute throttle.** It pushes
+/// unconditionally, on every save and every restore, so `e2e/` can exercise
+/// the list/preview/restore UI without waiting out a real cadence — this
+/// models enough of the feature to test the UI, not production's snapshot
+/// policy.
+function pushHistory(id: string, previous: JournalEntry) {
+  const history = fallbackHistory.get(id) ?? [];
+  history.unshift(previous);
+  history.length = Math.min(history.length, MAX_FALLBACK_HISTORY);
+  fallbackHistory.set(id, history);
+}
 
 // Locked until `unlockVault`, like `VaultState`. Without it a write made after
 // the lock succeeds here and is refused by the real backend, so nothing in the
@@ -253,8 +276,9 @@ export function saveEntry(
   expected: string | null,
 ): Promise<void> {
   return run("save", () => {
-    const onDisk = fallbackEntries.get(entry.id)?.updated_at ?? null;
-    if (onDisk !== expected) throw STALE_ENTRY_MESSAGE;
+    const onDisk = fallbackEntries.get(entry.id) ?? null;
+    if ((onDisk?.updated_at ?? null) !== expected) throw STALE_ENTRY_MESSAGE;
+    if (onDisk) pushHistory(entry.id, onDisk);
     fallbackEntries.set(entry.id, entry);
     markPending(entry.id);
   });
@@ -263,7 +287,58 @@ export function saveEntry(
 export function deleteEntry(id: string): Promise<void> {
   return run("delete", () => {
     fallbackEntries.delete(id);
+    fallbackHistory.delete(id);
     markPending(id);
+  });
+}
+
+/// Headers of `id`'s past versions, most recent first.
+export function listEntryHistory(id: string): Promise<EntryHeader[]> {
+  const headers = (fallbackHistory.get(id) ?? []).map(toHeader);
+  return run("history", () => headers);
+}
+
+/// One past version's full content, or `null` if none matches `at`.
+export function getHistoryEntry(
+  id: string,
+  at: string,
+): Promise<JournalEntry | null> {
+  const found = (fallbackHistory.get(id) ?? []).find(
+    (entry) => entry.updated_at === at,
+  );
+  return run("get", () => found ?? null);
+}
+
+/// Mirrors `Vault::restore_history`: refuses (as not-found) when there is no
+/// live entry to restore into or no snapshot at `at`, and — like `saveEntry`
+/// — checks the same staleness precondition against the live entry. Pushes
+/// the pre-restore content into history first, unconditionally, mirroring
+/// the "always snapshot on restore" rule from the plan, not the throttle
+/// `pushHistory`'s callers otherwise skip anyway.
+export function restoreEntryVersion(
+  id: string,
+  at: string,
+  expected: string | null,
+): Promise<JournalEntry> {
+  return run("restore", () => {
+    const live = fallbackEntries.get(id);
+    if (!live) throw "that version of the entry is no longer available";
+    if (live.updated_at !== expected) throw STALE_ENTRY_MESSAGE;
+    const snapshot = (fallbackHistory.get(id) ?? []).find(
+      (entry) => entry.updated_at === at,
+    );
+    if (!snapshot) throw "that version of the entry is no longer available";
+
+    const restored: JournalEntry = {
+      ...live,
+      title: snapshot.title,
+      markdown: snapshot.markdown,
+      updated_at: new Date().toISOString(),
+    };
+    pushHistory(id, live);
+    fallbackEntries.set(id, restored);
+    markPending(id);
+    return restored;
   });
 }
 

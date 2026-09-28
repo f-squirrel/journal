@@ -24,6 +24,7 @@ import ArrowBackIcon from "@mui/icons-material/ArrowBack";
 import AutoStoriesIcon from "@mui/icons-material/AutoStories";
 import DeleteIcon from "@mui/icons-material/Delete";
 import EditIcon from "@mui/icons-material/Edit";
+import HistoryIcon from "@mui/icons-material/History";
 import MoreHorizIcon from "@mui/icons-material/MoreHoriz";
 import VisibilityIcon from "@mui/icons-material/Visibility";
 import { DateCalendar } from "@mui/x-date-pickers/DateCalendar";
@@ -39,6 +40,7 @@ import {
   TYPE,
   rem,
 } from "../components/chrome";
+import HistoryDialog from "../components/HistoryDialog";
 import MarkdownEditor from "../components/MarkdownEditor";
 import { useAppState } from "../context/AppStateContext";
 import { useSettings } from "../context/SettingsContext";
@@ -50,6 +52,7 @@ import {
 import { useNewEntry } from "../hooks/useNewEntry";
 import { formatBinding } from "../shortcuts/binding";
 import { useShortcut, useShortcuts } from "../shortcuts/ShortcutsContext";
+import type { JournalEntry } from "../types";
 import { formatAgo, formatEntryHeading, formatTime } from "../utils/date";
 import { errorMessage } from "../utils/errors";
 
@@ -97,7 +100,8 @@ export default function EntryPaneRoute() {
 }
 
 function EntryPane({ id, draft }: { id: string; draft: boolean }) {
-  const { loadEntry, removeEntry, syncVersion } = useAppState();
+  const { loadEntry, removeEntry, adoptRestoredEntry, syncVersion } =
+    useAppState();
   const { settings } = useSettings();
   const navigate = useNavigate();
   const theme = useTheme();
@@ -135,6 +139,13 @@ function EntryPane({ id, draft }: { id: string; draft: boolean }) {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState("");
+  const [historyOpen, setHistoryOpen] = useState(false);
+  // The live entry's `updated_at` as of the flush `openHistory` runs before
+  // opening the dialog — captured once, not a live `autosave.savedAt ??
+  // loadedAt` expression, so the precondition the restore uses matches what
+  // was actually flushed rather than whatever the pane happens to hold by the
+  // time the user clicks Restore.
+  const [historyBase, setHistoryBase] = useState<string | null>(null);
   // Dismissible: a fresh notice un-dismisses itself, since it describes a new
   // event, not the one the user already closed.
   const [noticeDismissed, setNoticeDismissed] = useState(false);
@@ -338,6 +349,39 @@ function EntryPane({ id, draft }: { id: string; draft: boolean }) {
     // vault has not been handed yet, and the status should say so.
     autosave.saveNow();
     setMode("read");
+  }
+
+  /// Flushes any pending save before opening the history dialog — otherwise
+  /// a debounced save still in flight races the restore: whichever lands
+  /// second meets `Stale`, either refusing the restore with a misleading
+  /// "changed on another device" message or turning the pane's own pending
+  /// edit into a "(conflicted copy)" of the pre-restore draft.
+  async function openHistory() {
+    setMenuAnchor(null);
+    autosave.saveNow();
+    await autosave.whenSettled();
+    // A failed or stale save leaves its own error/notice on the pane; don't
+    // open a restore against a base we're no longer sure of.
+    if (autosave.hasUnsaved()) return;
+    setHistoryBase(autosave.savedAt ?? loadedAt);
+    setHistoryOpen(true);
+  }
+
+  /// Adopts a version `HistoryDialog` just restored, the same way
+  /// `refreshFromDisk` adopts a reload from disk.
+  function handleRestored(restored: JournalEntry) {
+    setTitle(restored.title);
+    externalMarkdown.current = restored.markdown;
+    setMarkdown(restored.markdown);
+    setEntryDate(restored.entry_date);
+    setLoadedAt(restored.updated_at);
+    autosave.setBase(restored.updated_at);
+    adoptRestoredEntry({
+      id: restored.id,
+      title: restored.title,
+      updated_at: restored.updated_at,
+      entry_date: restored.entry_date,
+    });
   }
 
   async function handleDelete() {
@@ -586,6 +630,13 @@ function EntryPane({ id, draft }: { id: string; draft: boolean }) {
           </MenuItem>
         )}
         <MenuItem
+          onClick={openHistory}
+          disabled={draft && autosave.savedAt === null}
+        >
+          <HistoryIcon fontSize="small" sx={{ mr: 1.5 }} />
+          Version history
+        </MenuItem>
+        <MenuItem
           onClick={() => {
             setMenuAnchor(null);
             setDeleteError("");
@@ -618,6 +669,15 @@ function EntryPane({ id, draft }: { id: string; draft: boolean }) {
           </Button>
         </DialogActions>
       </Dialog>
+
+      <HistoryDialog
+        open={historyOpen}
+        onClose={() => setHistoryOpen(false)}
+        entryId={id}
+        entryTitle={title.trim() || formatEntryHeading(entryDate)}
+        expectedUpdatedAt={historyBase}
+        onRestored={handleRestored}
+      />
     </Stack>
   );
 }

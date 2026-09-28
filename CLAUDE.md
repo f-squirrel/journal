@@ -78,6 +78,9 @@ Backend:
   `blocking` helper; crates below `src-tauri` stay synchronous.
 - `Vault::open` is the only caller of `Keyring::create`/`unlock` — a fresh
   key over existing entries orphans them.
+- `Vault::save_entry`/`save_entry_if` also throttle-snapshot the version they
+  overwrite (`crates/vault/src/history.rs`); `delete_entry` purges an entry's
+  snapshots too.
 - The scrypt work factor is pinned (`crates/key/src/identity.rs`); never let
   `age` choose it (ADR 0007).
 - No legacy-format read paths. A `#[serde(default)]` field is fine.

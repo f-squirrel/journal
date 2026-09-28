@@ -40,6 +40,36 @@ pub(crate) async fn delete_entry(state: State<'_, VaultState>, id: Id) -> Result
     blocking(move || vault.delete_entry(&id)).await
 }
 
+#[tauri::command]
+pub(crate) async fn list_entry_history(
+    state: State<'_, VaultState>,
+    id: Id,
+) -> Result<Vec<Header>, String> {
+    let vault = vault(&state)?;
+    blocking(move || vault.list_history(&id)).await
+}
+
+#[tauri::command]
+pub(crate) async fn get_history_entry(
+    state: State<'_, VaultState>,
+    id: Id,
+    at: DateTime<Utc>,
+) -> Result<Option<Entry>, String> {
+    let vault = vault(&state)?;
+    blocking(move || vault.get_history_entry(&id, at)).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub(crate) async fn restore_entry_version(
+    state: State<'_, VaultState>,
+    id: Id,
+    at: DateTime<Utc>,
+    expected_updated_at: Option<DateTime<Utc>>,
+) -> Result<Entry, String> {
+    let vault = vault(&state)?;
+    blocking(move || vault.restore_history(&id, at, expected_updated_at)).await
+}
+
 /// Decrypts every entry on each call; there is deliberately no search index.
 #[tauri::command]
 pub(crate) async fn search_entries(

@@ -111,6 +111,11 @@ interface AppStateContextValue {
     expectedUpdatedAt: string | null,
   ) => Promise<void>;
   removeEntry: (id: string) => Promise<void>;
+  /// Adopts a header written by some other path than `upsertEntry` —
+  /// `HistoryDialog`'s restore, which already reached the vault itself — so
+  /// the entry's row picks up the new title/date without waiting for a
+  /// sync-driven re-list. No backend call: the write already happened.
+  adoptRestoredEntry: (header: EntryHeader) => void;
   /// Bumped whenever a sync pass changed entries on disk (`sync://changed`),
   /// so a pane with no unsaved edits can reload and stay current. The same
   /// counter also re-runs the list effect, so one bump does both.
@@ -595,6 +600,11 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
           });
           throw err;
         }
+      },
+      adoptRestoredEntry: (header) => {
+        setEntries((prev) =>
+          [header, ...prev.filter((e) => e.id !== header.id)].sort(byEntryDate),
+        );
       },
     }),
     [

@@ -9,9 +9,11 @@
 
 #![cfg_attr(all(test, coverage_nightly), feature(coverage_attribute))]
 
+mod history;
 mod search;
 mod settings;
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Utc};
@@ -23,6 +25,7 @@ use search::Query;
 use secrecy::SecretString;
 use thiserror::Error;
 
+pub use history::is_snapshot;
 pub use settings::SETTINGS_BLOB;
 
 #[derive(Debug, Error)]
@@ -49,6 +52,11 @@ pub enum VaultError {
     /// are already user-readable.
     #[error(transparent)]
     Settings(#[from] SettingsError),
+    /// The version history asked for by timestamp is gone — already pruned,
+    /// say. Distinct from [`Stale`](Self::Stale), which means the *live*
+    /// entry moved on, not that an old version no longer exists.
+    #[error("that version of the entry is no longer available")]
+    HistoryNotFound,
 }
 
 /// The extension every entry blob's name ends in.
@@ -103,6 +111,13 @@ pub struct Vault {
     /// side's change. It does not cover a plain sync pull, which the engine
     /// writes to the bare store beneath this vault.
     settings_lock: Mutex<()>,
+    /// When this vault last took a snapshot of each entry — or, for an entry
+    /// it has not snapshotted yet, when it first saw a save of it. A throttle
+    /// hint only: lost on lock, never synced, and never read for anything but
+    /// `snapshot_outgoing`'s periodic condition. Wrong in the safe direction —
+    /// a snapshot another device took is invisible here, which can only cause
+    /// one extra snapshot, never a missed gap snapshot.
+    checkpoints: Mutex<HashMap<Id, DateTime<Utc>>>,
 }
 
 impl Vault {
@@ -138,6 +153,7 @@ impl Vault {
             store,
             cipher,
             settings_lock: Mutex::new(()),
+            checkpoints: Mutex::new(HashMap::new()),
         }
     }
 
@@ -252,11 +268,16 @@ impl Vault {
     /// both of those must succeed regardless of what is on disk. Anything
     /// that should refuse a stale write wants [`save_entry_if`](Self::save_entry_if)
     /// instead.
+    ///
+    /// Now also reads whatever is currently on disk under this id — not for
+    /// any precondition, `save_entry` still takes none — so it can decide
+    /// whether that outgoing version is worth keeping as a snapshot before it
+    /// is gone (see `snapshot_outgoing`).
     pub fn save_entry(&self, entry: &Entry) -> Result<(), VaultError> {
-        let plaintext = serde_json::to_vec(entry)?;
-        let ciphertext = self.cipher.encrypt(&plaintext)?;
-        self.store.put(&blob_name(&entry.header.id), &ciphertext)?;
-        Ok(())
+        if let Some(previous) = self.read::<Entry>(&blob_name(&entry.header.id))? {
+            self.snapshot_outgoing(&previous, entry.header.updated_at)?;
+        }
+        self.write_entry(entry)
     }
 
     /// Saves `entry` only if the entry on disk is still the one the caller
@@ -269,27 +290,214 @@ impl Vault {
     /// earlier draft" from "I am about to overwrite an edit that arrived from
     /// somewhere else since I last read this entry".
     ///
-    /// **Not atomic against the sync engine.** The engine writes the bare
-    /// `BlobStore` beneath this vault, from its own thread, so a pull that
-    /// lands between the read below and the write in [`save_entry`](Self::save_entry)
-    /// is silently overwritten (see the plan's Non-goals). The window is one
-    /// read plus one encrypt plus one write; closing it needs a lock or a
-    /// compare-and-swap shared with the engine, which is its own design.
+    /// **Not atomic against the sync engine, and now less narrowly so.** The
+    /// engine writes the bare `BlobStore` beneath this vault, from its own
+    /// thread, so a pull that lands between the read below and the final
+    /// write in [`write_entry`](Self::write_entry) is silently overwritten
+    /// (see the plan's Non-goals). On a save that does not cross
+    /// `history::SNAPSHOT_MIN_AGE`, that window is still one read plus one
+    /// encrypt plus one write. On a save that does, it now also contains a
+    /// `store.list()` over every blob in the store and up to
+    /// `history::MAX_SNAPSHOTS_PER_ENTRY` deletes plus a snapshot `put`
+    /// (`snapshot_outgoing`), so the window can be far larger than "a few
+    /// milliseconds" and scales with total blob count. Closing it properly
+    /// needs a lock or a compare-and-swap shared with the engine, which is
+    /// its own design.
     pub fn save_entry_if(
         &self,
         entry: &Entry,
         expected: Option<DateTime<Utc>>,
     ) -> Result<(), VaultError> {
-        let on_disk = self
-            .read::<Header>(&blob_name(&entry.header.id))?
-            .map(|header| header.updated_at);
-        if on_disk != expected {
+        let on_disk = self.read::<Entry>(&blob_name(&entry.header.id))?;
+        if on_disk.as_ref().map(|e| e.header.updated_at) != expected {
             return Err(VaultError::Stale);
         }
-        self.save_entry(entry)
+        if let Some(previous) = &on_disk {
+            self.snapshot_outgoing(previous, entry.header.updated_at)?;
+        }
+        self.write_entry(entry)
     }
 
+    /// Headers of `id`'s past versions, most recent first. Empty, not an
+    /// error, for an entry with no history yet.
+    pub fn list_history(&self, id: &Id) -> Result<Vec<Header>, VaultError> {
+        // `snapshot_names` is already newest-first, and a snapshot's name
+        // encodes the exact `updated_at` its header holds, so pushing in that
+        // order needs no re-sort.
+        let names = self.snapshot_names(id)?;
+        let mut headers = Vec::with_capacity(names.len());
+        for (_, name) in names {
+            if let Some(header) = self.read::<Header>(&name)? {
+                headers.push(header);
+            }
+        }
+        Ok(headers)
+    }
+
+    /// One past version's full content, or `None` if that exact snapshot is
+    /// gone (already pruned, say).
+    pub fn get_history_entry(
+        &self,
+        id: &Id,
+        at: DateTime<Utc>,
+    ) -> Result<Option<Entry>, VaultError> {
+        self.read(&history::snapshot_blob_name(id, at))
+    }
+
+    /// Restores `id` to how it read at `at`: title and markdown come from the
+    /// snapshot, `entry_date` is left as whatever the *live* entry currently
+    /// has, and `updated_at` becomes now. `expected` is the `updated_at` the
+    /// caller last saw for the live entry — the same conditional-write
+    /// contract [`save_entry_if`](Self::save_entry_if) uses, so a restore
+    /// started against a pane that's gone stale (another device edited
+    /// meanwhile) is refused with [`VaultError::Stale`] rather than
+    /// clobbering that edit.
+    ///
+    /// Snapshots the entry's current content first, unconditionally —
+    /// bypassing [`snapshot_outgoing`](Self::snapshot_outgoing)'s throttle on
+    /// purpose, not by calling it: a restore is exactly the kind of boundary
+    /// worth always keeping, and it's what makes restoring itself undoable.
+    pub fn restore_history(
+        &self,
+        id: &Id,
+        at: DateTime<Utc>,
+        expected: Option<DateTime<Utc>>,
+    ) -> Result<Entry, VaultError> {
+        // No live entry means there is nothing to restore *into* — never a
+        // reason to write one: an orphaned snapshot, from a half-finished
+        // delete or another device's edit racing this one's delete, must not
+        // resurrect an entry the user deleted.
+        let Some(live) = self.read::<Entry>(&blob_name(id))? else {
+            return Err(VaultError::HistoryNotFound);
+        };
+        if Some(live.header.updated_at) != expected {
+            return Err(VaultError::Stale);
+        }
+        let Some(snapshot) = self.read::<Entry>(&history::snapshot_blob_name(id, at))? else {
+            return Err(VaultError::HistoryNotFound);
+        };
+        let now = Utc::now();
+        let restored = Entry {
+            header: Header {
+                id: *id,
+                title: snapshot.header.title,
+                updated_at: now,
+                entry_date: live.header.entry_date,
+            },
+            markdown: snapshot.markdown,
+        };
+        // Unconditional, unlike `snapshot_outgoing`: no age check on `live`.
+        self.write_snapshot(&live, now)?;
+        self.prune_history(id)?;
+        self.write_entry(&restored)?;
+        Ok(restored)
+    }
+
+    /// Serializes, encrypts and writes `entry` under its own id, with no
+    /// precondition and no snapshot decision — the body every save ends in,
+    /// once the caller above has already decided whether the version it is
+    /// about to replace is worth keeping.
+    fn write_entry(&self, entry: &Entry) -> Result<(), VaultError> {
+        let plaintext = serde_json::to_vec(entry)?;
+        let ciphertext = self.cipher.encrypt(&plaintext)?;
+        self.store.put(&blob_name(&entry.header.id), &ciphertext)?;
+        Ok(())
+    }
+
+    /// Decides whether `previous` — the version a save is about to replace —
+    /// is worth keeping as a snapshot before it's gone, and takes one if so.
+    ///
+    /// Fires on either of two conditions, both compared against timestamps
+    /// the caller supplies (never the wall clock), so tests can drive them
+    /// with made-up times:
+    ///
+    /// - **Gap:** `previous` sat unchanged for at least
+    ///   `history::SNAPSHOT_MIN_AGE` — the start of a new editing session.
+    /// - **Periodic:** this vault has not taken a snapshot of this entry for
+    ///   at least `history::SNAPSHOT_MIN_AGE` of continuous editing, so a long
+    ///   session still produces a version from inside itself.
+    fn snapshot_outgoing(&self, previous: &Entry, at: DateTime<Utc>) -> Result<(), VaultError> {
+        let id = previous.header.id;
+        let gap = at - previous.header.updated_at >= history::SNAPSHOT_MIN_AGE;
+        let periodic = {
+            let mut checkpoints = self.checkpoints.lock().unwrap_or_else(|e| e.into_inner());
+            // First save this session starts the clock; it isn't itself a
+            // reason to snapshot (the gap condition covers a session's first
+            // save).
+            let since = *checkpoints.entry(id).or_insert(at);
+            at - since >= history::SNAPSHOT_MIN_AGE
+        };
+        if !(gap || periodic) {
+            return Ok(());
+        }
+        self.write_snapshot(previous, at)?;
+        self.prune_history(&id)
+    }
+
+    /// Writes `entry` as a snapshot and restarts the periodic clock for its
+    /// id. `at` is the save that caused this snapshot, not `entry`'s own
+    /// `updated_at` — the two agree for `snapshot_outgoing`'s callers, but
+    /// keeping them distinct here is what lets `restore_history` restart the
+    /// clock at `now` without renaming the snapshot it writes.
+    fn write_snapshot(&self, entry: &Entry, at: DateTime<Utc>) -> Result<(), VaultError> {
+        let name = history::snapshot_blob_name(&entry.header.id, entry.header.updated_at);
+        let plaintext = serde_json::to_vec(entry)?;
+        let ciphertext = self.cipher.encrypt(&plaintext)?;
+        self.store.put(&name, &ciphertext)?;
+        self.checkpoints
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(entry.header.id, at);
+        Ok(())
+    }
+
+    /// `id`'s snapshot blobs, newest first, with the time parsed from each
+    /// name.
+    ///
+    /// The one enumeration of an entry's history: `prune_history`,
+    /// `list_history` and `delete_entry` all go through it, so there is
+    /// exactly one definition of "this entry's snapshots".
+    fn snapshot_names(&self, id: &Id) -> Result<Vec<(DateTime<Utc>, BlobName)>, VaultError> {
+        let mut names: Vec<_> = self
+            .store
+            .list()?
+            .into_iter()
+            .filter_map(|name| {
+                let (snapshot_id, at) = history::snapshot_id_and_time(&name)?;
+                (snapshot_id == *id).then_some((at, name))
+            })
+            .collect();
+        names.sort_by_key(|(at, _)| std::cmp::Reverse(*at));
+        Ok(names)
+    }
+
+    /// Keeps the newest `history::MAX_SNAPSHOTS_PER_ENTRY` snapshots for `id`,
+    /// deleting the rest. Sorts by the timestamp embedded in the blob name
+    /// (via `snapshot_names`), so this needs no decryption.
+    fn prune_history(&self, id: &Id) -> Result<(), VaultError> {
+        for (_, name) in self
+            .snapshot_names(id)?
+            .into_iter()
+            .skip(history::MAX_SNAPSHOTS_PER_ENTRY)
+        {
+            self.store.delete(&name)?;
+        }
+        Ok(())
+    }
+
+    /// Deletes `id`'s entry and every snapshot it has.
+    ///
+    /// Snapshots first, entry blob last: a failure partway leaves the entry
+    /// still visible and the user can retry. The other order would leave
+    /// snapshots that no UI can reach, and `holds_content` still counts them.
     pub fn delete_entry(&self, id: &Id) -> Result<(), VaultError> {
+        for (_, name) in self.snapshot_names(id)? {
+            self.store.delete(&name)?;
+        }
+        self.checkpoints
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(id);
         Ok(self.store.delete(&blob_name(id))?)
     }
 
@@ -318,15 +526,17 @@ impl Vault {
 }
 
 /// Whether `store` holds anything [`Vault::open`]'s orphan check must not
-/// mint a fresh key over: an entry blob, or the settings blob.
+/// mint a fresh key over: an entry blob, a snapshot blob, or the settings
+/// blob.
 ///
 /// A store holding only [`SETTINGS_BLOB`] and no key would otherwise pass as
-/// an empty store and get a new key that can never read it.
+/// an empty store and get a new key that can never read it — and the same is
+/// true of a store holding only orphaned snapshots (their entry deleted, or
+/// the key gone some other way).
 fn holds_content(store: &dyn BlobStore) -> Result<bool, VaultError> {
-    Ok(store
-        .list()?
-        .iter()
-        .any(|name| is_entry(name) || settings::is_settings_blob(name)))
+    Ok(store.list()?.iter().any(|name| {
+        is_entry(name) || settings::is_settings_blob(name) || history::is_snapshot(name)
+    }))
 }
 
 #[cfg(test)]
@@ -1098,6 +1308,383 @@ mod tests {
             captured.contains(corrupt.as_str()),
             "no log record named the skipped blob; captured: {captured:?}"
         );
+
+        discard(&store);
+    }
+
+    fn snapshot_count(store: &FsStore) -> usize {
+        store
+            .list()
+            .unwrap()
+            .into_iter()
+            .filter(|n| is_snapshot(n))
+            .count()
+    }
+
+    #[test]
+    fn save_entry_snapshots_the_outgoing_version_after_a_gap_but_not_before() {
+        let store = temp_store();
+        let vault = fake_vault(store.clone());
+        let id = Id::new();
+
+        let mut v0 = sample(id);
+        v0.header.updated_at = Utc::now() - chrono::Duration::minutes(40);
+        vault.save_entry(&v0).unwrap();
+        assert_eq!(
+            snapshot_count(&store),
+            0,
+            "the first save has nothing to snapshot"
+        );
+
+        // 5 minutes later: too soon to snapshot v0.
+        let mut v1 = v0.clone();
+        v1.header.updated_at = v0.header.updated_at + chrono::Duration::minutes(5);
+        v1.markdown = "# v1".to_string();
+        vault.save_entry(&v1).unwrap();
+        assert_eq!(
+            snapshot_count(&store),
+            0,
+            "a 5-minute gap must not snapshot"
+        );
+
+        // 30 minutes after that: old enough to snapshot v1.
+        let mut v2 = v1.clone();
+        v2.header.updated_at = v1.header.updated_at + chrono::Duration::minutes(30);
+        v2.markdown = "# v2".to_string();
+        vault.save_entry(&v2).unwrap();
+        assert_eq!(
+            snapshot_count(&store),
+            1,
+            "a 30-minute gap must snapshot the outgoing version"
+        );
+
+        discard(&store);
+    }
+
+    /// Saves one minute apart for 65 minutes, with made-up `updated_at`s so no
+    /// gap ever reaches `SNAPSHOT_MIN_AGE`: the periodic condition alone must
+    /// checkpoint twice, around the 30- and 60-minute marks.
+    #[test]
+    fn periodic_trigger_checkpoints_a_long_continuous_session() {
+        let store = temp_store();
+        let vault = fake_vault(store.clone());
+        let id = Id::new();
+        let start = Utc::now();
+
+        let mut previous = sample(id);
+        previous.header.updated_at = start;
+        vault.save_entry(&previous).unwrap();
+        assert_eq!(
+            snapshot_count(&store),
+            0,
+            "the first save of the run takes none"
+        );
+
+        for minute in 1..=65 {
+            let mut next = previous.clone();
+            next.header.updated_at = start + chrono::Duration::minutes(minute);
+            next.markdown = format!("# minute {minute}");
+            vault.save_entry(&next).unwrap();
+            previous = next;
+        }
+
+        assert_eq!(
+            snapshot_count(&store),
+            2,
+            "a 65-minute session at 1-minute intervals should checkpoint twice"
+        );
+
+        discard(&store);
+    }
+
+    #[test]
+    fn list_history_returns_newest_first_and_empty_for_no_history() {
+        let store = temp_store();
+        let vault = fake_vault(store.clone());
+        let id = Id::new();
+        assert!(vault.list_history(&id).unwrap().is_empty());
+
+        let mut v0 = sample(id);
+        v0.header.title = "v0".to_string();
+        v0.header.updated_at = Utc::now() - chrono::Duration::minutes(90);
+        vault.save_entry(&v0).unwrap();
+
+        let mut v1 = v0.clone();
+        v1.header.title = "v1".to_string();
+        v1.header.updated_at = v0.header.updated_at + chrono::Duration::minutes(30);
+        vault.save_entry(&v1).unwrap();
+
+        let mut v2 = v1.clone();
+        v2.header.title = "v2".to_string();
+        v2.header.updated_at = v1.header.updated_at + chrono::Duration::minutes(30);
+        vault.save_entry(&v2).unwrap();
+
+        let titles: Vec<_> = vault
+            .list_history(&id)
+            .unwrap()
+            .into_iter()
+            .map(|h| h.title)
+            .collect();
+        assert_eq!(titles, ["v1", "v0"]);
+
+        discard(&store);
+    }
+
+    #[test]
+    fn get_history_entry_round_trips_and_returns_none_for_unknown_timestamp() {
+        let store = temp_store();
+        let vault = fake_vault(store.clone());
+        let id = Id::new();
+
+        let mut v0 = sample(id);
+        v0.header.updated_at = Utc::now() - chrono::Duration::minutes(60);
+        v0.markdown = "# v0 body".to_string();
+        vault.save_entry(&v0).unwrap();
+
+        let mut v1 = v0.clone();
+        v1.header.updated_at = v0.header.updated_at + chrono::Duration::minutes(31);
+        v1.markdown = "# v1 body".to_string();
+        vault.save_entry(&v1).unwrap();
+
+        let snapshot = vault
+            .get_history_entry(&id, v0.header.updated_at)
+            .unwrap()
+            .unwrap();
+        assert_eq!(snapshot.markdown, "# v0 body");
+
+        assert!(vault.get_history_entry(&id, Utc::now()).unwrap().is_none());
+
+        discard(&store);
+    }
+
+    #[test]
+    fn writing_a_21st_old_enough_snapshot_prunes_the_oldest() {
+        let store = temp_store();
+        let vault = fake_vault(store.clone());
+        let id = Id::new();
+
+        let mut previous = sample(id);
+        previous.header.updated_at = Utc::now() - chrono::Duration::minutes(30 * 22);
+        previous.markdown = "# v0".to_string();
+        vault.save_entry(&previous).unwrap();
+        let v0_updated_at = previous.header.updated_at;
+
+        for i in 1..=21 {
+            let mut next = previous.clone();
+            next.header.updated_at = previous.header.updated_at + chrono::Duration::minutes(30);
+            next.markdown = format!("# v{i}");
+            vault.save_entry(&next).unwrap();
+            previous = next;
+        }
+
+        let history = vault.list_history(&id).unwrap();
+        assert_eq!(history.len(), 20);
+        assert!(
+            vault
+                .get_history_entry(&id, v0_updated_at)
+                .unwrap()
+                .is_none(),
+            "the oldest snapshot should have been pruned"
+        );
+        let newest = vault
+            .get_history_entry(&id, history[0].updated_at)
+            .unwrap()
+            .unwrap();
+        assert_eq!(newest.markdown, "# v20");
+
+        discard(&store);
+    }
+
+    #[test]
+    fn restore_history_snapshots_current_content_regardless_of_recency_and_keeps_live_entry_date() {
+        let store = temp_store();
+        let vault = fake_vault(store.clone());
+        let id = Id::new();
+
+        let mut v0 = sample(id);
+        v0.header.title = "Old title".to_string();
+        v0.markdown = "# old body".to_string();
+        v0.header.entry_date = Utc::now() - chrono::Duration::days(10);
+        v0.header.updated_at = Utc::now() - chrono::Duration::minutes(60);
+        vault.save_entry(&v0).unwrap();
+
+        // A 31-minute gap: the ordinary throttle snapshots v0 automatically.
+        let mut v1 = v0.clone();
+        v1.header.title = "New title".to_string();
+        v1.markdown = "# new body".to_string();
+        v1.header.entry_date = Utc::now() - chrono::Duration::days(2);
+        v1.header.updated_at = v0.header.updated_at + chrono::Duration::minutes(31);
+        vault.save_entry(&v1).unwrap();
+        assert_eq!(
+            vault.list_history(&id).unwrap().len(),
+            1,
+            "v0 should already be snapshotted by the gap throttle"
+        );
+
+        // Restoring immediately after v1 — well under the throttle's
+        // interval — still snapshots v1: the "always snapshot on restore"
+        // rule, not the throttle.
+        let restored = vault
+            .restore_history(&id, v0.header.updated_at, Some(v1.header.updated_at))
+            .unwrap();
+
+        assert_eq!(restored.header.title, "Old title");
+        assert_eq!(restored.markdown, "# old body");
+        // entry_date comes from the *live* entry (v1's), not the restored
+        // snapshot's (v0's).
+        assert_eq!(restored.header.entry_date, v1.header.entry_date);
+        assert!(restored.header.updated_at > v1.header.updated_at);
+        assert_eq!(
+            vault.get_entry(&id).unwrap().unwrap().markdown,
+            "# old body"
+        );
+
+        let titles: Vec<_> = vault
+            .list_history(&id)
+            .unwrap()
+            .into_iter()
+            .map(|h| h.title)
+            .collect();
+        assert_eq!(
+            titles.len(),
+            2,
+            "both v0 and the pre-restore v1 must be in history: {titles:?}"
+        );
+        assert!(titles.contains(&"Old title".to_string()));
+        assert!(titles.contains(&"New title".to_string()));
+
+        discard(&store);
+    }
+
+    #[test]
+    fn restore_history_refuses_when_expected_does_not_match_the_live_entry() {
+        let store = temp_store();
+        let vault = fake_vault(store.clone());
+        let id = Id::new();
+
+        let mut v0 = sample(id);
+        v0.header.updated_at = Utc::now() - chrono::Duration::minutes(60);
+        vault.save_entry(&v0).unwrap();
+        let mut v1 = v0.clone();
+        v1.header.updated_at = v0.header.updated_at + chrono::Duration::minutes(31);
+        vault.save_entry(&v1).unwrap();
+
+        let Err(err) = vault.restore_history(&id, v0.header.updated_at, Some(Utc::now())) else {
+            panic!("restore_history wrote over a live entry it hadn't seen");
+        };
+        assert!(matches!(err, VaultError::Stale), "got {err:?}");
+        assert_eq!(
+            vault.get_entry(&id).unwrap().unwrap().header.updated_at,
+            v1.header.updated_at
+        );
+
+        discard(&store);
+    }
+
+    #[test]
+    fn restore_history_and_get_history_entry_return_not_found_for_an_unknown_snapshot() {
+        let store = temp_store();
+        let vault = fake_vault(store.clone());
+        let id = Id::new();
+        let entry = sample(id);
+        vault.save_entry(&entry).unwrap();
+
+        assert!(vault.get_history_entry(&id, Utc::now()).unwrap().is_none());
+
+        let Err(err) = vault.restore_history(&id, Utc::now(), Some(entry.header.updated_at)) else {
+            panic!("restore_history restored a version that was never taken");
+        };
+        assert!(matches!(err, VaultError::HistoryNotFound), "got {err:?}");
+
+        discard(&store);
+    }
+
+    /// Second review: an orphaned snapshot (its live entry gone, from a
+    /// half-finished delete or a race with another device's delete) must
+    /// never be restored into a fresh entry.
+    #[test]
+    fn restore_history_over_an_orphaned_snapshot_returns_not_found_and_writes_nothing() {
+        let store = temp_store();
+        let vault = fake_vault(store.clone());
+        let id = Id::new();
+        let orphan = sample(id);
+        vault
+            .write_snapshot(&orphan, orphan.header.updated_at)
+            .unwrap();
+
+        let Err(err) = vault.restore_history(&id, orphan.header.updated_at, None) else {
+            panic!("restore_history resurrected a deleted entry from an orphaned snapshot");
+        };
+        assert!(matches!(err, VaultError::HistoryNotFound), "got {err:?}");
+        assert!(vault.get_entry(&id).unwrap().is_none());
+
+        discard(&store);
+    }
+
+    #[test]
+    fn delete_entry_removes_its_snapshots_too() {
+        let store = temp_store();
+        let vault = fake_vault(store.clone());
+        let id = Id::new();
+
+        let mut v0 = sample(id);
+        v0.header.updated_at = Utc::now() - chrono::Duration::minutes(60);
+        vault.save_entry(&v0).unwrap();
+        let mut v1 = v0.clone();
+        v1.header.updated_at = v0.header.updated_at + chrono::Duration::minutes(31);
+        vault.save_entry(&v1).unwrap();
+        assert_eq!(vault.list_history(&id).unwrap().len(), 1);
+
+        vault.delete_entry(&id).unwrap();
+
+        assert!(vault.get_entry(&id).unwrap().is_none());
+        assert!(vault.list_history(&id).unwrap().is_empty());
+        assert_eq!(snapshot_count(&store), 0);
+
+        discard(&store);
+    }
+
+    /// A store holding only a snapshot blob (its entry gone, its key gone
+    /// some other way) must not read as an empty store either.
+    #[test]
+    fn open_refuses_when_the_key_is_missing_but_only_a_snapshot_remains() {
+        let store = temp_store();
+        let vault = Vault::open(store.clone(), &passphrase("hunter2")).unwrap();
+        let id = Id::new();
+        let entry = sample(id);
+        vault.save_entry(&entry).unwrap();
+        vault
+            .write_snapshot(&entry, entry.header.updated_at)
+            .unwrap();
+        // The live entry is gone, as if from a delete that removed only the
+        // entry blob, but its snapshot is still in the store.
+        store.delete(&blob_name(&id)).unwrap();
+        store.delete(&BlobName::literal(".vault-key")).unwrap();
+
+        let Err(err) = Vault::open(store.clone(), &passphrase("typo")) else {
+            panic!("opened a fresh vault over a store still holding an orphaned snapshot");
+        };
+        assert!(
+            matches!(err, VaultError::Key(KeyError::MissingKeyFile)),
+            "got {err:?}"
+        );
+
+        discard(&store);
+    }
+
+    /// RUST-3-shaped: `list_entries`/`search` must keep ignoring snapshot
+    /// blobs even though they share the `.json` extension with entries.
+    #[test]
+    fn list_entries_and_search_ignore_snapshot_blobs() {
+        let store = temp_store();
+        let vault = fake_vault(store.clone());
+        vault.save_entry(&entry("Readable", "a walk", 0)).unwrap();
+        vault
+            .write_snapshot(&sample(Id::new()), Utc::now())
+            .unwrap();
+
+        assert_eq!(vault.list_entries().unwrap().len(), 1);
+        assert_eq!(vault.search("walk").unwrap().len(), 1);
 
         discard(&store);
     }

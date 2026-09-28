@@ -11,7 +11,7 @@ use std::sync::Arc;
 use journal_api::{Entry, Header, Id};
 use journal_store::BlobName;
 use journal_sync_engine::{ConflictResolver, Resolution};
-use journal_vault::{entry_id, Vault, VaultError, SETTINGS_BLOB};
+use journal_vault::{entry_id, is_snapshot, Vault, VaultError, SETTINGS_BLOB};
 
 /// The unlocked vault, if there is one, as a handle the caller owns.
 ///
@@ -55,6 +55,15 @@ impl ConflictResolver for VaultResolver {
     /// offer the same conflict again after such a crash, which makes a second
     /// copy: at-least-once, and a duplicate is the better failure.
     fn resolve(&self, name: &BlobName, ours: &[u8], theirs: &[u8]) -> Resolution {
+        // Same name means the same version of the same entry: either
+        // device's ciphertext of it is correct, so keep the one already in
+        // the store. Checked before the vault, on purpose: keeping ours needs
+        // no key, so there's no reason to leave the conflict parked while the
+        // vault is locked.
+        if is_snapshot(name) {
+            self.resolved.fetch_add(1, Ordering::SeqCst);
+            return Resolution::Resolved;
+        }
         let Some(vault) = (self.vault)() else {
             return Resolution::Deferred;
         };
@@ -323,6 +332,59 @@ mod tests {
         std::fs::remove_dir_all(dir).ok();
     }
 
+    /// Review finding: `save_entry` now also snapshots on a `theirs_wins`
+    /// overwrite, since `merge` writes the winner through it. With a gap of
+    /// `SNAPSHOT_MIN_AGE` or more, the loser is expected to exist twice — as
+    /// the conflicted copy `merge` always writes, and as a snapshot of the
+    /// version the winner overwrote — and that's not a duplicate to
+    /// eliminate.
+    #[test]
+    fn a_conflict_older_than_the_snapshot_throttle_leaves_the_loser_recoverable_as_a_snapshot() {
+        let (vault, store, dir) = vault();
+        let id = Id::new();
+        // Ours is old enough that overwriting it crosses the snapshot
+        // throttle; theirs is newer and wins.
+        let ours = sealed(&vault, &store, &entry(id, "laptop", "written first", 45));
+        let theirs = sealed(&vault, &store, &entry(id, "phone", "written later", 1));
+        // Put the store back the way it would be before the conflict is
+        // resolved: holding "ours", the local version — `sealed` wrote
+        // "theirs" last, as a side effect of producing its ciphertext.
+        store.put(&name_of(id), &ours).unwrap();
+
+        assert_eq!(
+            resolver(&vault).resolve(&name_of(id), &ours, &theirs),
+            Resolution::Resolved
+        );
+
+        // The winner keeps the id.
+        let kept = vault.get_entry(&id).unwrap().unwrap();
+        assert_eq!(kept.markdown, "written later");
+        // The loser survives as the conflicted copy `merge` always writes...
+        assert_eq!(
+            titles(&vault),
+            ["laptop (conflicted copy)", "phone"],
+            "the resolver's own copy-on-conflict behaviour is unchanged"
+        );
+        // ...and, separately, as a snapshot `save_entry` took of the version
+        // it overwrote.
+        let history = vault.list_history(&id).unwrap();
+        assert_eq!(
+            history.len(),
+            1,
+            "the overwritten version should be recoverable"
+        );
+        assert_eq!(
+            vault
+                .get_history_entry(&id, history[0].updated_at)
+                .unwrap()
+                .unwrap()
+                .markdown,
+            "written first"
+        );
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
     #[test]
     fn an_entry_in_a_blob_named_for_another_id_is_left_parked() {
         let (vault, store, dir) = vault();
@@ -336,6 +398,48 @@ mod tests {
         );
 
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// Second review: two devices' independent encryptions of the same
+    /// snapshot collide on name; the resolver keeps ours without needing a
+    /// key, rather than leaving the rail stuck on "Conflicts" forever.
+    #[test]
+    fn a_snapshot_name_conflict_keeps_ours_and_needs_no_key() {
+        let (vault, store, dir) = vault();
+        let id = Id::new();
+        let name = BlobName::try_from(format!(
+            "{id}.snap-{:016}.json",
+            Utc::now().timestamp_millis()
+        ))
+        .unwrap();
+        let ours_bytes = b"ours-ciphertext".to_vec();
+        let theirs_bytes = b"theirs-ciphertext".to_vec();
+        store.put(&name, &ours_bytes).unwrap();
+
+        assert_eq!(
+            resolver(&vault).resolve(&name, &ours_bytes, &theirs_bytes),
+            Resolution::Resolved
+        );
+        assert_eq!(store.get(&name).unwrap().unwrap(), ours_bytes);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn a_snapshot_name_conflict_resolves_even_while_the_vault_is_locked() {
+        let locked = VaultResolver::new(Arc::new(|| None));
+        let name = BlobName::try_from(format!(
+            "{}.snap-{:016}.json",
+            Id::new(),
+            Utc::now().timestamp_millis()
+        ))
+        .unwrap();
+
+        assert_eq!(
+            locked.resolve(&name, b"ours", b"theirs"),
+            Resolution::Resolved
+        );
+        assert_eq!(locked.take_resolved(), 1);
     }
 
     fn settings_blob_name() -> BlobName {

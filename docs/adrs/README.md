@@ -18,3 +18,4 @@
 | [0014](0014-search-by-decrypting-on-demand.md) | Search by decrypting on demand, with no persistent index | Accepted |
 | [0015](0015-tinykeys-behind-an-action-registry.md) | Use `tinykeys` behind an action registry for keyboard shortcuts | Accepted |
 | [0016](0016-settings-as-device-and-journal-structs.md) | Define settings as a device struct and a journal struct, merged per field | Accepted |
+| [0017](0017-entry-version-snapshots-sync-like-entries.md) | Sync entry version snapshots like entries, with no engine changes | Accepted |
