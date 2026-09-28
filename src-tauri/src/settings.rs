@@ -13,7 +13,7 @@
 //! between an outside read of the journal half and this write would be
 //! reverted (see the plan's WP2 amendment). Locked, the patch is applied
 //! against `JournalSettings::default()`, and a patch naming any journal key
-//! is refused with [`crate::LOCKED_ERROR`] before anything is written.
+//! is refused with [`crate::vault::LOCKED_ERROR`] before anything is written.
 //!
 //! A change to `sync_interval_minutes` calls `SyncControl::set_interval`
 //! while the device lock is still held, and that call waits on
@@ -35,8 +35,9 @@ use journal_vault::Vault;
 use serde_json::{Map, Value};
 use tauri::State;
 
+use crate::blocking;
 use crate::sync::SyncControl;
-use crate::{blocking, lock_state, VaultState, LOCKED_ERROR};
+use crate::vault::{lock_state, VaultState, LOCKED_ERROR};
 
 /// Minutes, as `DeviceSettings::sync_interval_minutes` stores them, as the
 /// `Duration` the sync worker's `Timing::interval` wants.

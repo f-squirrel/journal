@@ -1,117 +1,20 @@
 #![cfg_attr(all(test, coverage_nightly), feature(coverage_attribute))]
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
+mod entry;
 mod export;
 mod settings;
 mod sync;
+mod vault;
 
-use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::Arc;
 
-use chrono::{DateTime, Utc};
-use journal_api::{Entry, Header, Id, SearchMatch};
 use journal_credential::FileCredentialStore;
 use journal_fs_store::FsStore;
-use journal_key::Keyring;
-use journal_store::BlobStore;
 use journal_sync_engine::NotifyingStore;
-use journal_vault::Vault;
-use secrecy::SecretString;
 use sync::SyncControl;
-use tauri::{Manager, Runtime, State};
+use tauri::{Manager, Runtime};
 use tauri_plugin_opener::OpenerExt;
-
-/// The blob store the journal lives in, plus the unlocked `Vault` over it,
-/// if any. `vault` is `None` until `unlock` succeeds, and is cleared again by
-/// `lock`.
-///
-/// The store outlives the lock state because `has_vault` has to answer before
-/// there is any passphrase to open one with. It is the only copy of "where the
-/// journal is" in the app — the layers below take it as given (ADR 0009).
-///
-/// Only the lock state is behind a mutex: the store never changes after setup,
-/// so `has_vault` needs no lock at all. The `Vault` is an `Arc` so a command
-/// can take a handle to it and drop the guard *before* doing any I/O — a slow
-/// `save_entry` must not hold up `lock` (i.e. logout).
-///
-/// `generation` is what makes that safe for `unlock`, which also runs its work
-/// with the guard free: it counts every change of intent about the lock state,
-/// so an `unlock` that finishes after a `lock` can tell that it is publishing
-/// a vault nobody asked for any more. See [`begin_unlock`] and
-/// [`install_vault`].
-struct VaultState {
-    store: Arc<dyn BlobStore>,
-    vault: Mutex<Option<Arc<Vault>>>,
-    generation: AtomicU64,
-}
-
-const LOCKED_ERROR: &str = "vault is locked";
-
-/// The lock state, recovering the guard from poisoning rather than
-/// propagating it.
-///
-/// A panic while this was held used to wedge the app: every later command saw
-/// a `PoisonError` and refused, for the life of the process, to touch a vault
-/// it still had the key to. What the mutex guards is one `Option` — there is
-/// no half-written invariant a panic could leave behind — so the guard is
-/// worth more than the poison flag.
-fn lock_state(state: &VaultState) -> MutexGuard<'_, Option<Arc<Vault>>> {
-    state.vault.lock().unwrap_or_else(|e| e.into_inner())
-}
-
-/// A handle to the unlocked vault, or the locked error.
-///
-/// Every CRUD command goes through here, and none of them holds the guard: it
-/// is dropped with the temporary this returns from, so the crypto that follows
-/// runs with the mutex free.
-fn vault(state: &VaultState) -> Result<Arc<Vault>, String> {
-    lock_state(state)
-        .clone()
-        .ok_or_else(|| LOCKED_ERROR.to_string())
-}
-
-/// Claims a generation for an `unlock` that is about to start.
-///
-/// Paired with [`install_vault`], which publishes the result only if this is
-/// still the current generation when the open finishes.
-fn begin_unlock(state: &VaultState) -> u64 {
-    state.generation.fetch_add(1, Ordering::SeqCst) + 1
-}
-
-/// Publishes a freshly opened vault, unless the intent it was opened under is
-/// stale.
-///
-/// `unlock` spends ~1s in scrypt with the guard free, and `lock` is a separate
-/// command that can land inside that window. Installing unconditionally would
-/// put the vault back *after* an explicit logout, leaving the session unlocked
-/// with the entries one command away.
-///
-/// A stale generation is an error rather than an `Ok(())`, because the
-/// frontend sets `authenticated = true` on success: reporting success over a
-/// state this call just decided to leave `None` would produce a signed-in
-/// screen where every command answers [`LOCKED_ERROR`]. Which is also the
-/// honest message — the vault is locked, because the user locked it. `Ok`
-/// therefore means, and only means, that the state now holds the vault this
-/// call opened.
-fn install_vault(state: &VaultState, generation: u64, opened: Vault) -> Result<(), String> {
-    let mut vault = lock_state(state);
-    if state.generation.load(Ordering::SeqCst) != generation {
-        return Err(LOCKED_ERROR.to_string());
-    }
-    *vault = Some(Arc::new(opened));
-    Ok(())
-}
-
-/// Clears the lock state, and invalidates any `unlock` still in flight.
-///
-/// The bump happens under the guard so that it cannot fall between an
-/// `install_vault`'s check and its write.
-fn lock_vault(state: &VaultState) {
-    let mut vault = lock_state(state);
-    state.generation.fetch_add(1, Ordering::SeqCst);
-    *vault = None;
-}
 
 /// Runs `work` on Tauri's blocking pool, flattening the join error and the
 /// work's own error into the one string the bridge can carry.
@@ -131,104 +34,6 @@ where
         .await
         .map_err(|e| e.to_string())?
         .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn has_vault(state: State<'_, VaultState>) -> Result<bool, String> {
-    let store = state.store.clone();
-    blocking(move || Keyring::exists(&*store)).await
-}
-
-#[tauri::command]
-async fn unlock(
-    state: State<'_, VaultState>,
-    sync: State<'_, Arc<SyncControl>>,
-    passphrase: String,
-) -> Result<(), String> {
-    let store = state.store.clone();
-    let passphrase = SecretString::from(passphrase);
-
-    // The one command that is actually slow (~1s of scrypt). Opened without
-    // the lock held, then stored — but only if nothing changed the lock state
-    // meanwhile.
-    let generation = begin_unlock(&state);
-    let opened = blocking(move || Vault::open(store, &passphrase)).await?;
-
-    install_vault(&state, generation, opened)?;
-    // A conflict parked while the vault was locked can be settled now.
-    sync.kick();
-    Ok(())
-}
-
-#[tauri::command]
-async fn lock(state: State<'_, VaultState>) -> Result<(), String> {
-    lock_vault(&state);
-    Ok(())
-}
-
-#[tauri::command]
-async fn list_entries(state: State<'_, VaultState>) -> Result<Vec<Header>, String> {
-    let vault = vault(&state)?;
-    blocking(move || vault.list_entries()).await
-}
-
-#[tauri::command]
-async fn get_entry(state: State<'_, VaultState>, id: Id) -> Result<Option<Entry>, String> {
-    let vault = vault(&state)?;
-    blocking(move || vault.get_entry(&id)).await
-}
-
-#[tauri::command(rename_all = "snake_case")]
-async fn save_entry(
-    state: State<'_, VaultState>,
-    entry: Entry,
-    expected_updated_at: Option<DateTime<Utc>>,
-) -> Result<(), String> {
-    let vault = vault(&state)?;
-    blocking(move || vault.save_entry_if(&entry, expected_updated_at)).await
-}
-
-#[tauri::command]
-async fn delete_entry(state: State<'_, VaultState>, id: Id) -> Result<(), String> {
-    let vault = vault(&state)?;
-    blocking(move || vault.delete_entry(&id)).await
-}
-
-/// The slowest command in the app: it decrypts every entry in the journal
-/// (`Vault::search`, which explains why there is no index). That makes the
-/// `blocking` hop every command here makes matter more than anywhere else —
-/// on the main thread this would freeze the webview for the length of a
-/// keystroke's search.
-#[tauri::command]
-async fn search_entries(
-    state: State<'_, VaultState>,
-    query: String,
-) -> Result<Vec<SearchMatch>, String> {
-    let vault = vault(&state)?;
-    blocking(move || vault.search(&query)).await
-}
-
-/// Writes every entry to `directory` as a plaintext markdown file
-/// (`export::to_directory`, which holds the rules about what folders it will
-/// take). The one command that deliberately puts unencrypted journal content on
-/// disk, so the frontend says so before it calls this.
-///
-/// Generic over the runtime only for the `AppHandle`, which is where the app's
-/// data directory — the one place an export must not land — is asked for.
-#[tauri::command]
-async fn export_entries<R: Runtime>(
-    app: tauri::AppHandle<R>,
-    state: State<'_, VaultState>,
-    directory: String,
-) -> Result<usize, String> {
-    let vault = vault(&state)?;
-    let app_data = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    let count =
-        blocking(move || export::to_directory(&vault, Path::new(&directory), &app_data)).await?;
-    // The count and nothing else: not the folder, not a title. Nothing logged at
-    // `Info` may carry the journal, and the log file outlives the export.
-    log::info!("exported {count} entries as plaintext");
-    Ok(count)
 }
 
 /// The app's log sink. Without one installed, `log::warn!` anywhere in the
@@ -268,15 +73,15 @@ pub fn run() {
         // for the one command of it the webview may call.
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
-            has_vault,
-            unlock,
-            lock,
-            list_entries,
-            get_entry,
-            save_entry,
-            delete_entry,
-            search_entries,
-            export_entries,
+            vault::has_vault,
+            vault::unlock,
+            vault::lock,
+            entry::list_entries,
+            entry::get_entry,
+            entry::save_entry,
+            entry::delete_entry,
+            entry::search_entries,
+            entry::export_entries,
             settings::get_settings,
             settings::update_settings,
             sync::list_providers,
@@ -299,11 +104,7 @@ pub fn run() {
                 let slot = slot.clone();
                 NotifyingStore::new(entries.clone(), move |name| slot.dirty(name))
             };
-            app.manage(VaultState {
-                store: Arc::new(notifying),
-                vault: Mutex::new(None),
-                generation: AtomicU64::new(0),
-            });
+            app.manage(vault::VaultState::new(Arc::new(notifying)));
 
             // Plaintext, never synced, beside the credential for the same
             // reason (see the comment on `credentials` below) — readable
@@ -323,7 +124,7 @@ pub fn run() {
             let control = Arc::new(SyncControl::new(sync::SyncConfig {
                 slot,
                 local: Arc::new(entries),
-                vault: Arc::new(move || vault(&handle.state::<VaultState>()).ok()),
+                vault: Arc::new(move || vault::get(&handle.state::<vault::VaultState>()).ok()),
                 events: Arc::new(sync::TauriEvents(app.handle().clone())),
                 // Every provider this build can connect to. Adding one is a line
                 // here and an adapter crate; nothing below names a provider.
@@ -368,10 +169,20 @@ pub fn run() {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
+    use crate::entry::{export_entries, list_entries, save_entry, search_entries};
+    use crate::vault::{
+        begin_unlock, clear as lock_vault, get as vault, install as install_vault, VaultState,
+        LOCKED_ERROR,
+    };
+    use journal_api::{Entry, Header, Id};
+    use journal_store::BlobStore;
+    use journal_vault::Vault;
+    use secrecy::SecretString;
     use serde_json::Value;
     use std::panic::AssertUnwindSafe;
     use std::path::PathBuf;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+    use std::sync::Mutex;
     use tauri::utils::acl::ExecutionContext;
 
     /// A state whose vault is unlocked, over a store in a directory no other

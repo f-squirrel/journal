@@ -27,7 +27,8 @@ use tauri::utils::acl::ExecutionContext;
 use tauri::Manager;
 
 use super::*;
-use crate::VaultState;
+use crate::vault::VaultState;
+use crate::{entry, settings, vault};
 
 const PASSPHRASE: &str = "correct horse";
 const COMMANDS: [&str; 14] = [
@@ -358,15 +359,15 @@ impl Rig {
         }
         let app = tauri::test::mock_builder()
             .invoke_handler(tauri::generate_handler![
-                crate::has_vault,
-                crate::unlock,
-                crate::lock,
-                crate::list_entries,
-                crate::get_entry,
-                crate::save_entry,
-                crate::delete_entry,
-                crate::settings::get_settings,
-                crate::settings::update_settings,
+                vault::has_vault,
+                vault::unlock,
+                vault::lock,
+                entry::list_entries,
+                entry::get_entry,
+                entry::save_entry,
+                entry::delete_entry,
+                settings::get_settings,
+                settings::update_settings,
                 list_providers,
                 connect_remote,
                 disconnect_remote,
@@ -400,7 +401,7 @@ impl Rig {
             SyncControl::new(SyncConfig {
                 slot,
                 local: Arc::new(entries),
-                vault: Arc::new(move || crate::vault(&handle.state::<VaultState>()).ok()),
+                vault: Arc::new(move || crate::vault::get(&handle.state::<VaultState>()).ok()),
                 events: events.clone(),
                 providers,
                 credentials,
@@ -1193,9 +1194,9 @@ fn a_pass_stuck_on_the_network_does_not_hold_up_the_vault() {
     let handle = rig.app.handle().clone();
     thread::spawn(move || {
         let state = handle.state::<VaultState>();
-        assert!(crate::vault(&state).is_ok());
-        crate::lock_vault(&state);
-        assert!(crate::vault(&state).is_err());
+        assert!(crate::vault::get(&state).is_ok());
+        crate::vault::clear(&state);
+        assert!(crate::vault::get(&state).is_err());
         let _ = done.send(());
     });
     finished
