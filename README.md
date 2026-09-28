@@ -1,5 +1,6 @@
 # Journal
 
+[![CI](https://github.com/f-squirrel/journal/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/f-squirrel/journal/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/github/f-squirrel/journal/graph/badge.svg?token=HU66ORM11T)](https://codecov.io/github/f-squirrel/journal)
 
 A private, local-first journal with Markdown editing and encrypted storage.
