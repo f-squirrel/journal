@@ -3,6 +3,7 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 mod entry;
 mod export;
+mod media;
 mod settings;
 mod sync;
 mod vault;
@@ -85,6 +86,9 @@ pub fn run() {
             entry::restore_entry_version,
             entry::search_entries,
             entry::export_entries,
+            media::save_media,
+            media::get_media,
+            media::adopt_media,
             settings::get_settings,
             settings::update_settings,
             sync::list_providers,
@@ -487,6 +491,113 @@ mod tests {
 
         std::fs::remove_dir_all(dir).ok();
         std::fs::remove_dir_all(out).ok();
+    }
+
+    /// A `save_media` request as the frontend sends it: raw bytes, with the
+    /// ids and metadata in headers.
+    fn media_request(
+        cmd: &str,
+        headers: &[(&str, &str)],
+        body: tauri::ipc::InvokeBody,
+    ) -> tauri::webview::InvokeRequest {
+        let mut req = request(cmd, serde_json::json!({}));
+        req.body = body;
+        for (k, v) in headers {
+            req.headers.insert(
+                tauri::http::header::HeaderName::from_bytes(k.as_bytes()).unwrap(),
+                tauri::http::header::HeaderValue::from_str(v).unwrap(),
+            );
+        }
+        req
+    }
+
+    fn rejection(response: Result<tauri::ipc::InvokeResponseBody, Value>) -> String {
+        response
+            .expect_err("the command was refused")
+            .as_str()
+            .unwrap_or_default()
+            .to_owned()
+    }
+
+    #[test]
+    fn media_commands_validate_and_round_trip() {
+        use crate::media::{get_media, save_media};
+        use tauri::ipc::InvokeBody::Raw;
+
+        let app = tauri::test::mock_builder()
+            .invoke_handler(tauri::generate_handler![save_media, get_media])
+            .build(context_allowing(&["save_media", "get_media"]))
+            .expect("mock app builds");
+        let (state, dir) = unlocked_state();
+        app.manage(state);
+        let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("mock webview builds");
+
+        let (e, m) = (
+            Id::new().to_string(),
+            journal_api::MediaId::new().to_string(),
+        );
+        let good = r#"{"kind":"image","format":"webp","width":2,"height":2}"#;
+        let send = |headers: &[(&str, &str)], body| {
+            tauri::test::get_ipc_response(&webview, media_request("save_media", headers, body))
+        };
+
+        // A missing header, and a body that is not raw.
+        assert!(rejection(send(&[("entry-id", &e)], Raw(vec![1]))).contains("media-id"));
+        let all = [
+            ("entry-id", e.as_str()),
+            ("media-id", m.as_str()),
+            ("media-meta", good),
+        ];
+        assert!(rejection(send(
+            &all,
+            tauri::ipc::InvokeBody::Json(serde_json::json!([1]))
+        ))
+        .contains("raw"));
+
+        // An SVG or audio description is not a storable kind.
+        for bad in [
+            r#"{"kind":"image","format":"svg","width":2,"height":2}"#,
+            r#"{"kind":"audio","format":"mp3","duration_ms":1}"#,
+        ] {
+            let headers = [
+                ("entry-id", e.as_str()),
+                ("media-id", m.as_str()),
+                ("media-meta", bad),
+            ];
+            assert_eq!(
+                rejection(send(&headers, Raw(vec![1]))),
+                "that kind of file cannot be added to an entry"
+            );
+        }
+
+        // The good request stores, and the payload comes back as bytes.
+        send(&all, Raw(b"px\nel".to_vec())).expect("the image saves");
+        let got = tauri::test::get_ipc_response(
+            &webview,
+            request(
+                "get_media",
+                serde_json::json!({ "entry_id": e, "media_id": m }),
+            ),
+        )
+        .expect("the image reads back");
+        let tauri::ipc::InvokeResponseBody::Raw(payload) = got else {
+            panic!("get_media answers with bytes");
+        };
+        assert_eq!(payload, [good.as_bytes(), b"\n", b"px\nel"].concat());
+
+        // An unknown id carries the pinned text.
+        let unknown = tauri::test::get_ipc_response(
+            &webview,
+            request(
+                "get_media",
+                serde_json::json!({ "entry_id": Id::new(), "media_id": journal_api::MediaId::new() }),
+            ),
+        );
+        assert_eq!(rejection(unknown), "that image is no longer available");
+
+        std::fs::remove_dir_all(dir).ok();
     }
 
     /// The wire contract of `save_entry`, as `src/api/entries.ts` calls it —

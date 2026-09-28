@@ -21,6 +21,7 @@ import {
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
 import ArrowBackIcon from "@mui/icons-material/ArrowBack";
+import AddPhotoAlternateIcon from "@mui/icons-material/AddPhotoAlternate";
 import AutoStoriesIcon from "@mui/icons-material/AutoStories";
 import DeleteIcon from "@mui/icons-material/Delete";
 import EditIcon from "@mui/icons-material/Edit";
@@ -28,10 +29,7 @@ import HistoryIcon from "@mui/icons-material/History";
 import MoreHorizIcon from "@mui/icons-material/MoreHoriz";
 import VisibilityIcon from "@mui/icons-material/Visibility";
 import { DateCalendar } from "@mui/x-date-pickers/DateCalendar";
-import { openUrl } from "@tauri-apps/plugin-opener";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import { backend } from "../api/backend";
+import { saveMedia } from "../api/media";
 import {
   BODY_MIN_HEIGHT,
   HEADER_HEIGHT,
@@ -41,7 +39,10 @@ import {
   rem,
 } from "../components/chrome";
 import HistoryDialog from "../components/HistoryDialog";
-import MarkdownEditor from "../components/MarkdownEditor";
+import MarkdownEditor, {
+  type MarkdownEditorHandle,
+} from "../components/MarkdownEditor";
+import MarkdownView from "../components/MarkdownView";
 import { useAppState } from "../context/AppStateContext";
 import { useSettings } from "../context/SettingsContext";
 import {
@@ -55,6 +56,9 @@ import { useShortcut, useShortcuts } from "../shortcuts/ShortcutsContext";
 import type { JournalEntry } from "../types";
 import { formatAgo, formatEntryHeading, formatTime } from "../utils/date";
 import { errorMessage } from "../utils/errors";
+import { newEntryId } from "../utils/id";
+import { importImage } from "../media/importImage";
+import { mediaRef } from "../media/ref";
 
 const STATUS_TEXT: Record<SaveStatus, string> = {
   idle: "",
@@ -136,6 +140,9 @@ function EntryPane({ id, draft }: { id: string; draft: boolean }) {
   // nothing to render, so it opens in the editor.
   const [mode, setMode] = useState<"read" | "edit">(draft ? "edit" : "read");
   const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
+  const editor = useRef<MarkdownEditorHandle>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const [mediaError, setMediaError] = useState("");
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState("");
@@ -281,6 +288,29 @@ function EntryPane({ id, draft }: { id: string; draft: boolean }) {
     };
   }, [draft, id, loadEntry]);
 
+  // Imports each file, stores it encrypted under this entry and returns the
+  // markdown that shows them, or `null` when none made it. Failures are
+  // shown and skipped. The editor decides where the text lands, and drops it
+  // if it has gone away meanwhile.
+  const importFiles = useCallback(
+    async (files: File[]): Promise<string | null> => {
+      setMediaError("");
+      const links: string[] = [];
+      for (const file of files) {
+        try {
+          const { meta, bytes } = await importImage(file);
+          const mediaId = newEntryId();
+          await saveMedia(id, mediaId, meta, bytes);
+          links.push(`![](${mediaRef(id, mediaId)})`);
+        } catch (err) {
+          setMediaError(errorMessage(err));
+        }
+      }
+      return links.length ? links.join("\n") : null;
+    },
+    [id],
+  );
+
   if (loading) {
     return null;
   }
@@ -411,6 +441,11 @@ function EntryPane({ id, draft }: { id: string; draft: boolean }) {
     navigate("/entries");
   }
 
+  async function insertPicked(files: File[]) {
+    const text = await importFiles(files);
+    if (text) editor.current?.insertAtCursor(text);
+  }
+
   // `updated_at`, which the heading no longer shows: the heading is the
   // entry's date now, and when it was last written is a different fact. Kept
   // as a tooltip on the save status rather than dropped.
@@ -446,6 +481,30 @@ function EntryPane({ id, draft }: { id: string; draft: boolean }) {
         >
           {STATUS_TEXT[autosave.status]}
         </Typography>
+        {mode === "edit" && (
+          <>
+            <input
+              ref={fileInput}
+              type="file"
+              accept="image/*"
+              multiple
+              hidden
+              data-testid="image-input"
+              onChange={(event) => {
+                const files = [...(event.target.files ?? [])];
+                event.target.value = "";
+                if (files.length) void insertPicked(files);
+              }}
+            />
+            <IconButton
+              aria-label="Insert image"
+              data-testid="insert-image"
+              onClick={() => fileInput.current?.click()}
+            >
+              <AddPhotoAlternateIcon />
+            </IconButton>
+          </>
+        )}
         <IconButton
           aria-label="Entry actions"
           onClick={(event) => setMenuAnchor(event.currentTarget)}
@@ -453,6 +512,17 @@ function EntryPane({ id, draft }: { id: string; draft: boolean }) {
           <MoreHorizIcon />
         </IconButton>
       </Stack>
+
+      {mediaError && (
+        <Alert
+          severity="error"
+          data-testid="media-error"
+          sx={{ borderRadius: 0 }}
+          onClose={() => setMediaError("")}
+        >
+          {mediaError}
+        </Alert>
+      )}
 
       {autosave.status === "error" && (
         <Alert
@@ -549,6 +619,8 @@ function EntryPane({ id, draft }: { id: string; draft: boolean }) {
                 onChange={changeMarkdown}
                 placeholder="Write your entry..."
                 autoFocus
+                onFiles={importFiles}
+                ref={editor}
               />
             </>
           ) : (
@@ -573,30 +645,7 @@ function EntryPane({ id, draft }: { id: string; draft: boolean }) {
                   "& img": { maxWidth: "100%", borderRadius: 1 },
                 }}
               >
-                <ReactMarkdown
-                  remarkPlugins={[remarkGfm]}
-                  components={{
-                    // The window has no address bar, so a click must never
-                    // navigate it: an entry's links open in the user's
-                    // browser, where they can be seen.
-                    a: ({ href, children }) => (
-                      <a
-                        href={href}
-                        onClick={(event) => {
-                          event.preventDefault();
-                          if (!href) return;
-                          if (backend) void openUrl(href);
-                          else
-                            window.open(href, "_blank", "noopener,noreferrer");
-                        }}
-                      >
-                        {children}
-                      </a>
-                    ),
-                  }}
-                >
-                  {markdown}
-                </ReactMarkdown>
+                <MarkdownView markdown={markdown} />
               </Box>
             </>
           )}

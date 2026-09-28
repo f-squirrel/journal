@@ -35,6 +35,7 @@ use journal_credential::{Credential, CredentialStore, RefreshToken};
 use journal_remote::RemoteStore;
 use journal_store::{BlobName, BlobStore};
 use journal_sync_engine::{erase_state, SyncEngine, SyncStatus};
+use journal_vault::is_media;
 use tauri::State;
 use url::Url;
 
@@ -521,8 +522,18 @@ impl SyncControl {
             let poke = poke.clone();
             Box::new(move |_: &SyncStatus| poke())
         };
-        let engine = SyncEngine::open(cfg.local.clone(), remote, cfg.state_path.clone(), on_status)
-            .map_err(|e| e.to_string())?;
+        // Media blobs are written once and never rewritten with different
+        // content, so the engine need not re-read them every pass. Snapshots
+        // are excluded: they are written with `put`, not `put_new`, so nothing
+        // enforces that a name is never rewritten with different content.
+        let engine = SyncEngine::open(
+            cfg.local.clone(),
+            remote,
+            cfg.state_path.clone(),
+            Box::new(is_media),
+            on_status,
+        )
+        .map_err(|e| e.to_string())?;
         // Read under the same `turn()` lock `set_interval` stores under: see
         // its doc comment for the race this closes.
         let timing = *self.timing.lock().unwrap_or_else(PoisonError::into_inner);

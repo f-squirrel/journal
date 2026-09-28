@@ -58,7 +58,10 @@ Frontend:
   use `useShortcut(id, …)`, never key strings. Bindings are `$mod`+`event.code`
   (layout-independent) and always carry a modifier; none fire while a dialog
   is open (ADR 0015).
-- Markdown links open via `openUrl`, never in the webview.
+- Markdown links open via `openUrl`, never in the webview. `MarkdownView` is
+  the one markdown renderer; its components and `urlTransform` stay module
+  scope, or images remount and decrypt again on every render. Frontend UUIDs
+  (media ids too) come from `newEntryId()`, never `crypto.randomUUID()`.
 - Date pickers need `reduceAnimations` (ADR 0013).
 - E2E specs import `test`/`expect`/`Page` from `./coverage`, not
   `@playwright/test`, or their coverage is silently lost.
@@ -79,7 +82,7 @@ Backend:
 - `Vault::open` is the only caller of `Keyring::create`/`unlock` — a fresh
   key over existing entries orphans them.
 - `Vault::save_entry`/`save_entry_if` also throttle-snapshot the version they
-  overwrite (`crates/vault/src/history.rs`); `delete_entry` purges an entry's
+  overwrite (`crates/vault/src/snapshot.rs`); `delete_entry` purges an entry's
   snapshots too.
 - The scrypt work factor is pinned (`crates/key/src/identity.rs`); never let
   `age` choose it (ADR 0007).
@@ -87,6 +90,15 @@ Backend:
 - No `expect` on thread spawns in `src-tauri`.
 - `export.rs` is the only plaintext write: empty folder outside app data,
   `create_new`, `0600`, clean up on failure, log counts only.
+- Media (images) are immutable blobs `<entry-id>.media-<media-id>`, written
+  with `put_new`, deleted only by `delete_entry` (media, then snapshots, then
+  the entry). `MediaMeta` is a tagged enum: per-kind fields live on their
+  variant and every `match` on it stays exhaustive (no `_` arm). Never add an
+  SVG format. Every conflicted copy must go through `Vault::adopt_media` (Rust
+  resolver, `useAutosave`, fallback). Entry-owned blob naming is shared in
+  `crates/vault/src/owned.rs`. The sync engine's `immutable` predicate
+  (`is_media`) means a name in it must never be rewritten with different
+  content.
 - Search decrypts on every call, no index (ADR 0014) — don't add one without
   measurements.
 - Keep the `dropbox_sdk::oauth2` log target at `info`+ (it logs tokens).
@@ -95,6 +107,8 @@ Backend:
 - Tests: `#[cfg(test)]` modules carry
   `#[cfg_attr(coverage_nightly, coverage(off))]`; crate roots with one start
   with `#![cfg_attr(all(test, coverage_nightly), feature(coverage_attribute))]`.
-- CSP (ADR 0011) only applies to packaged builds, not `make run` or e2e.
+- CSP (ADR 0011) allows `blob:` in `img-src` for decrypted images, and the
+  main window sets `dragDropEnabled: false` so image drops reach the editor.
+  CSP only applies to packaged builds, not `make run` or e2e.
 - New Tauri plugins/commands need grants in
   `src-tauri/capabilities/default.json`.

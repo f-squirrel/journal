@@ -9,15 +9,17 @@
 
 #![cfg_attr(all(test, coverage_nightly), feature(coverage_attribute))]
 
-mod history;
+mod media;
+mod owned;
 mod search;
 mod settings;
+mod snapshot;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Utc};
-use journal_entry::{Entry, Header, Id, SearchMatch};
+use journal_entry::{Entry, Header, Id, MediaId, MediaMeta, SearchMatch};
 use journal_key::{Cipher, KeyError, Keyring};
 use journal_settings::SettingsError;
 use journal_store::{BlobName, BlobStore, StoreError};
@@ -25,8 +27,11 @@ use search::Query;
 use secrecy::SecretString;
 use thiserror::Error;
 
-pub use history::is_snapshot;
+use media::MediaBlob;
+pub use media::{is_media, media_refs, Media, MediaRef};
 pub use settings::SETTINGS_BLOB;
+pub use snapshot::is_snapshot;
+use snapshot::Snapshot;
 
 #[derive(Debug, Error)]
 pub enum VaultError {
@@ -57,6 +62,16 @@ pub enum VaultError {
     /// entry moved on, not that an old version no longer exists.
     #[error("that version of the entry is no longer available")]
     HistoryNotFound,
+    /// A media reference whose blob is gone: deleted with its entry, or not
+    /// synced yet. The text is user-facing.
+    #[error("that image is no longer available")]
+    MediaNotFound,
+    #[error("that image is too large to store")]
+    MediaTooLarge,
+    /// Metadata that does not describe a storable media item: an unknown kind
+    /// or format, or an image with a zero dimension.
+    #[error("that kind of file cannot be added to an entry")]
+    MediaType,
 }
 
 /// The extension every entry blob's name ends in.
@@ -295,10 +310,10 @@ impl Vault {
     /// thread, so a pull that lands between the read below and the final
     /// write in [`write_entry`](Self::write_entry) is silently overwritten
     /// (see the plan's Non-goals). On a save that does not cross
-    /// `history::SNAPSHOT_MIN_AGE`, that window is still one read plus one
+    /// `snapshot::SNAPSHOT_MIN_AGE`, that window is still one read plus one
     /// encrypt plus one write. On a save that does, it now also contains a
     /// `store.list()` over every blob in the store and up to
-    /// `history::MAX_SNAPSHOTS_PER_ENTRY` deletes plus a snapshot `put`
+    /// `snapshot::MAX_SNAPSHOTS_PER_ENTRY` deletes plus a snapshot `put`
     /// (`snapshot_outgoing`), so the window can be far larger than "a few
     /// milliseconds" and scales with total blob count. Closing it properly
     /// needs a lock or a compare-and-swap shared with the engine, which is
@@ -341,7 +356,7 @@ impl Vault {
         id: &Id,
         at: DateTime<Utc>,
     ) -> Result<Option<Entry>, VaultError> {
-        self.read(&history::snapshot_blob_name(id, at))
+        self.read(&owned::name::<Snapshot>(id, &at))
     }
 
     /// Restores `id` to how it read at `at`: title and markdown come from the
@@ -373,7 +388,7 @@ impl Vault {
         if Some(live.header.updated_at) != expected {
             return Err(VaultError::Stale);
         }
-        let Some(snapshot) = self.read::<Entry>(&history::snapshot_blob_name(id, at))? else {
+        let Some(snapshot) = self.read::<Entry>(&owned::name::<Snapshot>(id, &at))? else {
             return Err(VaultError::HistoryNotFound);
         };
         let now = Utc::now();
@@ -412,20 +427,20 @@ impl Vault {
     /// with made-up times:
     ///
     /// - **Gap:** `previous` sat unchanged for at least
-    ///   `history::SNAPSHOT_MIN_AGE` — the start of a new editing session.
+    ///   `snapshot::SNAPSHOT_MIN_AGE` — the start of a new editing session.
     /// - **Periodic:** this vault has not taken a snapshot of this entry for
-    ///   at least `history::SNAPSHOT_MIN_AGE` of continuous editing, so a long
+    ///   at least `snapshot::SNAPSHOT_MIN_AGE` of continuous editing, so a long
     ///   session still produces a version from inside itself.
     fn snapshot_outgoing(&self, previous: &Entry, at: DateTime<Utc>) -> Result<(), VaultError> {
         let id = previous.header.id;
-        let gap = at - previous.header.updated_at >= history::SNAPSHOT_MIN_AGE;
+        let gap = at - previous.header.updated_at >= snapshot::SNAPSHOT_MIN_AGE;
         let periodic = {
             let mut checkpoints = self.checkpoints.lock().unwrap_or_else(|e| e.into_inner());
             // First save this session starts the clock; it isn't itself a
             // reason to snapshot (the gap condition covers a session's first
             // save).
             let since = *checkpoints.entry(id).or_insert(at);
-            at - since >= history::SNAPSHOT_MIN_AGE
+            at - since >= snapshot::SNAPSHOT_MIN_AGE
         };
         if !(gap || periodic) {
             return Ok(());
@@ -440,7 +455,7 @@ impl Vault {
     /// keeping them distinct here is what lets `restore_history` restart the
     /// clock at `now` without renaming the snapshot it writes.
     fn write_snapshot(&self, entry: &Entry, at: DateTime<Utc>) -> Result<(), VaultError> {
-        let name = history::snapshot_blob_name(&entry.header.id, entry.header.updated_at);
+        let name = owned::name::<Snapshot>(&entry.header.id, &entry.header.updated_at);
         let plaintext = serde_json::to_vec(entry)?;
         let ciphertext = self.cipher.encrypt(&plaintext)?;
         self.store.put(&name, &ciphertext)?;
@@ -458,39 +473,115 @@ impl Vault {
     /// `list_history` and `delete_entry` all go through it, so there is
     /// exactly one definition of "this entry's snapshots".
     fn snapshot_names(&self, id: &Id) -> Result<Vec<(DateTime<Utc>, BlobName)>, VaultError> {
-        let mut names: Vec<_> = self
-            .store
-            .list()?
-            .into_iter()
-            .filter_map(|name| {
-                let (snapshot_id, at) = history::snapshot_id_and_time(&name)?;
-                (snapshot_id == *id).then_some((at, name))
-            })
-            .collect();
+        let mut names = owned::owned_by::<Snapshot>(&*self.store, id)?;
         names.sort_by_key(|(at, _)| std::cmp::Reverse(*at));
         Ok(names)
     }
 
-    /// Keeps the newest `history::MAX_SNAPSHOTS_PER_ENTRY` snapshots for `id`,
+    /// Keeps the newest `snapshot::MAX_SNAPSHOTS_PER_ENTRY` snapshots for `id`,
     /// deleting the rest. Sorts by the timestamp embedded in the blob name
     /// (via `snapshot_names`), so this needs no decryption.
     fn prune_history(&self, id: &Id) -> Result<(), VaultError> {
         for (_, name) in self
             .snapshot_names(id)?
             .into_iter()
-            .skip(history::MAX_SNAPSHOTS_PER_ENTRY)
+            .skip(snapshot::MAX_SNAPSHOTS_PER_ENTRY)
         {
             self.store.delete(&name)?;
         }
         Ok(())
     }
 
-    /// Deletes `id`'s entry and every snapshot it has.
+    /// Every media blob `id` owns. The one enumeration of an entry's media,
+    /// like `snapshot_names` for snapshots.
+    fn media_names(&self, id: &Id) -> Result<Vec<BlobName>, VaultError> {
+        Ok(owned::owned_by::<MediaBlob>(&*self.store, id)?
+            .into_iter()
+            .map(|(_, name)| name)
+            .collect())
+    }
+
+    /// Stores one media item under `entry`, encrypted. Immutable: an existing
+    /// blob with the same ids is a retry (or an adoption copy) of the same
+    /// bytes and counts as success.
+    pub fn save_media(
+        &self,
+        entry: &Id,
+        media: &MediaId,
+        meta: &MediaMeta,
+        bytes: &[u8],
+    ) -> Result<(), VaultError> {
+        // No `_` arm: a new kind of media must decide its own validation.
+        match meta {
+            MediaMeta::Image { width, height, .. } => {
+                if *width == 0 || *height == 0 {
+                    return Err(VaultError::MediaType);
+                }
+            }
+        }
+        if bytes.len() > media::MAX_MEDIA_BYTES {
+            return Err(VaultError::MediaTooLarge);
+        }
+        let ciphertext = self.cipher.encrypt(&media::encode_payload(meta, bytes))?;
+        match self
+            .store
+            .put_new(&owned::name::<MediaBlob>(entry, media), &ciphertext)
+        {
+            Ok(()) | Err(StoreError::AlreadyExists(_)) => Ok(()),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    pub fn get_media(&self, entry: &Id, media: &MediaId) -> Result<Option<Media>, VaultError> {
+        let Some(ciphertext) = self.store.get(&owned::name::<MediaBlob>(entry, media))? else {
+            return Ok(None);
+        };
+        let plain = self.cipher.decrypt(&ciphertext)?;
+        Ok(Some(media::decode_payload(&plain)?))
+    }
+
+    /// Makes `markdown` (the text of a conflicted copy, saved as `to`) own the
+    /// media it references: each foreign `media:` reference whose blob exists
+    /// gets its ciphertext copied under `to` (no decryption; the payload holds
+    /// no ids) and its link rewritten. References to missing media are left
+    /// alone. Idempotent, so safe under the sync resolver's at-least-once
+    /// contract. Call it before saving the copy.
+    pub fn adopt_media(&self, to: &Id, markdown: &str) -> Result<String, VaultError> {
+        let mut out = markdown.to_owned();
+        // Back to front, so earlier ranges stay valid while replacing.
+        for r in media_refs(markdown).into_iter().rev() {
+            if r.entry == *to {
+                continue;
+            }
+            let target = owned::name::<MediaBlob>(to, &r.media);
+            if !self.store.contains(&target)? {
+                let Some(ciphertext) = self
+                    .store
+                    .get(&owned::name::<MediaBlob>(&r.entry, &r.media))?
+                else {
+                    continue;
+                };
+                match self.store.put_new(&target, &ciphertext) {
+                    Ok(()) | Err(StoreError::AlreadyExists(_)) => {}
+                    Err(e) => return Err(e.into()),
+                }
+            }
+            out.replace_range(r.range, &format!("media:{to}/{}", r.media));
+        }
+        Ok(out)
+    }
+
+    /// Deletes `id`'s entry, its media and every snapshot it has.
     ///
-    /// Snapshots first, entry blob last: a failure partway leaves the entry
-    /// still visible and the user can retry. The other order would leave
-    /// snapshots that no UI can reach, and `holds_content` still counts them.
+    /// Media, then snapshots, entry blob last: a failure partway leaves the
+    /// entry still visible and the user can retry. The other order would leave
+    /// blobs that no UI can reach, and `holds_content` still counts them. An
+    /// entry resurrected by sync ("edited here, deleted there") comes back
+    /// without its media.
     pub fn delete_entry(&self, id: &Id) -> Result<(), VaultError> {
+        for name in self.media_names(id)? {
+            self.store.delete(&name)?;
+        }
         for (_, name) in self.snapshot_names(id)? {
             self.store.delete(&name)?;
         }
@@ -526,8 +617,8 @@ impl Vault {
 }
 
 /// Whether `store` holds anything [`Vault::open`]'s orphan check must not
-/// mint a fresh key over: an entry blob, a snapshot blob, or the settings
-/// blob.
+/// mint a fresh key over: an entry blob, a snapshot blob, a media blob, or the
+/// settings blob.
 ///
 /// A store holding only [`SETTINGS_BLOB`] and no key would otherwise pass as
 /// an empty store and get a new key that can never read it — and the same is
@@ -535,7 +626,10 @@ impl Vault {
 /// the key gone some other way).
 fn holds_content(store: &dyn BlobStore) -> Result<bool, VaultError> {
     Ok(store.list()?.iter().any(|name| {
-        is_entry(name) || settings::is_settings_blob(name) || history::is_snapshot(name)
+        is_entry(name)
+            || settings::is_settings_blob(name)
+            || snapshot::is_snapshot(name)
+            || media::is_media(name)
     }))
 }
 
@@ -1686,6 +1780,210 @@ mod tests {
         assert_eq!(vault.list_entries().unwrap().len(), 1);
         assert_eq!(vault.search("walk").unwrap().len(), 1);
 
+        discard(&store);
+    }
+
+    fn img() -> MediaMeta {
+        MediaMeta::Image {
+            format: journal_entry::ImageFormat::Webp,
+            width: 4,
+            height: 3,
+        }
+    }
+
+    fn media_count(store: &FsStore) -> usize {
+        store.list().unwrap().iter().filter(|n| is_media(n)).count()
+    }
+
+    #[test]
+    fn save_media_then_get_media_round_trips() {
+        let store = temp_store();
+        let vault = fake_vault(store.clone());
+        let (e, m) = (Id::new(), MediaId::new());
+        vault.save_media(&e, &m, &img(), b"a\nbytes").unwrap();
+        let got = vault.get_media(&e, &m).unwrap().unwrap();
+        assert_eq!(got.meta, img());
+        assert_eq!(got.bytes, b"a\nbytes");
+        discard(&store);
+    }
+
+    #[test]
+    fn save_media_twice_with_the_same_ids_is_ok() {
+        let store = temp_store();
+        let vault = fake_vault(store.clone());
+        let (e, m) = (Id::new(), MediaId::new());
+        vault.save_media(&e, &m, &img(), b"x").unwrap();
+        vault.save_media(&e, &m, &img(), b"x").unwrap();
+        assert_eq!(media_count(&store), 1);
+        discard(&store);
+    }
+
+    #[test]
+    fn save_media_refuses_an_image_with_a_zero_dimension() {
+        let store = temp_store();
+        let vault = fake_vault(store.clone());
+        let bad = MediaMeta::Image {
+            format: journal_entry::ImageFormat::Png,
+            width: 0,
+            height: 5,
+        };
+        let err = vault
+            .save_media(&Id::new(), &MediaId::new(), &bad, b"x")
+            .unwrap_err();
+        assert!(matches!(err, VaultError::MediaType), "{err:?}");
+        assert_eq!(media_count(&store), 0);
+        discard(&store);
+    }
+
+    #[test]
+    fn save_media_refuses_more_than_max_bytes() {
+        let store = temp_store();
+        let vault = fake_vault(store.clone());
+        let big = vec![0u8; media::MAX_MEDIA_BYTES + 1];
+        let err = vault
+            .save_media(&Id::new(), &MediaId::new(), &img(), &big)
+            .unwrap_err();
+        assert!(matches!(err, VaultError::MediaTooLarge), "{err:?}");
+        discard(&store);
+    }
+
+    #[test]
+    fn get_media_returns_none_for_unknown_ids() {
+        let store = temp_store();
+        let vault = fake_vault(store.clone());
+        assert!(vault
+            .get_media(&Id::new(), &MediaId::new())
+            .unwrap()
+            .is_none());
+        discard(&store);
+    }
+
+    #[test]
+    fn media_is_encrypted_at_rest() {
+        let store = temp_store();
+        let vault = Vault::open(store.clone(), &passphrase("hunter2")).unwrap();
+        let (e, m) = (Id::new(), MediaId::new());
+        vault
+            .save_media(&e, &m, &img(), b"SECRET-PIXELS-SECRET-PIXELS")
+            .unwrap();
+        let raw = store
+            .get(&owned::name::<MediaBlob>(&e, &m))
+            .unwrap()
+            .unwrap();
+        assert!(!raw.windows(6).any(|w| w == b"SECRET"));
+        assert!(!raw.windows(5).any(|w| w == b"image"));
+        assert_eq!(
+            vault.get_media(&e, &m).unwrap().unwrap().bytes,
+            b"SECRET-PIXELS-SECRET-PIXELS"
+        );
+        discard(&store);
+    }
+
+    #[test]
+    fn delete_entry_removes_its_media_but_not_another_entrys() {
+        let store = temp_store();
+        let vault = fake_vault(store.clone());
+        let (a, b) = (Id::new(), Id::new());
+        vault.save_entry(&sample(a)).unwrap();
+        vault.save_entry(&sample(b)).unwrap();
+        let (ma, mb) = (MediaId::new(), MediaId::new());
+        vault.save_media(&a, &ma, &img(), b"a").unwrap();
+        vault.save_media(&b, &mb, &img(), b"b").unwrap();
+
+        vault.delete_entry(&a).unwrap();
+
+        assert!(vault.get_media(&a, &ma).unwrap().is_none());
+        assert!(vault.get_media(&b, &mb).unwrap().is_some());
+        discard(&store);
+    }
+
+    #[test]
+    fn open_refuses_when_the_key_is_missing_but_only_media_remains() {
+        let store = temp_store();
+        let vault = Vault::open(store.clone(), &passphrase("hunter2")).unwrap();
+        vault
+            .save_media(&Id::new(), &MediaId::new(), &img(), b"x")
+            .unwrap();
+        store.delete(&BlobName::literal(".vault-key")).unwrap();
+
+        let Err(err) = Vault::open(store.clone(), &passphrase("typo")) else {
+            panic!("opened a fresh vault over orphaned media");
+        };
+        assert!(
+            matches!(err, VaultError::Key(KeyError::MissingKeyFile)),
+            "got {err:?}"
+        );
+        discard(&store);
+    }
+
+    #[test]
+    fn list_entries_and_search_ignore_media_blobs() {
+        let store = temp_store();
+        let vault = fake_vault(store.clone());
+        vault.save_entry(&entry("Readable", "a walk", 0)).unwrap();
+        vault
+            .save_media(&Id::new(), &MediaId::new(), &img(), b"walk")
+            .unwrap();
+        assert_eq!(vault.list_entries().unwrap().len(), 1);
+        assert_eq!(vault.search("walk").unwrap().len(), 1);
+        discard(&store);
+    }
+
+    #[test]
+    fn adopt_media_copies_foreign_media_and_rewrites_the_links() {
+        let store = temp_store();
+        let vault = fake_vault(store.clone());
+        let (from, to, m) = (Id::new(), Id::new(), MediaId::new());
+        vault.save_media(&from, &m, &img(), b"pix").unwrap();
+        let md = format!("hi ![x](media:{from}/{m}) there");
+
+        let out = vault.adopt_media(&to, &md).unwrap();
+
+        assert_eq!(out, format!("hi ![x](media:{to}/{m}) there"));
+        assert_eq!(vault.get_media(&to, &m).unwrap().unwrap().bytes, b"pix");
+        assert!(vault.get_media(&from, &m).unwrap().is_some());
+        discard(&store);
+    }
+
+    #[test]
+    fn adopt_media_leaves_refs_to_missing_media_and_own_media_alone() {
+        let store = temp_store();
+        let vault = fake_vault(store.clone());
+        let (to, own, gone) = (Id::new(), MediaId::new(), MediaId::new());
+        vault.save_media(&to, &own, &img(), b"x").unwrap();
+        let md = format!("![](media:{to}/{own}) ![](media:{}/{gone})", Id::new());
+        assert_eq!(vault.adopt_media(&to, &md).unwrap(), md);
+        assert_eq!(media_count(&store), 1);
+        discard(&store);
+    }
+
+    #[test]
+    fn adopt_media_is_idempotent() {
+        let store = temp_store();
+        let vault = fake_vault(store.clone());
+        let (from, to, m) = (Id::new(), Id::new(), MediaId::new());
+        vault.save_media(&from, &m, &img(), b"pix").unwrap();
+        let md = format!("![](media:{from}/{m})");
+        let once = vault.adopt_media(&to, &md).unwrap();
+        // The original text again (a retry), and the rewritten text.
+        assert_eq!(vault.adopt_media(&to, &md).unwrap(), once);
+        assert_eq!(vault.adopt_media(&to, &once).unwrap(), once);
+        assert_eq!(media_count(&store), 2);
+        discard(&store);
+    }
+
+    #[test]
+    fn adopted_media_survives_deleting_the_original_entry() {
+        let store = temp_store();
+        let vault = fake_vault(store.clone());
+        let (from, to, m) = (Id::new(), Id::new(), MediaId::new());
+        vault.save_entry(&sample(from)).unwrap();
+        vault.save_media(&from, &m, &img(), b"pix").unwrap();
+        vault
+            .adopt_media(&to, &format!("![](media:{from}/{m})"))
+            .unwrap();
+        vault.delete_entry(&from).unwrap();
+        assert_eq!(vault.get_media(&to, &m).unwrap().unwrap().bytes, b"pix");
         discard(&store);
     }
 }

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { adoptMedia } from "../api/media";
 import { useAppState } from "../context/AppStateContext";
 import { formatEntryHeading } from "../utils/date";
 import { errorMessage, isStaleEntry } from "../utils/errors";
@@ -185,14 +186,18 @@ export function useAutosave(
         // against. Rather than overwrite it, keep the draft's latest text —
         // including anything typed while this write was in flight — as a new
         // entry, under a fresh id so it never collides with anything.
+        const copyId = newEntryId();
         const copy = {
-          id: newEntryId(),
+          id: copyId,
           title: `${draft.current.title.trim() || formatEntryHeading(draft.current.entryDate)} (conflicted copy)`,
           updated_at: new Date().toISOString(),
           entry_date: draft.current.entryDate,
           markdown: draft.current.markdown,
         };
         try {
+          // The copy owns the media its text shows, so deleting the original
+          // later cannot take the copy's images with it.
+          copy.markdown = await adoptMedia(copyId, copy.markdown);
           await upsertEntry(copy, null);
           draft.current.dirty = false;
           setNotice(

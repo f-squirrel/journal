@@ -86,6 +86,7 @@ impl Device {
             Arc::new(self.store.clone()),
             self.remote.clone(),
             self.state_path(),
+            Box::new(|_| false),
             Box::new(move |status| events.lock().unwrap().push(status.clone())),
         )
         .unwrap();

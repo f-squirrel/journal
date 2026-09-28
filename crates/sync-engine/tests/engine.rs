@@ -474,6 +474,7 @@ fn a_restored_key_does_not_replace_one_created_meanwhile() {
         Arc::new(store),
         remote.clone(),
         a.state_path(),
+        Box::new(|_| false),
         Box::new(|_| {}),
     )
     .unwrap();

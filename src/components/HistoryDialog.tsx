@@ -13,14 +13,13 @@ import {
   Stack,
   Typography,
 } from "@mui/material";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import {
   getHistoryEntry,
   listEntryHistory,
   restoreEntryVersion,
 } from "../api/entries";
 import { rem, TYPE } from "../components/chrome";
+import MarkdownView from "../components/MarkdownView";
 import type { EntryHeader, JournalEntry } from "../types";
 import { formatEntryHeading, formatTime } from "../utils/date";
 import { errorMessage } from "../utils/errors";
@@ -159,9 +158,7 @@ export default function HistoryDialog({
                 sx={{ overflowY: "auto", maxHeight: rem(320) }}
               >
                 {preview ? (
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                    {preview.markdown}
-                  </ReactMarkdown>
+                  <MarkdownView markdown={preview.markdown} />
                 ) : (
                   selected && (
                     <Typography color="text.secondary">Loading…</Typography>

@@ -11,7 +11,7 @@ use std::sync::Arc;
 use journal_api::{Entry, Header, Id};
 use journal_store::BlobName;
 use journal_sync_engine::{ConflictResolver, Resolution};
-use journal_vault::{entry_id, is_snapshot, Vault, VaultError, SETTINGS_BLOB};
+use journal_vault::{entry_id, is_media, is_snapshot, Vault, VaultError, SETTINGS_BLOB};
 
 /// The unlocked vault, if there is one, as a handle the caller owns.
 ///
@@ -57,10 +57,11 @@ impl ConflictResolver for VaultResolver {
     fn resolve(&self, name: &BlobName, ours: &[u8], theirs: &[u8]) -> Resolution {
         // Same name means the same version of the same entry: either
         // device's ciphertext of it is correct, so keep the one already in
-        // the store. Checked before the vault, on purpose: keeping ours needs
-        // no key, so there's no reason to leave the conflict parked while the
-        // vault is locked.
-        if is_snapshot(name) {
+        // the store. Media is immutable, so same name means the same bytes.
+        // Checked before the vault, on purpose: keeping ours needs no key,
+        // so there's no reason to leave the conflict parked while the vault
+        // is locked.
+        if is_snapshot(name) || is_media(name) {
             self.resolved.fetch_add(1, Ordering::SeqCst);
             return Resolution::Resolved;
         }
@@ -111,9 +112,16 @@ fn merge(vault: &Vault, name: &BlobName, ours: &[u8], theirs: &[u8]) -> Result<(
         (ours, theirs)
     };
 
+    let copy_id = Id::new();
+    // The copy owns the media its text shows, so deleting the original later
+    // cannot take the copy's images with it. Remaining gap: the loser's media
+    // may not have been pulled yet, since entry names sort before media
+    // names; refs to media that is not here yet keep pointing at the
+    // original.
+    let markdown = vault.adopt_media(&copy_id, &loser.markdown).map_err(text)?;
     let copy = Entry {
         header: Header {
-            id: Id::new(),
+            id: copy_id,
             title: format!("{}{COPY_SUFFIX}", loser.header.title),
             // The copy sorts where the version it holds was written.
             updated_at: loser.header.updated_at,
@@ -121,7 +129,7 @@ fn merge(vault: &Vault, name: &BlobName, ours: &[u8], theirs: &[u8]) -> Result<(
             // another take on one entry, not a new one written today.
             entry_date: loser.header.entry_date,
         },
-        markdown: loser.markdown,
+        markdown,
     };
     vault.save_entry(&copy).map_err(text)?;
     if theirs_wins {
@@ -440,6 +448,91 @@ mod tests {
             Resolution::Resolved
         );
         assert_eq!(locked.take_resolved(), 1);
+    }
+
+    fn media_meta() -> journal_api::MediaMeta {
+        journal_api::MediaMeta::Image {
+            format: journal_api::ImageFormat::Webp,
+            width: 1,
+            height: 1,
+        }
+    }
+
+    #[test]
+    fn a_media_conflict_resolves_keeping_ours_while_locked() {
+        let locked = VaultResolver::new(Arc::new(|| None));
+        let name = BlobName::try_from(format!(
+            "{}.media-{}",
+            Id::new(),
+            journal_api::MediaId::new()
+        ))
+        .unwrap();
+
+        assert_eq!(
+            locked.resolve(&name, b"ours", b"theirs"),
+            Resolution::Resolved
+        );
+        assert_eq!(locked.take_resolved(), 1);
+    }
+
+    #[test]
+    fn a_media_conflict_does_not_create_a_conflicted_copy() {
+        let (vault, store, dir) = vault();
+        let (id, m) = (Id::new(), journal_api::MediaId::new());
+        vault.save_media(&id, &m, &media_meta(), b"px").unwrap();
+        let name = BlobName::try_from(format!("{id}.media-{m}")).unwrap();
+        let ours = store.get(&name).unwrap().unwrap();
+
+        assert_eq!(
+            resolver(&vault).resolve(&name, &ours, b"theirs"),
+            Resolution::Resolved
+        );
+        assert_eq!(store.get(&name).unwrap().unwrap(), ours);
+        assert!(titles(&vault).is_empty());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn a_conflicted_copy_adopts_the_losers_media() {
+        let (vault, store, dir) = vault();
+        let (id, m) = (Id::new(), journal_api::MediaId::new());
+        vault.save_media(&id, &m, &media_meta(), b"px").unwrap();
+        let link = format!("![](media:{id}/{m})");
+        let theirs = sealed(&vault, &store, &entry(id, "phone", "later", 1));
+        let ours = sealed(&vault, &store, &entry(id, "laptop", &link, 30));
+
+        resolver(&vault).resolve(&name_of(id), &ours, &theirs);
+
+        let copy = vault
+            .list_entries()
+            .unwrap()
+            .into_iter()
+            .find(|h| h.id != id)
+            .unwrap();
+        let copy_entry = vault.get_entry(&copy.id).unwrap().unwrap();
+        assert_eq!(copy_entry.markdown, format!("![](media:{}/{m})", copy.id));
+        assert_eq!(vault.get_media(&copy.id, &m).unwrap().unwrap().bytes, b"px");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn a_conflicted_copy_keeps_refs_to_media_not_yet_pulled() {
+        let (vault, store, dir) = vault();
+        let id = Id::new();
+        let link = format!("![](media:{id}/{})", journal_api::MediaId::new());
+        let theirs = sealed(&vault, &store, &entry(id, "phone", "later", 1));
+        let ours = sealed(&vault, &store, &entry(id, "laptop", &link, 30));
+
+        resolver(&vault).resolve(&name_of(id), &ours, &theirs);
+
+        let copy = vault
+            .list_entries()
+            .unwrap()
+            .into_iter()
+            .find(|h| h.id != id)
+            .unwrap();
+        assert_eq!(vault.get_entry(&copy.id).unwrap().unwrap().markdown, link);
+        std::fs::remove_dir_all(dir).ok();
     }
 
     fn settings_blob_name() -> BlobName {

@@ -193,6 +193,22 @@ impl<'a> Pass<'a> {
     }
 
     fn sync_name(&mut self, name: &BlobName, view: &RemoteView) -> Result<Outcome, SyncError> {
+        // An immutable blob that is here, has a base and is unchanged there is
+        // synced by definition: skip reading and hashing it. Anything else
+        // (no base, missing locally, changed remotely, parked) takes the
+        // normal path below.
+        if self.engine.is_immutable(name)
+            && name.as_str() != KEY_BLOB
+            && !self.state.parked.contains_key(name)
+        {
+            let base = self.state.bases.get(name);
+            if base.is_some()
+                && matches!(view.theirs(name, base), Theirs::Same)
+                && self.engine.local.contains(name)?
+            {
+                return Ok(Outcome::Synced);
+            }
+        }
         let local = self.read_local(name)?;
 
         // Its own table: the key is never merged, never deleted and never

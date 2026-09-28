@@ -47,6 +47,9 @@ pub enum Resolution {
     Deferred,
 }
 
+/// Tells the engine which blobs are immutable: see [`SyncEngine::open`].
+pub type Immutable = Box<dyn Fn(&BlobName) -> bool + Send + Sync>;
+
 /// What one pass did.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct SyncReport {
@@ -72,6 +75,7 @@ pub struct SyncReport {
 pub struct SyncEngine {
     pub(crate) local: Arc<dyn BlobStore>,
     pub(crate) remote: Arc<dyn RemoteStore>,
+    immutable: Immutable,
     on_status: Box<dyn Fn(&SyncStatus) + Send + Sync>,
     /// The status, and the counters behind it. Held only for an instant and
     /// never across I/O, because `mark_dirty` arrives from command threads while
@@ -109,6 +113,10 @@ pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 impl SyncEngine {
+    pub(crate) fn is_immutable(&self, name: &BlobName) -> bool {
+        (self.immutable)(name)
+    }
+
     /// Opens the engine over `local` and `remote`, keeping its per-device state
     /// in the file at `state_path`.
     ///
@@ -116,6 +124,14 @@ impl SyncEngine {
     /// the start and survives restarts without being persisted itself.
     /// `state_path` must not be inside `local`, or the engine would sync its
     /// own bookkeeping.
+    ///
+    /// `immutable` names the blobs the app promises never to rewrite with
+    /// different content once written (the engine itself knows nothing about
+    /// what they are). For such a blob that exists locally and has a recorded
+    /// base, the local copy is by definition the base: it is not read or hashed
+    /// at startup or in a pass, which is what keeps a journal full of large,
+    /// never-changing blobs cheap to sync. A name matching it that *is*
+    /// rewritten will not be noticed. Pass `Box::new(|_| false)` for none.
     ///
     /// `on_status` fires on every change to the status and is not
     /// deduplicated. It runs on whichever thread made the change, with no lock
@@ -126,6 +142,7 @@ impl SyncEngine {
         local: Arc<dyn BlobStore>,
         remote: Arc<dyn RemoteStore>,
         state_path: PathBuf,
+        immutable: Immutable,
         on_status: Box<dyn Fn(&SyncStatus) + Send + Sync>,
     ) -> Result<Self, SyncError> {
         let state = State::load(state_path)?;
@@ -133,6 +150,9 @@ impl SyncEngine {
         let mut pending = BTreeSet::new();
         let names: BTreeSet<_> = local.list()?.into_iter().collect();
         for name in &names {
+            if (immutable)(name) && state.bases.contains_key(name) {
+                continue;
+            }
             // Gone since the listing: the next pass will see it as a delete.
             let Some(bytes) = local.get(name)? else {
                 continue;
@@ -149,6 +169,7 @@ impl SyncEngine {
         Ok(Self {
             local,
             remote,
+            immutable,
             on_status,
             shared: Mutex::new(Shared {
                 status: SyncStatus {

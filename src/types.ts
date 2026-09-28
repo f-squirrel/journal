@@ -25,3 +25,7 @@ export type { TimeFormat } from "./bindings/TimeFormat";
 // fields the user changed.
 import type { Settings } from "./bindings/Settings";
 export type SettingsPatch = Partial<Settings>;
+
+export type { MediaId } from "./bindings/MediaId";
+export type { MediaMeta } from "./bindings/MediaMeta";
+export type { ImageFormat } from "./bindings/ImageFormat";

@@ -3,6 +3,8 @@ import type {
   EntryHeader,
   JournalEntry,
   JournalSettings,
+  MediaId,
+  MediaMeta,
   ProviderInfo,
   SearchMatch,
   Settings,
@@ -11,6 +13,8 @@ import type {
 } from "../types";
 import { byEntryDate } from "../utils/date";
 import { STALE_ENTRY_MESSAGE } from "../utils/errors";
+import { findMediaRefs, mediaRef } from "../media/ref";
+import { newEntryId } from "../utils/id";
 
 // The browser fallback: an in-memory vault for `npm run dev` and the
 // Playwright suite, where there is no Rust backend to talk to.
@@ -65,6 +69,7 @@ function toHeader(entry: JournalEntry): EntryHeader {
 //                       resolves true from then on
 //   ?fail=<ops>         comma-separated: has, unlock, list, get, save, delete,
 //                       history, restore, search, export, connect, sync,
+//                       save-media, get-media, adopt-media,
 //                       resolve (see "simulated sync" below), settings
 //                       (updateSettings rejects), settings-load (getSettings
 //                       rejects)
@@ -100,6 +105,9 @@ type Op =
   | "export"
   | "connect"
   | "sync"
+  | "save-media"
+  | "get-media"
+  | "adopt-media"
   | "resolve"
   | "settings"
   | "settings-load"
@@ -160,6 +168,11 @@ const faults: Faults = parseFaults(window.location.search);
 // Calls seen so far by each op named in `?fail=`, for `?failAfter=`.
 const failedCalls = new Map<Op, number>();
 const fallbackEntries = new Map(seedEntries.map((entry) => [entry.id, entry]));
+
+/// Media, keyed `<entry-id>/<media-id>` like a blob name is. Lives here, at
+/// module scope, so none of it exists in a production bundle.
+const fallbackMedia = new Map<string, { meta: MediaMeta; bytes: Uint8Array }>();
+const mediaKey = (entryId: string, mediaId: string) => `${entryId}/${mediaId}`;
 
 /// An entry's past versions, newest first, capped at `MAX_FALLBACK_HISTORY`.
 /// Mirrors `history::MAX_SNAPSHOTS_PER_ENTRY` in `crates/vault` loosely — it
@@ -288,8 +301,72 @@ export function deleteEntry(id: string): Promise<void> {
   return run("delete", () => {
     fallbackEntries.delete(id);
     fallbackHistory.delete(id);
+    for (const key of [...fallbackMedia.keys()]) {
+      if (key.startsWith(`${id}/`)) fallbackMedia.delete(key);
+    }
     markPending(id);
   });
+}
+
+// --- media -----------------------------------------------------------------
+//
+// Same pinned texts as the Rust side (`VaultError`).
+
+const MEDIA_NOT_FOUND = "that image is no longer available";
+const MEDIA_TYPE = "that kind of file cannot be added to an entry";
+const MEDIA_TOO_LARGE = "that image is too large to store";
+const MAX_MEDIA_BYTES = 10 * 1024 * 1024;
+
+export function saveMedia(
+  entryId: string,
+  mediaId: MediaId,
+  meta: MediaMeta,
+  bytes: Uint8Array,
+): Promise<void> {
+  return run("save-media", () => {
+    if (meta.kind !== "image" || meta.width === 0 || meta.height === 0)
+      throw MEDIA_TYPE;
+    if (bytes.length > MAX_MEDIA_BYTES) throw MEDIA_TOO_LARGE;
+    const key = mediaKey(entryId, mediaId);
+    // Immutable: an existing blob is a retry of the same bytes.
+    if (!fallbackMedia.has(key)) fallbackMedia.set(key, { meta, bytes });
+  });
+}
+
+export function getMedia(
+  entryId: string,
+  mediaId: MediaId,
+): Promise<{ meta: MediaMeta; bytes: Uint8Array }> {
+  return run("get-media", () => {
+    const found = fallbackMedia.get(mediaKey(entryId, mediaId));
+    if (!found) throw MEDIA_NOT_FOUND;
+    return found;
+  });
+}
+
+/// Mirrors `Vault::adopt_media`: copies each foreign reference's media under
+/// `entryId` and rewrites the link; references to missing media stay as they
+/// are.
+export function adoptMedia(entryId: string, markdown: string): Promise<string> {
+  return run("adopt-media", () => adoptMediaSync(entryId, markdown));
+}
+
+function adoptMediaSync(entryId: string, markdown: string): string {
+  let out = markdown;
+  for (const ref of findMediaRefs(markdown).reverse()) {
+    if (ref.entryId === entryId) continue;
+    const target = mediaKey(entryId, ref.mediaId);
+    if (!fallbackMedia.has(target)) {
+      const source = fallbackMedia.get(mediaKey(ref.entryId, ref.mediaId));
+      if (!source) continue;
+      fallbackMedia.set(target, source);
+    }
+    out =
+      out.slice(0, ref.start) +
+      mediaRef(entryId, ref.mediaId) +
+      out.slice(ref.end);
+  }
+  return out;
 }
 
 /// Headers of `id`'s past versions, most recent first.
@@ -551,10 +628,12 @@ function resolveConflicts(): number {
         theirVersion.updated_at > ours.updated_at
           ? [theirVersion, ours]
           : [ours, theirVersion];
+      const copyId = newEntryId();
       const copy: JournalEntry = {
         ...loser,
-        id: crypto.randomUUID(),
+        id: copyId,
         title: `${loser.title} (conflicted copy)`,
+        markdown: adoptMediaSync(copyId, loser.markdown),
       };
       fallbackEntries.set(copy.id, copy);
       fallbackEntries.set(id, winner);

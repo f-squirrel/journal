@@ -11,7 +11,7 @@
 //! Synchronous like every layer below the command boundary.
 
 use std::cmp::Reverse;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{self, Write};
 #[cfg(unix)]
@@ -19,8 +19,8 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Local, NaiveDate, SecondsFormat, Utc};
-use journal_api::{Entry, Header};
-use journal_vault::{Vault, VaultError};
+use journal_api::{Entry, Header, Id, MediaId, MediaMeta};
+use journal_vault::{media_refs, Vault, VaultError};
 use thiserror::Error;
 
 /// The longest title slug, in bytes. A filename is capped at 255 bytes on the
@@ -30,6 +30,9 @@ const MAX_SLUG_BYTES: usize = 80;
 
 /// What a title with no letters or digits in it is filed under.
 const UNTITLED: &str = "untitled";
+
+/// The folder, beside the `.md` files, that holds the exported images.
+const MEDIA_DIR: &str = "media";
 
 /// Rendered for the user, so each says what to do rather than what happened.
 #[derive(Debug, Error)]
@@ -47,7 +50,9 @@ pub enum ExportError {
 }
 
 /// Writes every entry in `vault` to `directory`, one `.md` file each, and
-/// returns how many.
+/// returns how many. The images they reference go in a `media/` folder beside
+/// them, each once however many entries use it, and the links are rewritten
+/// to match.
 ///
 /// `directory` must exist and be empty, and must not be inside `app_data` (the
 /// app's own data directory, where the vault and its key live): an export never
@@ -100,39 +105,89 @@ fn write_entries(
     headers: &[Header],
 ) -> Result<usize, ExportError> {
     let mut written: Vec<PathBuf> = Vec::new();
+    let mut media_dir: Option<PathBuf> = None;
+    let mut media_files = 0usize;
+    let mut media_missing = 0usize;
     let result = (|| {
         let mut taken = HashSet::new();
+        // Every image already written, across the whole export: conflicted
+        // copies and pasted links share media between entries.
+        let mut exported: HashMap<(Id, MediaId), String> = HashMap::new();
         for header in headers {
             // Read again rather than rendered from the listing's header, which
             // has no body — and which a save or a sync pass may already have
             // outdated. Gone now means deleted since the listing: not exported.
-            let Some(entry) = vault.get_entry(&header.id)? else {
+            let Some(mut entry) = vault.get_entry(&header.id)? else {
                 continue;
             };
+            // From the end, so earlier ranges stay valid while replacing.
+            for found in media_refs(&entry.markdown).into_iter().rev() {
+                let key = (found.entry, found.media);
+                let relative = match exported.get(&key) {
+                    Some(relative) => relative.clone(),
+                    None => {
+                        let Some(media) = vault.get_media(&found.entry, &found.media)? else {
+                            media_missing += 1;
+                            continue;
+                        };
+                        // No `_` arm: a new kind of media must pick its extension.
+                        let extension = match media.meta {
+                            MediaMeta::Image { format, .. } => format.extension(),
+                        };
+                        let dir = directory.join(MEDIA_DIR);
+                        if media_dir.is_none() {
+                            fs::create_dir(&dir)?;
+                            media_dir = Some(dir.clone());
+                        }
+                        let relative =
+                            format!("{MEDIA_DIR}/{}-{}.{extension}", found.entry, found.media);
+                        let mut file = create_private(&directory.join(&relative), &mut written)?;
+                        file.write_all(&media.bytes)?;
+                        media_files += 1;
+                        exported.insert(key, relative.clone());
+                        relative
+                    }
+                };
+                entry.markdown.replace_range(found.range, &relative);
+            }
             let path = directory.join(file_name(&entry.header, &mut taken));
-            // `create_new` so that overwriting is impossible even if a name
-            // somehow repeats, rather than merely unlikely. Recorded before the
-            // write so a write that fails half-way is cleaned up too.
-            let mut options = fs::OpenOptions::new();
-            options.write(true).create_new(true);
-            // Plaintext journal: readable by its owner and nobody else, whatever
-            // the umask and whatever the chosen folder allows. The dialog
-            // promises "anyone that can read this folder"; 0644 is more people
-            // than that. Windows has no equivalent here.
-            #[cfg(unix)]
-            options.mode(0o600);
-            let mut file = options.open(&path)?;
-            written.push(path);
+            let mut file = create_private(&path, &mut written)?;
             file.write_all(render(&entry).as_bytes())?;
         }
-        Ok(written.len())
+        Ok(written.len() - media_files)
     })();
     if result.is_err() {
         for path in &written {
             fs::remove_file(path).ok();
         }
+        if let Some(dir) = &media_dir {
+            // Only ours, and only if nothing else is in it.
+            fs::remove_dir(dir).ok();
+        }
+    } else {
+        // Counts only, never names or content.
+        log::info!("exported media: files={media_files}, missing={media_missing}");
     }
     result
+}
+
+/// Creates `path` for writing, refusing to overwrite, readable by its owner
+/// alone, and records it in `written` *before* any write so that a write that
+/// fails half-way is cleaned up too.
+fn create_private(path: &Path, written: &mut Vec<PathBuf>) -> io::Result<fs::File> {
+    // `create_new` so that overwriting is impossible even if a name
+    // somehow repeats, rather than merely unlikely.
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    // Plaintext journal: readable by its owner and nobody else, whatever
+    // the umask and whatever the chosen folder allows. The dialog
+    // promises "anyone that can read this folder"; 0644 is more people
+    // than that. Windows has no equivalent here.
+    #[cfg(unix)]
+    options.mode(0o600);
+    let file = options.open(path)?;
+    written.push(path.to_path_buf());
+    Ok(file)
 }
 
 /// The name for an entry: `YYYY-MM-DD-slug.md`, with the id spliced in when
@@ -547,6 +602,128 @@ mod tests {
         assert_eq!(
             fs::read_to_string(out.0.join(expected_name(&older))).unwrap(),
             "not yours"
+        );
+    }
+
+    fn image() -> MediaMeta {
+        MediaMeta::Image {
+            format: journal_api::ImageFormat::Jpeg,
+            width: 1,
+            height: 1,
+        }
+    }
+
+    fn export_all(vault: &Vault, out: &Scratch) -> Result<usize, ExportError> {
+        let headers = vault.list_entries().unwrap();
+        write_entries(vault, &out.0, &headers)
+    }
+
+    #[test]
+    fn an_image_referenced_twice_is_written_once_and_both_links_rewritten() {
+        let home = Scratch::new("home");
+        let out = Scratch::new("out");
+        let mut e = entry("Pics", "2026-09-03T12:00:00Z", "");
+        let m = MediaId::new();
+        e.markdown = format!(
+            "![a](media:{0}/{m}) and ![b](media:{0}/{m} \"t\")",
+            e.header.id
+        );
+        let vault = vault_with(&home, &[&e]);
+        vault
+            .save_media(&e.header.id, &m, &image(), b"jpegbytes")
+            .unwrap();
+
+        assert_eq!(export_all(&vault, &out).unwrap(), 1);
+
+        let file = format!("{}-{m}.jpg", e.header.id);
+        assert_eq!(names(&out.0.join("media")), [file.clone()]);
+        assert_eq!(
+            fs::read(out.0.join("media").join(&file)).unwrap(),
+            b"jpegbytes"
+        );
+        let md = fs::read_to_string(out.0.join(expected_name(&e))).unwrap();
+        assert!(md.contains(&format!("![a](media/{file})")), "{md}");
+        assert!(md.contains(&format!("![b](media/{file} \"t\")")), "{md}");
+    }
+
+    #[test]
+    fn two_entries_sharing_an_image_write_one_file() {
+        let home = Scratch::new("home");
+        let out = Scratch::new("out");
+        let owner = Id::new();
+        let m = MediaId::new();
+        let link = format!("![](media:{owner}/{m})");
+        let a = entry("A", "2026-09-03T12:00:00Z", &link);
+        let b = entry("B", "2026-09-02T12:00:00Z", &link);
+        let vault = vault_with(&home, &[&a, &b]);
+        vault.save_media(&owner, &m, &image(), b"x").unwrap();
+
+        assert_eq!(export_all(&vault, &out).unwrap(), 2);
+
+        assert_eq!(names(&out.0.join("media")).len(), 1);
+        for e in [&a, &b] {
+            let md = fs::read_to_string(out.0.join(expected_name(e))).unwrap();
+            assert!(md.contains(&format!("(media/{owner}-{m}.jpg)")), "{md}");
+        }
+    }
+
+    #[test]
+    fn a_missing_image_leaves_its_link_alone() {
+        let home = Scratch::new("home");
+        let out = Scratch::new("out");
+        let link = format!("![](media:{}/{})", Id::new(), MediaId::new());
+        let e = entry("Gone", "2026-09-03T12:00:00Z", &link);
+        let vault = vault_with(&home, &[&e]);
+
+        export_all(&vault, &out).unwrap();
+
+        let md = fs::read_to_string(out.0.join(expected_name(&e))).unwrap();
+        assert!(md.contains(&link));
+        assert!(!out.0.join("media").exists());
+    }
+
+    #[test]
+    fn no_images_means_no_media_folder() {
+        let home = Scratch::new("home");
+        let out = Scratch::new("out");
+        let vault = vault_with(&home, &[&entry("Plain", "2026-09-03T12:00:00Z", "text")]);
+        export_all(&vault, &out).unwrap();
+        assert!(!out.0.join("media").exists());
+    }
+
+    #[test]
+    fn a_failure_after_an_image_leaves_the_folder_empty() {
+        let home = Scratch::new("home");
+        let out = Scratch::new("out");
+        let mut e = entry("Pics", "2026-09-03T12:00:00Z", "");
+        let m = MediaId::new();
+        e.markdown = format!("![](media:{}/{m})", e.header.id);
+        let vault = vault_with(&home, &[&e]);
+        vault.save_media(&e.header.id, &m, &image(), b"x").unwrap();
+        // The entry's own file is taken, so the write fails after the image.
+        fs::write(out.0.join(expected_name(&e)), "not yours").unwrap();
+
+        assert!(export_all(&vault, &out).is_err());
+
+        assert_eq!(names(&out.0), [expected_name(&e)]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn exported_images_are_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let home = Scratch::new("home");
+        let out = Scratch::new("out");
+        let mut e = entry("Pics", "2026-09-03T12:00:00Z", "");
+        let m = MediaId::new();
+        e.markdown = format!("![](media:{}/{m})", e.header.id);
+        let vault = vault_with(&home, &[&e]);
+        vault.save_media(&e.header.id, &m, &image(), b"x").unwrap();
+        export_all(&vault, &out).unwrap();
+        let file = out.0.join("media").join(format!("{}-{m}.jpg", e.header.id));
+        assert_eq!(
+            fs::metadata(file).unwrap().permissions().mode() & 0o777,
+            0o600
         );
     }
 }

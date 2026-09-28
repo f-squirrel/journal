@@ -50,6 +50,100 @@ impl FromStr for Id {
     }
 }
 
+/// Identifies one media item (an image, later audio) owned by an entry. The
+/// frontend generates it; a media blob is named `<entry-id>.media-<media-id>`.
+///
+/// Same shape as [`Id`], and the same benign ts-rs `transparent` warning.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "ts",
+    derive(ts_rs::TS),
+    ts(export, export_to = "../../../src/bindings/")
+)]
+#[serde(transparent)]
+pub struct MediaId(Uuid);
+
+impl MediaId {
+    pub fn new() -> Self {
+        Self(Uuid::new_v4())
+    }
+}
+
+impl Default for MediaId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl fmt::Display for MediaId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.0, f)
+    }
+}
+
+impl FromStr for MediaId {
+    type Err = uuid::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(Self(Uuid::from_str(s)?))
+    }
+}
+
+/// What a media item is, stored next to its bytes. One variant per kind, each
+/// carrying only the fields that make sense for it. There is deliberately no
+/// SVG format: SVG is a document that can carry script, so it is left
+/// unrepresentable.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "ts",
+    derive(ts_rs::TS),
+    ts(export, export_to = "../../../src/bindings/")
+)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum MediaMeta {
+    /// Pixel dimensions after downscaling; both non-zero.
+    Image {
+        format: ImageFormat,
+        width: u32,
+        height: u32,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "ts",
+    derive(ts_rs::TS),
+    ts(export, export_to = "../../../src/bindings/")
+)]
+#[serde(rename_all = "snake_case")]
+pub enum ImageFormat {
+    Webp,
+    Jpeg,
+    Png,
+    Gif,
+}
+
+impl ImageFormat {
+    pub fn mime(self) -> &'static str {
+        match self {
+            Self::Webp => "image/webp",
+            Self::Jpeg => "image/jpeg",
+            Self::Png => "image/png",
+            Self::Gif => "image/gif",
+        }
+    }
+
+    /// The file extension the plaintext export uses.
+    pub fn extension(self) -> &'static str {
+        match self {
+            Self::Webp => "webp",
+            Self::Jpeg => "jpg",
+            Self::Png => "png",
+            Self::Gif => "gif",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(
     feature = "ts",
@@ -190,5 +284,51 @@ mod tests {
         assert!(value.get("updatedAt").is_none());
         assert!(value.get("entry_date").and_then(|v| v.as_str()).is_some());
         assert!(value.get("entryDate").is_none());
+    }
+
+    #[test]
+    fn image_meta_serializes_tagged() {
+        let meta = MediaMeta::Image {
+            format: ImageFormat::Webp,
+            width: 20,
+            height: 10,
+        };
+        assert_eq!(
+            serde_json::to_string(&meta).unwrap(),
+            r#"{"kind":"image","format":"webp","width":20,"height":10}"#
+        );
+        let back: MediaMeta = serde_json::from_str(&serde_json::to_string(&meta).unwrap()).unwrap();
+        assert_eq!(back, meta);
+    }
+
+    #[test]
+    fn unknown_kinds_formats_and_missing_fields_are_refused() {
+        for bad in [
+            r#"{"kind":"audio","format":"mp3","duration_ms":1}"#,
+            r#"{"kind":"image","format":"svg","width":1,"height":1}"#,
+            r#"{"kind":"image","format":"webp","height":1}"#,
+        ] {
+            assert!(serde_json::from_str::<MediaMeta>(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn image_format_mime_and_extension() {
+        let all = [
+            (ImageFormat::Webp, "image/webp", "webp"),
+            (ImageFormat::Jpeg, "image/jpeg", "jpg"),
+            (ImageFormat::Png, "image/png", "png"),
+            (ImageFormat::Gif, "image/gif", "gif"),
+        ];
+        for (format, mime, ext) in all {
+            assert_eq!(format.mime(), mime);
+            assert_eq!(format.extension(), ext);
+        }
+    }
+
+    #[test]
+    fn media_id_round_trips_through_display() {
+        let id = MediaId::new();
+        assert_eq!(id.to_string().parse::<MediaId>().unwrap(), id);
     }
 }

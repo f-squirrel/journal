@@ -51,3 +51,22 @@ would destroy the entries other devices wrote under the cloud's key.
 **Watch for.** A future passphrase change re-seals the key, so the key blob's
 bytes change and every other device would hit this mismatch. That feature
 needs its own handling before it ships.
+
+## Images: gaps that are accepted for now
+
+Images are stored as immutable encrypted blobs owned by their entry
+(`<entry-id>.media-<media-id>`), and are deleted only with that entry.
+
+- **An entry brought back by sync loses its images.** If one device deletes an
+  entry while another edits it, the edit wins and the entry returns, but the
+  deletion of its images also wins, so they show "Image unavailable".
+  Snapshots are lost the same way. A fix would be deferred deletion.
+- **Removing an image link does not free space.** The blob stays until the
+  entry is deleted. Abandoned inserts and unsaved new entries leave orphans.
+- **Hand-pasted `media:` links between entries** break when the owning entry is
+  deleted. Conflicted copies are not affected: they copy their images.
+- **A sync conflicted copy can keep a link to images not yet pulled**, because
+  entry names sort before media names.
+- **Import limits:** HEIC and other formats the webview cannot decode are
+  refused, animated GIFs keep their first frame, and screenshots lose a little
+  sharpness to lossy WebP.

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useImperativeHandle, useRef, type Ref } from "react";
 import { Box, useTheme, type Theme } from "@mui/material";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
@@ -96,6 +96,28 @@ function themeExtensions(theme: Theme): Extension {
   ];
 }
 
+export interface MarkdownEditorHandle {
+  /// Inserts `text` on its own line at the cursor as it is now.
+  insertAtCursor(text: string): void;
+}
+
+/// Inserts `text` at `pos` on a line of its own: a newline before it unless
+/// `pos` starts a line, and one after it unless `pos` ends one.
+function insertOwnLine(view: EditorView, pos: number, text: string) {
+  const at = Math.min(pos, view.state.doc.length);
+  const line = view.state.doc.lineAt(at);
+  const insert =
+    (at === line.from ? "" : "\n") + text + (at === line.to ? "" : "\n");
+  view.dispatch({
+    changes: { from: at, insert },
+    selection: { anchor: at + insert.length },
+    scrollIntoView: true,
+  });
+}
+
+const imageFiles = (files: FileList | null | undefined): File[] =>
+  [...(files ?? [])].filter((file) => file.type.startsWith("image/"));
+
 /// The entry body: one surface that is always editable and always styled, so
 /// nothing reflows when focus arrives or leaves. What is on screen is the
 /// markdown that gets encrypted — there is no second, rendered representation.
@@ -104,6 +126,8 @@ export default function MarkdownEditor({
   onChange,
   placeholder,
   autoFocus = false,
+  onFiles,
+  ref,
 }: {
   value: string;
   onChange: (markdown: string) => void;
@@ -111,6 +135,11 @@ export default function MarkdownEditor({
   /// Set when the editor is opened by a deliberate switch into edit mode, so
   /// the caret is already where writing continues.
   autoFocus?: boolean;
+  /// Called with the image files pasted or dropped on the editor. Returns the
+  /// markdown to insert where they landed, or `null` to insert nothing (it
+  /// has already said why). Text paste and text drags are left alone.
+  onFiles?: (files: File[]) => Promise<string | null>;
+  ref?: Ref<MarkdownEditorHandle>;
 }) {
   const host = useRef<HTMLDivElement | null>(null);
   const view = useRef<EditorView | null>(null);
@@ -123,6 +152,33 @@ export default function MarkdownEditor({
   onChangeRef.current = onChange;
   const themeRef = useRef(theme);
   themeRef.current = theme;
+  const onFilesRef = useRef(onFiles);
+  onFilesRef.current = onFiles;
+  // Where each in-flight import will insert, kept in step with every edit
+  // made while it runs: importing takes a second or more and the user keeps
+  // typing.
+  const landing = useRef(new Set<{ pos: number }>());
+
+  useImperativeHandle(ref, () => ({
+    insertAtCursor(text) {
+      const editor = view.current;
+      if (editor) insertOwnLine(editor, editor.state.selection.main.head, text);
+    },
+  }));
+
+  async function insertFiles(editor: EditorView, files: File[], pos: number) {
+    const place = { pos };
+    landing.current.add(place);
+    let text: string | null = null;
+    try {
+      text = (await onFilesRef.current?.(files)) ?? null;
+    } finally {
+      landing.current.delete(place);
+    }
+    // Dropped if the editor went away meanwhile (another entry, read mode):
+    // the saved image is then an orphan, which is accepted.
+    if (text && view.current === editor) insertOwnLine(editor, place.pos, text);
+  }
 
   useEffect(() => {
     const editor = new EditorView({
@@ -138,8 +194,35 @@ export default function MarkdownEditor({
           cmPlaceholder(placeholder),
           themes.current.of(themeExtensions(themeRef.current)),
           EditorView.updateListener.of((update) => {
-            if (update.docChanged)
-              onChangeRef.current(update.state.doc.toString());
+            if (!update.docChanged) return;
+            for (const place of landing.current)
+              place.pos = update.changes.mapPos(place.pos, 1);
+            onChangeRef.current(update.state.doc.toString());
+          }),
+          EditorView.domEventHandlers({
+            paste(event, editorView) {
+              const files = imageFiles(event.clipboardData?.files);
+              if (!files.length || !onFilesRef.current) return false;
+              event.preventDefault();
+              void insertFiles(
+                editorView,
+                files,
+                editorView.state.selection.main.head,
+              );
+              return true;
+            },
+            drop(event, editorView) {
+              const files = imageFiles(event.dataTransfer?.files);
+              if (!files.length || !onFilesRef.current) return false;
+              event.preventDefault();
+              const pos =
+                editorView.posAtCoords({
+                  x: event.clientX,
+                  y: event.clientY,
+                }) ?? editorView.state.selection.main.head;
+              void insertFiles(editorView, files, pos);
+              return true;
+            },
           }),
         ],
       }),

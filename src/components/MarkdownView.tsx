@@ -1,0 +1,108 @@
+import type { ComponentProps } from "react";
+import { Box } from "@mui/material";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
+import remarkGfm from "remark-gfm";
+import { backend } from "../api/backend";
+import { useMediaUrl } from "../hooks/useMediaUrl";
+import { rem } from "./chrome";
+
+// The one markdown renderer: an entry's read view and the history preview.
+//
+// Everything passed to `ReactMarkdown` below is a module-scope constant, on
+// purpose. An inline `components` object is a new set of component types on
+// every render of the parent, and React remounts an element whose type
+// changed: `MediaImage` would then revoke its object URL, ask the backend to
+// decrypt the image again and flash, on every keystroke-driven re-render.
+
+const REMARK_PLUGINS = [remarkGfm];
+
+/// Muted box shared by the loading, unavailable and hint states. A `span`,
+/// never a `div`: react-markdown puts an image inside a `<p>`.
+const boxSx = {
+  display: "inline-block",
+  maxWidth: "100%",
+  px: rem(12),
+  py: rem(8),
+  borderRadius: 1,
+  bgcolor: "action.hover",
+  color: "text.secondary",
+  fontSize: rem(13),
+} as const;
+
+function MediaImage({ src, alt }: { src: string; alt: string }) {
+  const { url, error } = useMediaUrl(src);
+  if (error)
+    return (
+      <Box component="span" data-testid="media-unavailable" sx={boxSx}>
+        Image unavailable{alt ? `: ${alt}` : ""}
+      </Box>
+    );
+  if (!url)
+    return (
+      <Box
+        component="span"
+        data-testid="media-loading"
+        sx={{ ...boxSx, width: rem(160), height: rem(96) }}
+      />
+    );
+  return <img data-testid="media-image" src={url} alt={alt} />;
+}
+
+function Image({ src, alt }: ComponentProps<"img">) {
+  const source = typeof src === "string" ? src : "";
+  if (source.startsWith("media:"))
+    return <MediaImage src={source} alt={alt ?? ""} />;
+  if (source.startsWith("data:")) return <img src={source} alt={alt} />;
+  // A typed path, `file://` or `https://` URL is never loaded: the webview
+  // cannot read the user's files, the CSP blocks remote images, and either
+  // would be neither encrypted nor synced.
+  return (
+    <Box component="span" data-testid="image-hint" sx={boxSx}>
+      {alt ? `${alt} · ` : ""}Use Insert image to add pictures
+    </Box>
+  );
+}
+
+const COMPONENTS = {
+  // The window has no address bar, so a click must never navigate it: an
+  // entry's links open in the user's browser, where they can be seen.
+  a: ({ href, children }: ComponentProps<"a">) => (
+    <a
+      href={href}
+      onClick={(event) => {
+        event.preventDefault();
+        if (!href) return;
+        if (backend) void openUrl(href);
+        else window.open(href, "_blank", "noopener,noreferrer");
+      }}
+    >
+      {children}
+    </a>
+  ),
+  img: Image,
+};
+
+/// `media:` survives only as an image's `src`. A `[x](media:…)` *link* is
+/// stripped like any unknown protocol, so it never reaches `openUrl`.
+function urlTransform(
+  url: string,
+  key: string,
+  node: { tagName?: string },
+): string {
+  if (key === "src" && node.tagName === "img" && url.startsWith("media:"))
+    return url;
+  return defaultUrlTransform(url);
+}
+
+export default function MarkdownView({ markdown }: { markdown: string }) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={REMARK_PLUGINS}
+      components={COMPONENTS}
+      urlTransform={urlTransform}
+    >
+      {markdown}
+    </ReactMarkdown>
+  );
+}

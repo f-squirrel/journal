@@ -6,7 +6,7 @@ Accepted — 2026-09-28
 
 ## Decision
 
-Entry version history (`crates/vault/src/history.rs`) stores each past
+Entry version history (`crates/vault/src/snapshot.rs`) stores each past
 version as its own blob, named `<id>.snap-<updated_at millis>.json`, in the
 same `BlobStore` the vault already writes entries and the settings blob into.
 No new store, no new sync-engine code: `journal-sync-engine` lists, diffs and
