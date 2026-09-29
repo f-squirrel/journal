@@ -19,7 +19,9 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Utc};
-use journal_entry::{Entry, Header, Id, MediaId, MediaMeta, SearchMatch};
+use journal_entry::{
+    Entry, Header, Id, ImageFormat, MediaId, MediaMeta, MediaVariant, SearchMatch,
+};
 use journal_key::{Cipher, KeyError, Keyring};
 use journal_settings::SettingsError;
 use journal_store::{BlobName, BlobStore, StoreError};
@@ -501,39 +503,62 @@ impl Vault {
             .collect())
     }
 
-    /// Stores one media item under `entry`, encrypted. Immutable: an existing
-    /// blob with the same ids is a retry (or an adoption copy) of the same
-    /// bytes and counts as success.
+    /// Stores one variant of a media item under `entry`, encrypted. Immutable:
+    /// an existing blob with the same ids is a retry (or an adoption copy) of
+    /// the same bytes and counts as success.
+    ///
+    /// The bytes are the user's file for `Original`, so the declared format
+    /// must match what they sniff as.
     pub fn save_media(
         &self,
         entry: &Id,
         media: &MediaId,
+        variant: MediaVariant,
         meta: &MediaMeta,
         bytes: &[u8],
     ) -> Result<(), VaultError> {
         // No `_` arm: a new kind of media must decide its own validation.
         match meta {
-            MediaMeta::Image { width, height, .. } => {
+            MediaMeta::Image {
+                format,
+                width,
+                height,
+            } => {
                 if *width == 0 || *height == 0 {
+                    return Err(VaultError::MediaType);
+                }
+                let displayable = match variant {
+                    MediaVariant::Original => true,
+                    MediaVariant::Display | MediaVariant::Thumb => format.is_web_safe(),
+                };
+                if !displayable || ImageFormat::sniff(bytes) != Some(*format) {
                     return Err(VaultError::MediaType);
                 }
             }
         }
-        if bytes.len() > media::MAX_MEDIA_BYTES {
+        if bytes.len() > media::max_bytes(variant) {
             return Err(VaultError::MediaTooLarge);
         }
         let ciphertext = self.cipher.encrypt(&media::encode_payload(meta, bytes))?;
-        match self
-            .store
-            .put_new(&owned::name::<MediaBlob>(entry, media), &ciphertext)
-        {
+        match self.store.put_new(
+            &owned::name::<MediaBlob>(entry, &(*media, variant)),
+            &ciphertext,
+        ) {
             Ok(()) | Err(StoreError::AlreadyExists(_)) => Ok(()),
             Err(e) => Err(e.into()),
         }
     }
 
-    pub fn get_media(&self, entry: &Id, media: &MediaId) -> Result<Option<Media>, VaultError> {
-        let Some(ciphertext) = self.store.get(&owned::name::<MediaBlob>(entry, media))? else {
+    pub fn get_media(
+        &self,
+        entry: &Id,
+        media: &MediaId,
+        variant: MediaVariant,
+    ) -> Result<Option<Media>, VaultError> {
+        let Some(ciphertext) = self
+            .store
+            .get(&owned::name::<MediaBlob>(entry, &(*media, variant)))?
+        else {
             return Ok(None);
         };
         let plain = self.cipher.decrypt(&ciphertext)?;
@@ -541,11 +566,12 @@ impl Vault {
     }
 
     /// Makes `markdown` (the text of a conflicted copy, saved as `to`) own the
-    /// media it references: each foreign `media:` reference whose blob exists
-    /// gets its ciphertext copied under `to` (no decryption; the payload holds
-    /// no ids) and its link rewritten. References to missing media are left
-    /// alone. Idempotent, so safe under the sync resolver's at-least-once
-    /// contract. Call it before saving the copy.
+    /// media it references: each foreign `media:` reference whose original
+    /// exists gets the ciphertext of every variant present copied under `to`
+    /// (no decryption; the payload holds no ids) and its link rewritten.
+    /// References to missing originals are left alone. Idempotent, so safe
+    /// under the sync resolver's at-least-once contract. Call it before saving
+    /// the copy.
     pub fn adopt_media(&self, to: &Id, markdown: &str) -> Result<String, VaultError> {
         let mut out = markdown.to_owned();
         // Back to front, so earlier ranges stay valid while replacing.
@@ -553,11 +579,22 @@ impl Vault {
             if r.entry == *to {
                 continue;
             }
-            let target = owned::name::<MediaBlob>(to, &r.media);
-            if !self.store.contains(&target)? {
+            let original = owned::name::<MediaBlob>(&r.entry, &(r.media, MediaVariant::Original));
+            if !self.store.contains(&original)? {
+                continue;
+            }
+            for variant in [
+                MediaVariant::Original,
+                MediaVariant::Display,
+                MediaVariant::Thumb,
+            ] {
+                let target = owned::name::<MediaBlob>(to, &(r.media, variant));
+                if self.store.contains(&target)? {
+                    continue;
+                }
                 let Some(ciphertext) = self
                     .store
-                    .get(&owned::name::<MediaBlob>(&r.entry, &r.media))?
+                    .get(&owned::name::<MediaBlob>(&r.entry, &(r.media, variant)))?
                 else {
                     continue;
                 };
@@ -1785,7 +1822,28 @@ mod tests {
 
     fn img() -> MediaMeta {
         MediaMeta::Image {
-            format: journal_entry::ImageFormat::Webp,
+            format: ImageFormat::Webp,
+            width: 4,
+            height: 3,
+        }
+    }
+
+    /// Bytes that sniff as WebP, followed by `body`.
+    fn webp(body: &[u8]) -> Vec<u8> {
+        [b"RIFF\0\0\0\0WEBP".as_slice(), body].concat()
+    }
+
+    fn jpeg(body: &[u8]) -> Vec<u8> {
+        [&[0xFF, 0xD8, 0xFF][..], body].concat()
+    }
+
+    fn heic() -> Vec<u8> {
+        [&[0, 0, 0, 16][..], b"ftypheic", &[0; 4]].concat()
+    }
+
+    fn meta_of(format: ImageFormat) -> MediaMeta {
+        MediaMeta::Image {
+            format,
             width: 4,
             height: 3,
         }
@@ -1800,10 +1858,15 @@ mod tests {
         let store = temp_store();
         let vault = fake_vault(store.clone());
         let (e, m) = (Id::new(), MediaId::new());
-        vault.save_media(&e, &m, &img(), b"a\nbytes").unwrap();
-        let got = vault.get_media(&e, &m).unwrap().unwrap();
+        vault
+            .save_media(&e, &m, MediaVariant::Original, &img(), &webp(b"a\nbytes"))
+            .unwrap();
+        let got = vault
+            .get_media(&e, &m, MediaVariant::Original)
+            .unwrap()
+            .unwrap();
         assert_eq!(got.meta, img());
-        assert_eq!(got.bytes, b"a\nbytes");
+        assert_eq!(got.bytes, webp(b"a\nbytes"));
         discard(&store);
     }
 
@@ -1812,8 +1875,12 @@ mod tests {
         let store = temp_store();
         let vault = fake_vault(store.clone());
         let (e, m) = (Id::new(), MediaId::new());
-        vault.save_media(&e, &m, &img(), b"x").unwrap();
-        vault.save_media(&e, &m, &img(), b"x").unwrap();
+        vault
+            .save_media(&e, &m, MediaVariant::Original, &img(), &webp(b"x"))
+            .unwrap();
+        vault
+            .save_media(&e, &m, MediaVariant::Original, &img(), &webp(b"x"))
+            .unwrap();
         assert_eq!(media_count(&store), 1);
         discard(&store);
     }
@@ -1823,12 +1890,18 @@ mod tests {
         let store = temp_store();
         let vault = fake_vault(store.clone());
         let bad = MediaMeta::Image {
-            format: journal_entry::ImageFormat::Png,
+            format: ImageFormat::Png,
             width: 0,
             height: 5,
         };
         let err = vault
-            .save_media(&Id::new(), &MediaId::new(), &bad, b"x")
+            .save_media(
+                &Id::new(),
+                &MediaId::new(),
+                MediaVariant::Original,
+                &bad,
+                &webp(b"x"),
+            )
             .unwrap_err();
         assert!(matches!(err, VaultError::MediaType), "{err:?}");
         assert_eq!(media_count(&store), 0);
@@ -1839,9 +1912,15 @@ mod tests {
     fn save_media_refuses_more_than_max_bytes() {
         let store = temp_store();
         let vault = fake_vault(store.clone());
-        let big = vec![0u8; media::MAX_MEDIA_BYTES + 1];
+        let big = webp(&vec![0u8; media::MAX_ORIGINAL_BYTES]);
         let err = vault
-            .save_media(&Id::new(), &MediaId::new(), &img(), &big)
+            .save_media(
+                &Id::new(),
+                &MediaId::new(),
+                MediaVariant::Original,
+                &img(),
+                &big,
+            )
             .unwrap_err();
         assert!(matches!(err, VaultError::MediaTooLarge), "{err:?}");
         discard(&store);
@@ -1852,7 +1931,7 @@ mod tests {
         let store = temp_store();
         let vault = fake_vault(store.clone());
         assert!(vault
-            .get_media(&Id::new(), &MediaId::new())
+            .get_media(&Id::new(), &MediaId::new(), MediaVariant::Original)
             .unwrap()
             .is_none());
         discard(&store);
@@ -1864,17 +1943,27 @@ mod tests {
         let vault = Vault::open(store.clone(), &passphrase("hunter2")).unwrap();
         let (e, m) = (Id::new(), MediaId::new());
         vault
-            .save_media(&e, &m, &img(), b"SECRET-PIXELS-SECRET-PIXELS")
+            .save_media(
+                &e,
+                &m,
+                MediaVariant::Original,
+                &img(),
+                &webp(b"SECRET-PIXELS-SECRET-PIXELS"),
+            )
             .unwrap();
         let raw = store
-            .get(&owned::name::<MediaBlob>(&e, &m))
+            .get(&owned::name::<MediaBlob>(&e, &(m, MediaVariant::Original)))
             .unwrap()
             .unwrap();
         assert!(!raw.windows(6).any(|w| w == b"SECRET"));
         assert!(!raw.windows(5).any(|w| w == b"image"));
         assert_eq!(
-            vault.get_media(&e, &m).unwrap().unwrap().bytes,
-            b"SECRET-PIXELS-SECRET-PIXELS"
+            vault
+                .get_media(&e, &m, MediaVariant::Original)
+                .unwrap()
+                .unwrap()
+                .bytes,
+            webp(b"SECRET-PIXELS-SECRET-PIXELS")
         );
         discard(&store);
     }
@@ -1887,13 +1976,23 @@ mod tests {
         vault.save_entry(&sample(a)).unwrap();
         vault.save_entry(&sample(b)).unwrap();
         let (ma, mb) = (MediaId::new(), MediaId::new());
-        vault.save_media(&a, &ma, &img(), b"a").unwrap();
-        vault.save_media(&b, &mb, &img(), b"b").unwrap();
+        vault
+            .save_media(&a, &ma, MediaVariant::Original, &img(), &webp(b"a"))
+            .unwrap();
+        vault
+            .save_media(&b, &mb, MediaVariant::Original, &img(), &webp(b"b"))
+            .unwrap();
 
         vault.delete_entry(&a).unwrap();
 
-        assert!(vault.get_media(&a, &ma).unwrap().is_none());
-        assert!(vault.get_media(&b, &mb).unwrap().is_some());
+        assert!(vault
+            .get_media(&a, &ma, MediaVariant::Original)
+            .unwrap()
+            .is_none());
+        assert!(vault
+            .get_media(&b, &mb, MediaVariant::Original)
+            .unwrap()
+            .is_some());
         discard(&store);
     }
 
@@ -1902,7 +2001,13 @@ mod tests {
         let store = temp_store();
         let vault = Vault::open(store.clone(), &passphrase("hunter2")).unwrap();
         vault
-            .save_media(&Id::new(), &MediaId::new(), &img(), b"x")
+            .save_media(
+                &Id::new(),
+                &MediaId::new(),
+                MediaVariant::Original,
+                &img(),
+                &webp(b"x"),
+            )
             .unwrap();
         store.delete(&BlobName::literal(".vault-key")).unwrap();
 
@@ -1922,7 +2027,13 @@ mod tests {
         let vault = fake_vault(store.clone());
         vault.save_entry(&entry("Readable", "a walk", 0)).unwrap();
         vault
-            .save_media(&Id::new(), &MediaId::new(), &img(), b"walk")
+            .save_media(
+                &Id::new(),
+                &MediaId::new(),
+                MediaVariant::Original,
+                &img(),
+                &webp(b"walk"),
+            )
             .unwrap();
         assert_eq!(vault.list_entries().unwrap().len(), 1);
         assert_eq!(vault.search("walk").unwrap().len(), 1);
@@ -1934,14 +2045,26 @@ mod tests {
         let store = temp_store();
         let vault = fake_vault(store.clone());
         let (from, to, m) = (Id::new(), Id::new(), MediaId::new());
-        vault.save_media(&from, &m, &img(), b"pix").unwrap();
+        vault
+            .save_media(&from, &m, MediaVariant::Original, &img(), &webp(b"pix"))
+            .unwrap();
         let md = format!("hi ![x](media:{from}/{m}) there");
 
         let out = vault.adopt_media(&to, &md).unwrap();
 
         assert_eq!(out, format!("hi ![x](media:{to}/{m}) there"));
-        assert_eq!(vault.get_media(&to, &m).unwrap().unwrap().bytes, b"pix");
-        assert!(vault.get_media(&from, &m).unwrap().is_some());
+        assert_eq!(
+            vault
+                .get_media(&to, &m, MediaVariant::Original)
+                .unwrap()
+                .unwrap()
+                .bytes,
+            webp(b"pix")
+        );
+        assert!(vault
+            .get_media(&from, &m, MediaVariant::Original)
+            .unwrap()
+            .is_some());
         discard(&store);
     }
 
@@ -1950,7 +2073,9 @@ mod tests {
         let store = temp_store();
         let vault = fake_vault(store.clone());
         let (to, own, gone) = (Id::new(), MediaId::new(), MediaId::new());
-        vault.save_media(&to, &own, &img(), b"x").unwrap();
+        vault
+            .save_media(&to, &own, MediaVariant::Original, &img(), &webp(b"x"))
+            .unwrap();
         let md = format!("![](media:{to}/{own}) ![](media:{}/{gone})", Id::new());
         assert_eq!(vault.adopt_media(&to, &md).unwrap(), md);
         assert_eq!(media_count(&store), 1);
@@ -1962,7 +2087,9 @@ mod tests {
         let store = temp_store();
         let vault = fake_vault(store.clone());
         let (from, to, m) = (Id::new(), Id::new(), MediaId::new());
-        vault.save_media(&from, &m, &img(), b"pix").unwrap();
+        vault
+            .save_media(&from, &m, MediaVariant::Original, &img(), &webp(b"pix"))
+            .unwrap();
         let md = format!("![](media:{from}/{m})");
         let once = vault.adopt_media(&to, &md).unwrap();
         // The original text again (a retry), and the rewritten text.
@@ -1978,12 +2105,260 @@ mod tests {
         let vault = fake_vault(store.clone());
         let (from, to, m) = (Id::new(), Id::new(), MediaId::new());
         vault.save_entry(&sample(from)).unwrap();
-        vault.save_media(&from, &m, &img(), b"pix").unwrap();
+        vault
+            .save_media(&from, &m, MediaVariant::Original, &img(), &webp(b"pix"))
+            .unwrap();
         vault
             .adopt_media(&to, &format!("![](media:{from}/{m})"))
             .unwrap();
         vault.delete_entry(&from).unwrap();
-        assert_eq!(vault.get_media(&to, &m).unwrap().unwrap().bytes, b"pix");
+        assert_eq!(
+            vault
+                .get_media(&to, &m, MediaVariant::Original)
+                .unwrap()
+                .unwrap()
+                .bytes,
+            webp(b"pix")
+        );
+        discard(&store);
+    }
+
+    fn save(vault: &Vault, e: &Id, m: &MediaId, v: MediaVariant, meta: &MediaMeta, bytes: &[u8]) {
+        vault.save_media(e, m, v, meta, bytes).unwrap();
+    }
+
+    #[test]
+    fn save_media_then_get_media_round_trips_each_variant() {
+        let store = temp_store();
+        let vault = fake_vault(store.clone());
+        let (e, m) = (Id::new(), MediaId::new());
+        save(
+            &vault,
+            &e,
+            &m,
+            MediaVariant::Original,
+            &meta_of(ImageFormat::Heic),
+            &heic(),
+        );
+        save(&vault, &e, &m, MediaVariant::Display, &img(), &webp(b"d"));
+        save(&vault, &e, &m, MediaVariant::Thumb, &img(), &webp(b"t"));
+        let bytes = |v| vault.get_media(&e, &m, v).unwrap().unwrap().bytes;
+        assert_eq!(bytes(MediaVariant::Original), heic());
+        assert_eq!(bytes(MediaVariant::Display), webp(b"d"));
+        assert_eq!(bytes(MediaVariant::Thumb), webp(b"t"));
+        assert_eq!(media_count(&store), 3);
+        discard(&store);
+    }
+
+    #[test]
+    fn get_media_is_none_for_a_missing_variant() {
+        let store = temp_store();
+        let vault = fake_vault(store.clone());
+        let (e, m) = (Id::new(), MediaId::new());
+        save(&vault, &e, &m, MediaVariant::Original, &img(), &webp(b"o"));
+        assert!(vault
+            .get_media(&e, &m, MediaVariant::Thumb)
+            .unwrap()
+            .is_none());
+        assert!(vault
+            .get_media(&e, &m, MediaVariant::Display)
+            .unwrap()
+            .is_none());
+        discard(&store);
+    }
+
+    #[test]
+    fn save_media_refuses_bytes_that_do_not_match_the_format() {
+        let store = temp_store();
+        let vault = fake_vault(store.clone());
+        let (e, m) = (Id::new(), MediaId::new());
+        for (format, bytes) in [
+            (ImageFormat::Png, webp(b"x")),
+            (ImageFormat::Webp, b"<svg/>".to_vec()),
+            (ImageFormat::Jpeg, Vec::new()),
+        ] {
+            let err = vault
+                .save_media(&e, &m, MediaVariant::Original, &meta_of(format), &bytes)
+                .unwrap_err();
+            assert!(matches!(err, VaultError::MediaType), "{format:?}: {err:?}");
+        }
+        assert_eq!(media_count(&store), 0);
+        discard(&store);
+    }
+
+    #[test]
+    fn save_media_refuses_a_non_web_safe_thumbnail_or_display_copy() {
+        let store = temp_store();
+        let vault = fake_vault(store.clone());
+        let (e, m) = (Id::new(), MediaId::new());
+        for variant in [MediaVariant::Display, MediaVariant::Thumb] {
+            let err = vault
+                .save_media(&e, &m, variant, &meta_of(ImageFormat::Heic), &heic())
+                .unwrap_err();
+            assert!(matches!(err, VaultError::MediaType), "{variant:?}: {err:?}");
+        }
+        assert_eq!(media_count(&store), 0);
+        discard(&store);
+    }
+
+    #[test]
+    fn save_media_caps_each_variant() {
+        let store = temp_store();
+        let vault = fake_vault(store.clone());
+        let (e, m) = (Id::new(), MediaId::new());
+        for (variant, cap) in [
+            (MediaVariant::Original, media::MAX_ORIGINAL_BYTES),
+            (MediaVariant::Display, media::MAX_DISPLAY_BYTES),
+            (MediaVariant::Thumb, media::MAX_THUMB_BYTES),
+        ] {
+            let body = vec![0u8; cap];
+            let err = vault
+                .save_media(&e, &m, variant, &img(), &webp(&body))
+                .unwrap_err();
+            assert!(
+                matches!(err, VaultError::MediaTooLarge),
+                "{variant:?}: {err:?}"
+            );
+        }
+        // Exactly at the cap is fine.
+        let at_cap = webp(&vec![0u8; media::MAX_THUMB_BYTES - 12]);
+        vault
+            .save_media(&e, &m, MediaVariant::Thumb, &img(), &at_cap)
+            .unwrap();
+        discard(&store);
+    }
+
+    #[test]
+    fn original_keeps_its_bytes_exactly() {
+        let store = temp_store();
+        let vault = fake_vault(store.clone());
+        let (e, m) = (Id::new(), MediaId::new());
+        // A JPEG with an EXIF-looking APP1 segment, GPS text and a newline.
+        let file = jpeg(b"\xE1\x00\x20Exif\0\0GPSLatitude\n=52.5\xFF\xD9");
+        let meta = meta_of(ImageFormat::Jpeg);
+        save(&vault, &e, &m, MediaVariant::Original, &meta, &file);
+        let got = vault
+            .get_media(&e, &m, MediaVariant::Original)
+            .unwrap()
+            .unwrap();
+        assert_eq!(got.bytes, file);
+        assert_eq!(got.meta, meta);
+        discard(&store);
+    }
+
+    #[test]
+    fn delete_entry_removes_every_variant() {
+        let store = temp_store();
+        let vault = fake_vault(store.clone());
+        let (e, m) = (Id::new(), MediaId::new());
+        vault.save_entry(&sample(e)).unwrap();
+        for v in [
+            MediaVariant::Original,
+            MediaVariant::Display,
+            MediaVariant::Thumb,
+        ] {
+            save(&vault, &e, &m, v, &img(), &webp(b"x"));
+        }
+        assert_eq!(media_count(&store), 3);
+        vault.delete_entry(&e).unwrap();
+        assert_eq!(media_count(&store), 0);
+        discard(&store);
+    }
+
+    #[test]
+    fn adopt_media_copies_every_variant_present() {
+        let store = temp_store();
+        let vault = fake_vault(store.clone());
+        let (from, to, m) = (Id::new(), Id::new(), MediaId::new());
+        save(
+            &vault,
+            &from,
+            &m,
+            MediaVariant::Original,
+            &meta_of(ImageFormat::Heic),
+            &heic(),
+        );
+        save(
+            &vault,
+            &from,
+            &m,
+            MediaVariant::Display,
+            &img(),
+            &webp(b"d"),
+        );
+        save(&vault, &from, &m, MediaVariant::Thumb, &img(), &webp(b"t"));
+
+        vault
+            .adopt_media(&to, &format!("![](media:{from}/{m})"))
+            .unwrap();
+
+        let bytes = |v| vault.get_media(&to, &m, v).unwrap().unwrap().bytes;
+        assert_eq!(bytes(MediaVariant::Original), heic());
+        assert_eq!(bytes(MediaVariant::Display), webp(b"d"));
+        assert_eq!(bytes(MediaVariant::Thumb), webp(b"t"));
+        discard(&store);
+    }
+
+    #[test]
+    fn adopt_media_without_a_thumbnail_still_adopts() {
+        let store = temp_store();
+        let vault = fake_vault(store.clone());
+        let (from, to, m) = (Id::new(), Id::new(), MediaId::new());
+        save(
+            &vault,
+            &from,
+            &m,
+            MediaVariant::Original,
+            &img(),
+            &webp(b"o"),
+        );
+        let out = vault
+            .adopt_media(&to, &format!("![](media:{from}/{m})"))
+            .unwrap();
+        assert_eq!(out, format!("![](media:{to}/{m})"));
+        assert!(vault
+            .get_media(&to, &m, MediaVariant::Original)
+            .unwrap()
+            .is_some());
+        assert!(vault
+            .get_media(&to, &m, MediaVariant::Thumb)
+            .unwrap()
+            .is_none());
+        discard(&store);
+    }
+
+    #[test]
+    fn adopt_media_leaves_the_ref_when_only_a_thumbnail_exists() {
+        let store = temp_store();
+        let vault = fake_vault(store.clone());
+        let (from, to, m) = (Id::new(), Id::new(), MediaId::new());
+        save(&vault, &from, &m, MediaVariant::Thumb, &img(), &webp(b"t"));
+        let md = format!("![](media:{from}/{m})");
+        assert_eq!(vault.adopt_media(&to, &md).unwrap(), md);
+        assert_eq!(media_count(&store), 1);
+        discard(&store);
+    }
+
+    #[test]
+    fn open_refuses_when_only_a_thumbnail_remains() {
+        let store = temp_store();
+        let vault = Vault::open(store.clone(), &passphrase("hunter2")).unwrap();
+        save(
+            &vault,
+            &Id::new(),
+            &MediaId::new(),
+            MediaVariant::Thumb,
+            &img(),
+            &webp(b"t"),
+        );
+        store.delete(&BlobName::literal(".vault-key")).unwrap();
+        let Err(err) = Vault::open(store.clone(), &passphrase("typo")) else {
+            panic!("opened a fresh vault over an orphaned thumbnail");
+        };
+        assert!(
+            matches!(err, VaultError::Key(KeyError::MissingKeyFile)),
+            "got {err:?}"
+        );
         discard(&store);
     }
 }

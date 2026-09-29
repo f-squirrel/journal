@@ -13,7 +13,9 @@
 
 mod sync;
 
-pub use journal_entry::{Entry, Header, Id, ImageFormat, MediaId, MediaMeta, SearchMatch};
+pub use journal_entry::{
+    Entry, Header, Id, ImageFormat, MediaId, MediaMeta, MediaVariant, SearchMatch,
+};
 pub use journal_settings::{
     ColorMode, DeviceSettings, JournalSettings, Settings, TimeFormat, WeekStart,
 };

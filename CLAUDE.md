@@ -90,9 +90,14 @@ Backend:
 - No `expect` on thread spawns in `src-tauri`.
 - `export.rs` is the only plaintext write: empty folder outside app data,
   `create_new`, `0600`, clean up on failure, log counts only.
-- Media (images) are immutable blobs `<entry-id>.media-<media-id>`, written
-  with `put_new`, deleted only by `delete_entry` (media, then snapshots, then
-  the entry). `MediaMeta` is a tagged enum: per-kind fields live on their
+- Media (images) are immutable blobs `<entry-id>.media-<media-id>` (the
+  original, stored byte for byte, EXIF included) plus `.thumb` and, only for
+  non-web-safe formats (HEIC, AVIF, TIFF), `.display`. All variants are one
+  `MediaBlob` key `(MediaId, MediaVariant)` — never a separate `is_*` — and
+  are written with `put_new`, deleted only by `delete_entry` (media, then
+  snapshots, then the entry). The format is sniffed from the bytes on both
+  sides and `save_media` enforces it; export writes originals only; the
+  viewer decrypts full size only while open. `MediaMeta` is a tagged enum: per-kind fields live on their
   variant and every `match` on it stays exhaustive (no `_` arm). Never add an
   SVG format. Every conflicted copy must go through `Vault::adopt_media` (Rust
   resolver, `useAutosave`, fallback). Entry-owned blob naming is shared in

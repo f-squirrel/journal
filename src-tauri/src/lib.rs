@@ -539,6 +539,7 @@ mod tests {
             journal_api::MediaId::new().to_string(),
         );
         let good = r#"{"kind":"image","format":"webp","width":2,"height":2}"#;
+        let webp = [b"RIFF\0\0\0\0WEBP".as_slice(), b"px\nel"].concat();
         let send = |headers: &[(&str, &str)], body| {
             tauri::test::get_ipc_response(&webview, media_request("save_media", headers, body))
         };
@@ -548,6 +549,7 @@ mod tests {
         let all = [
             ("entry-id", e.as_str()),
             ("media-id", m.as_str()),
+            ("media-variant", "original"),
             ("media-meta", good),
         ];
         assert!(rejection(send(
@@ -555,6 +557,22 @@ mod tests {
             tauri::ipc::InvokeBody::Json(serde_json::json!([1]))
         ))
         .contains("raw"));
+
+        // The variant is required and must be one we know.
+        for variant in [None, Some("full")] {
+            let mut headers: Vec<_> = all
+                .iter()
+                .filter(|(k, _)| *k != "media-variant")
+                .copied()
+                .collect();
+            if let Some(v) = variant {
+                headers.push(("media-variant", v));
+            }
+            assert!(
+                rejection(send(&headers, Raw(webp.clone()))).contains("media-variant"),
+                "{variant:?}"
+            );
+        }
 
         // An SVG or audio description is not a storable kind.
         for bad in [
@@ -564,6 +582,7 @@ mod tests {
             let headers = [
                 ("entry-id", e.as_str()),
                 ("media-id", m.as_str()),
+                ("media-variant", "original"),
                 ("media-meta", bad),
             ];
             assert_eq!(
@@ -573,29 +592,39 @@ mod tests {
         }
 
         // The good request stores, and the payload comes back as bytes.
-        send(&all, Raw(b"px\nel".to_vec())).expect("the image saves");
+        send(&all, Raw(webp.clone())).expect("the image saves");
         let got = tauri::test::get_ipc_response(
             &webview,
             request(
                 "get_media",
-                serde_json::json!({ "entry_id": e, "media_id": m }),
+                serde_json::json!({ "entry_id": e, "media_id": m, "variant": "original" }),
             ),
         )
         .expect("the image reads back");
         let tauri::ipc::InvokeResponseBody::Raw(payload) = got else {
             panic!("get_media answers with bytes");
         };
-        assert_eq!(payload, [good.as_bytes(), b"\n", b"px\nel"].concat());
+        assert_eq!(payload, [good.as_bytes(), b"\n", &webp].concat());
 
         // An unknown id carries the pinned text.
         let unknown = tauri::test::get_ipc_response(
             &webview,
             request(
                 "get_media",
-                serde_json::json!({ "entry_id": Id::new(), "media_id": journal_api::MediaId::new() }),
+                serde_json::json!({ "entry_id": Id::new(), "media_id": journal_api::MediaId::new(), "variant": "original" }),
             ),
         );
         assert_eq!(rejection(unknown), "that image is no longer available");
+
+        // So does a variant that was never stored.
+        let no_thumb = tauri::test::get_ipc_response(
+            &webview,
+            request(
+                "get_media",
+                serde_json::json!({ "entry_id": e, "media_id": m, "variant": "thumb" }),
+            ),
+        );
+        assert_eq!(rejection(no_thumb), "that image is no longer available");
 
         std::fs::remove_dir_all(dir).ok();
     }

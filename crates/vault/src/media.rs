@@ -7,36 +7,63 @@
 
 use std::ops::Range;
 
-use journal_entry::{Id, MediaId, MediaMeta};
+use journal_entry::{Id, MediaId, MediaMeta, MediaVariant};
 use journal_store::BlobName;
 
 use crate::owned::{self, OwnedBlob};
 use crate::VaultError;
 
-/// The largest media payload (raw bytes) `Vault::save_media` accepts.
-pub(crate) const MAX_MEDIA_BYTES: usize = 10 * 1024 * 1024;
+/// The largest payload (raw bytes) `Vault::save_media` accepts per variant.
+pub(crate) const MAX_ORIGINAL_BYTES: usize = 50 * 1024 * 1024;
+pub(crate) const MAX_DISPLAY_BYTES: usize = 25 * 1024 * 1024;
+pub(crate) const MAX_THUMB_BYTES: usize = 1024 * 1024;
+
+pub(crate) fn max_bytes(variant: MediaVariant) -> usize {
+    match variant {
+        MediaVariant::Original => MAX_ORIGINAL_BYTES,
+        MediaVariant::Display => MAX_DISPLAY_BYTES,
+        MediaVariant::Thumb => MAX_THUMB_BYTES,
+    }
+}
+
+const DISPLAY_SUFFIX: &str = ".display";
+const THUMB_SUFFIX: &str = ".thumb";
 
 /// The markdown URL scheme prefix a reference starts with.
 const REF_PREFIX: &str = "](media:";
 
-/// `<entry-id>.media-<media-id>`. A `:` cannot appear in a blob name, so the
-/// infix is a plain `.media-`.
+/// `<entry-id>.media-<media-id>` (the original), with `.display` or `.thumb`
+/// appended for the other variants. A `:` cannot appear in a blob name, so the
+/// infix is a plain `.media-`. All variants are one kind so every predicate
+/// keyed on it (orphan guard, sync resolver, immutable shortcut, deletion)
+/// covers them with no further wiring.
 pub(crate) struct MediaBlob;
 
 impl OwnedBlob for MediaBlob {
     const INFIX: &'static str = ".media-";
-    type Key = MediaId;
+    type Key = (MediaId, MediaVariant);
 
-    fn tail(media: &MediaId) -> String {
-        media.to_string()
+    fn tail((media, variant): &(MediaId, MediaVariant)) -> String {
+        match variant {
+            MediaVariant::Original => media.to_string(),
+            MediaVariant::Display => format!("{media}{DISPLAY_SUFFIX}"),
+            MediaVariant::Thumb => format!("{media}{THUMB_SUFFIX}"),
+        }
     }
 
-    fn parse_tail(tail: &str) -> Option<MediaId> {
-        tail.parse().ok()
+    fn parse_tail(tail: &str) -> Option<(MediaId, MediaVariant)> {
+        let (id, variant) = if let Some(id) = tail.strip_suffix(DISPLAY_SUFFIX) {
+            (id, MediaVariant::Display)
+        } else if let Some(id) = tail.strip_suffix(THUMB_SUFFIX) {
+            (id, MediaVariant::Thumb)
+        } else {
+            (tail, MediaVariant::Original)
+        };
+        Some((id.parse().ok()?, variant))
     }
 }
 
-/// Whether `name` is one of an entry's media blobs.
+/// Whether `name` is one of an entry's media blobs, of any variant.
 ///
 /// Public because the sync resolver must recognise them (a same-name conflict
 /// is two encryptions of the same bytes; keep either, no key needed) and the
@@ -138,9 +165,15 @@ mod tests {
     #[test]
     fn parse_inverts_the_naming_and_refuses_other_names() {
         let (e, m) = (Id::new(), MediaId::new());
-        let name = owned::name::<MediaBlob>(&e, &m);
-        assert_eq!(owned::parse::<MediaBlob>(&name), Some((e, m)));
-        assert!(is_media(&name));
+        for variant in [
+            MediaVariant::Original,
+            MediaVariant::Display,
+            MediaVariant::Thumb,
+        ] {
+            let name = owned::name::<MediaBlob>(&e, &(m, variant));
+            assert_eq!(owned::parse::<MediaBlob>(&name), Some((e, (m, variant))));
+            assert!(is_media(&name));
+        }
 
         let other = |s: String| BlobName::try_from(s).unwrap();
         for s in [
@@ -150,6 +183,11 @@ mod tests {
             ".journal-settings".to_owned(),
             format!("{e}.media-not-a-uuid"),
             format!("{e}.media-{}", m.to_string().to_uppercase()),
+            format!("{e}.media-{m}.THUMB"),
+            format!("{e}.media-{m}.thumbx"),
+            format!("{e}.media-{m}.thumb.thumb"),
+            format!("{e}.media-{m}.original"),
+            format!("{e}.media-{m}."),
         ] {
             assert!(!is_media(&other(s.clone())), "{s}");
         }

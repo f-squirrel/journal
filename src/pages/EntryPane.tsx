@@ -298,9 +298,27 @@ function EntryPane({ id, draft }: { id: string; draft: boolean }) {
       const links: string[] = [];
       for (const file of files) {
         try {
-          const { meta, bytes } = await importImage(file);
+          const { original, display, thumb } = await importImage(file);
           const mediaId = newEntryId();
-          await saveMedia(id, mediaId, meta, bytes);
+          // The link goes in only once every blob is stored; a retry with
+          // the same ids would be idempotent, and a partial failure leaves
+          // an unreferenced blob, like the other accepted orphans.
+          await saveMedia(
+            id,
+            mediaId,
+            "original",
+            original.meta,
+            original.bytes,
+          );
+          if (display)
+            await saveMedia(
+              id,
+              mediaId,
+              "display",
+              display.meta,
+              display.bytes,
+            );
+          await saveMedia(id, mediaId, "thumb", thumb.meta, thumb.bytes);
           links.push(`![](${mediaRef(id, mediaId)})`);
         } catch (err) {
           setMediaError(errorMessage(err));

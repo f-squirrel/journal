@@ -109,7 +109,9 @@ export default function ExportDialog({
               <Alert severity="warning">
                 The exported files are not encrypted. Anyone, and any program,
                 that can read this folder can read your whole journal. Keep it
-                somewhere you trust, and delete it when you are done.
+                somewhere you trust, and delete it when you are done. Images are
+                exported as their original files, including any location data
+                they contain.
               </Alert>
             </>
           )}

@@ -101,7 +101,7 @@ impl FromStr for MediaId {
 )]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum MediaMeta {
-    /// Pixel dimensions after downscaling; both non-zero.
+    /// Decoded, orientation-applied pixel dimensions; both non-zero.
     Image {
         format: ImageFormat,
         width: u32,
@@ -121,7 +121,30 @@ pub enum ImageFormat {
     Jpeg,
     Png,
     Gif,
+    Heic,
+    Avif,
+    Tiff,
 }
+
+/// Which of an image's up to three blobs. The original is the user's file;
+/// the display copy exists only when the original is not web-safe; the
+/// thumbnail is what an entry's read view shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "ts",
+    derive(ts_rs::TS),
+    ts(export, export_to = "../../../src/bindings/")
+)]
+#[serde(rename_all = "snake_case")]
+pub enum MediaVariant {
+    Original,
+    Display,
+    Thumb,
+}
+
+const HEIC_BRANDS: [&[u8; 4]; 8] = [
+    b"heic", b"heix", b"hevc", b"hevx", b"heim", b"heis", b"hevm", b"hevs",
+];
 
 impl ImageFormat {
     pub fn mime(self) -> &'static str {
@@ -130,6 +153,9 @@ impl ImageFormat {
             Self::Jpeg => "image/jpeg",
             Self::Png => "image/png",
             Self::Gif => "image/gif",
+            Self::Heic => "image/heic",
+            Self::Avif => "image/avif",
+            Self::Tiff => "image/tiff",
         }
     }
 
@@ -140,7 +166,69 @@ impl ImageFormat {
             Self::Jpeg => "jpg",
             Self::Png => "png",
             Self::Gif => "gif",
+            Self::Heic => "heic",
+            Self::Avif => "avif",
+            Self::Tiff => "tif",
         }
+    }
+
+    /// Whether every webview the app ships in can display it. AVIF is "no"
+    /// because WebKitGTK support depends on how it was built.
+    pub fn is_web_safe(self) -> bool {
+        match self {
+            Self::Webp | Self::Jpeg | Self::Png | Self::Gif => true,
+            Self::Heic | Self::Avif | Self::Tiff => false,
+        }
+    }
+
+    /// The format the bytes are, judged by their header alone (never by a
+    /// file name or MIME type). `None` for anything else, SVG included.
+    /// Mirrored by `sniffImageFormat` in `src/media/format.ts`.
+    pub fn sniff(bytes: &[u8]) -> Option<Self> {
+        if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+            return Some(Self::Jpeg);
+        }
+        if bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]) {
+            return Some(Self::Png);
+        }
+        if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+            return Some(Self::Gif);
+        }
+        if bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+            return Some(Self::Webp);
+        }
+        if bytes.starts_with(&[b'I', b'I', b'*', 0]) || bytes.starts_with(&[b'M', b'M', 0, b'*']) {
+            return Some(Self::Tiff);
+        }
+        if bytes.len() >= 12 && &bytes[4..8] == b"ftyp" {
+            let brand = &bytes[8..12];
+            if brand == b"avif" || brand == b"avis" {
+                return Some(Self::Avif);
+            }
+            if HEIC_BRANDS.iter().any(|b| brand == &b[..]) {
+                return Some(Self::Heic);
+            }
+            if brand == b"mif1" || brand == b"msf1" {
+                let size = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize;
+                let end = size.min(bytes.len());
+                // Compatible brands follow the major brand and its version.
+                let brands: Vec<&[u8]> = bytes
+                    .get(16..end)
+                    .unwrap_or_default()
+                    .chunks_exact(4)
+                    .collect();
+                if brands.iter().any(|b| *b == b"avif" || *b == b"avis") {
+                    return Some(Self::Avif);
+                }
+                if brands
+                    .iter()
+                    .any(|b| HEIC_BRANDS.iter().any(|h| *b == &h[..]))
+                {
+                    return Some(Self::Heic);
+                }
+            }
+        }
+        None
     }
 }
 
@@ -319,11 +407,93 @@ mod tests {
             (ImageFormat::Jpeg, "image/jpeg", "jpg"),
             (ImageFormat::Png, "image/png", "png"),
             (ImageFormat::Gif, "image/gif", "gif"),
+            (ImageFormat::Heic, "image/heic", "heic"),
+            (ImageFormat::Avif, "image/avif", "avif"),
+            (ImageFormat::Tiff, "image/tiff", "tif"),
         ];
         for (format, mime, ext) in all {
             assert_eq!(format.mime(), mime);
             assert_eq!(format.extension(), ext);
+            assert_eq!(
+                format.is_web_safe(),
+                !matches!(
+                    format,
+                    ImageFormat::Heic | ImageFormat::Avif | ImageFormat::Tiff
+                )
+            );
         }
+    }
+
+    fn ftyp(major: &[u8; 4], compatible: &[&[u8; 4]]) -> Vec<u8> {
+        let size = 16 + 4 * compatible.len();
+        let mut v = (size as u32).to_be_bytes().to_vec();
+        v.extend_from_slice(b"ftyp");
+        v.extend_from_slice(major);
+        v.extend_from_slice(&[0; 4]);
+        for c in compatible {
+            v.extend_from_slice(*c);
+        }
+        v
+    }
+
+    #[test]
+    fn sniff_recognises_each_format_from_its_header() {
+        let webp = [b"RIFF".as_slice(), &[0; 4], b"WEBPVP8 "].concat();
+        let cases: [(Vec<u8>, Option<ImageFormat>); 14] = [
+            (vec![0xFF, 0xD8, 0xFF, 0xE0], Some(ImageFormat::Jpeg)),
+            (
+                vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0],
+                Some(ImageFormat::Png),
+            ),
+            (b"GIF87a..".to_vec(), Some(ImageFormat::Gif)),
+            (b"GIF89a..".to_vec(), Some(ImageFormat::Gif)),
+            (webp, Some(ImageFormat::Webp)),
+            (vec![b'I', b'I', b'*', 0, 8], Some(ImageFormat::Tiff)),
+            (vec![b'M', b'M', 0, b'*', 8], Some(ImageFormat::Tiff)),
+            (ftyp(b"avif", &[]), Some(ImageFormat::Avif)),
+            (ftyp(b"heic", &[]), Some(ImageFormat::Heic)),
+            (ftyp(b"mif1", &[b"miaf", b"avif"]), Some(ImageFormat::Avif)),
+            (ftyp(b"mif1", &[b"miaf", b"heic"]), Some(ImageFormat::Heic)),
+            (ftyp(b"mif1", &[b"miaf"]), None),
+            (ftyp(b"mp42", &[b"heic"]), None),
+            (
+                b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>".to_vec(),
+                None,
+            ),
+        ];
+        for (bytes, want) in cases {
+            assert_eq!(ImageFormat::sniff(&bytes), want, "{bytes:?}");
+        }
+        assert_eq!(ImageFormat::sniff(&[]), None);
+    }
+
+    #[test]
+    fn sniff_survives_truncated_and_oversized_ftyp_boxes() {
+        // Cut off inside the major brand.
+        assert_eq!(ImageFormat::sniff(&ftyp(b"mif1", &[])[..10]), None);
+        // The box claims more bytes than exist: read only what is there.
+        let mut v = ftyp(b"mif1", &[b"heic"]);
+        v[..4].copy_from_slice(&u32::MAX.to_be_bytes());
+        assert_eq!(ImageFormat::sniff(&v), Some(ImageFormat::Heic));
+        // A box smaller than its own header has no compatible brands.
+        let mut v = ftyp(b"mif1", &[b"heic"]);
+        v[..4].copy_from_slice(&4u32.to_be_bytes());
+        assert_eq!(ImageFormat::sniff(&v), None);
+    }
+
+    #[test]
+    fn media_variant_serde_uses_snake_case() {
+        for (variant, text) in [
+            (MediaVariant::Original, "\"original\""),
+            (MediaVariant::Display, "\"display\""),
+            (MediaVariant::Thumb, "\"thumb\""),
+        ] {
+            assert_eq!(serde_json::to_string(&variant).unwrap(), text);
+            assert_eq!(serde_json::from_str::<MediaVariant>(text).unwrap(), variant);
+        }
+        assert!(serde_json::from_str::<MediaVariant>("\"full\"").is_err());
+        assert!(serde_json::from_str::<ImageFormat>("\"heic\"").is_ok());
+        assert!(serde_json::from_str::<ImageFormat>("\"svg\"").is_err());
     }
 
     #[test]

@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { MediaId, MediaMeta } from "../types";
+import { isImageFormat } from "../media/format";
+import type { MediaId, MediaMeta, MediaVariant } from "../types";
 import { backend, fallback } from "./backend";
 
 // Encrypted media (images) owned by an entry. Same `backend`/`fallback()`
@@ -10,11 +11,17 @@ import { backend, fallback } from "./backend";
 export const MEDIA_TYPE_MESSAGE =
   "that kind of file cannot be added to an entry";
 
-/// The bytes go as the raw request body, not JSON; the ids and metadata ride
-/// in headers (`media-meta` is `MediaMeta` JSON, which is ASCII).
+/// What a read of a missing blob rejects with (`VaultError::MediaNotFound`).
+/// `useMediaUrl` falls through its variant chain on exactly this.
+export const MEDIA_NOT_FOUND_MESSAGE = "that image is no longer available";
+
+/// The bytes go as the raw request body, not JSON; the ids, the variant and
+/// the metadata ride in headers (`media-meta` is `MediaMeta` JSON, which is
+/// ASCII).
 export async function saveMedia(
   entryId: string,
   mediaId: MediaId,
+  variant: MediaVariant,
   meta: MediaMeta,
   bytes: Uint8Array,
 ): Promise<void> {
@@ -23,10 +30,11 @@ export async function saveMedia(
       headers: {
         "entry-id": entryId,
         "media-id": mediaId,
+        "media-variant": variant,
         "media-meta": JSON.stringify(meta),
       },
     });
-  return (await fallback()).saveMedia(entryId, mediaId, meta, bytes);
+  return (await fallback()).saveMedia(entryId, mediaId, variant, meta, bytes);
 }
 
 /// The payload is `<MediaMeta JSON>\n<bytes>`. Anything that is not an image
@@ -45,24 +53,24 @@ function decodePayload(buffer: ArrayBuffer): {
     throw MEDIA_TYPE_MESSAGE;
   }
   const m = meta as Partial<MediaMeta> | null;
-  const formats = ["webp", "jpeg", "png", "gif"];
-  if (m?.kind !== "image" || !formats.includes(m.format as string))
-    throw MEDIA_TYPE_MESSAGE;
+  if (m?.kind !== "image" || !isImageFormat(m.format)) throw MEDIA_TYPE_MESSAGE;
   return { meta: m as MediaMeta, bytes: all.subarray(newline + 1) };
 }
 
 export async function getMedia(
   entryId: string,
   mediaId: MediaId,
+  variant: MediaVariant,
 ): Promise<{ meta: MediaMeta; bytes: Uint8Array }> {
   if (backend) {
     const payload = await invoke<ArrayBuffer>("get_media", {
       entry_id: entryId,
       media_id: mediaId,
+      variant,
     });
     return decodePayload(payload);
   }
-  return (await fallback()).getMedia(entryId, mediaId);
+  return (await fallback()).getMedia(entryId, mediaId, variant);
 }
 
 /// Copies the media `markdown` references into `entryId` and returns the

@@ -1,11 +1,12 @@
-import type { ComponentProps } from "react";
+import { useState, type ComponentProps } from "react";
 import { Box } from "@mui/material";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { backend } from "../api/backend";
-import { useMediaUrl } from "../hooks/useMediaUrl";
+import { THUMB_CHAIN, useMediaUrl } from "../hooks/useMediaUrl";
 import { rem } from "./chrome";
+import ImageViewer from "./ImageViewer";
 
 // The one markdown renderer: an entry's read view and the history preview.
 //
@@ -31,7 +32,10 @@ const boxSx = {
 } as const;
 
 function MediaImage({ src, alt }: { src: string; alt: string }) {
-  const { url, error } = useMediaUrl(src);
+  const { url, error } = useMediaUrl(src, THUMB_CHAIN);
+  // The viewer mounts only while open, so the full image is decrypted on
+  // open and its object URL revoked on close.
+  const [open, setOpen] = useState(false);
   if (error)
     return (
       <Box component="span" data-testid="media-unavailable" sx={boxSx}>
@@ -46,7 +50,45 @@ function MediaImage({ src, alt }: { src: string; alt: string }) {
         sx={{ ...boxSx, width: rem(160), height: rem(96) }}
       />
     );
-  return <img data-testid="media-image" src={url} alt={alt} />;
+  // A native button: phrasing content, so it is valid inside the `<p>`.
+  return (
+    <>
+      <Box
+        component="button"
+        type="button"
+        data-testid="media-thumb"
+        aria-label={`Open image${alt ? `: ${alt}` : ""}`}
+        onClick={() => setOpen(true)}
+        sx={{
+          display: "inline-block",
+          p: 0,
+          m: 0,
+          border: 0,
+          bgcolor: "transparent",
+          font: "inherit",
+          cursor: "zoom-in",
+          maxWidth: "100%",
+          verticalAlign: "bottom",
+        }}
+      >
+        <Box
+          component="img"
+          data-testid="media-image"
+          src={url}
+          alt={alt}
+          sx={{ maxWidth: "100%", maxHeight: rem(240), width: "auto" }}
+        />
+      </Box>
+      {open && (
+        <ImageViewer
+          src={src}
+          alt={alt}
+          previewUrl={url}
+          onClose={() => setOpen(false)}
+        />
+      )}
+    </>
+  );
 }
 
 function Image({ src, alt }: ComponentProps<"img">) {

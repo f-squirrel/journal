@@ -450,6 +450,10 @@ mod tests {
         assert_eq!(locked.take_resolved(), 1);
     }
 
+    fn webp(body: &[u8]) -> Vec<u8> {
+        [b"RIFF\0\0\0\0WEBP".as_slice(), body].concat()
+    }
+
     fn media_meta() -> journal_api::MediaMeta {
         journal_api::MediaMeta::Image {
             format: journal_api::ImageFormat::Webp,
@@ -461,25 +465,31 @@ mod tests {
     #[test]
     fn a_media_conflict_resolves_keeping_ours_while_locked() {
         let locked = VaultResolver::new(Arc::new(|| None));
-        let name = BlobName::try_from(format!(
-            "{}.media-{}",
-            Id::new(),
-            journal_api::MediaId::new()
-        ))
-        .unwrap();
-
-        assert_eq!(
-            locked.resolve(&name, b"ours", b"theirs"),
-            Resolution::Resolved
-        );
-        assert_eq!(locked.take_resolved(), 1);
+        let (id, m) = (Id::new(), journal_api::MediaId::new());
+        for suffix in ["", ".display", ".thumb"] {
+            let name = BlobName::try_from(format!("{id}.media-{m}{suffix}")).unwrap();
+            assert_eq!(
+                locked.resolve(&name, b"ours", b"theirs"),
+                Resolution::Resolved,
+                "{suffix}"
+            );
+        }
+        assert_eq!(locked.take_resolved(), 3);
     }
 
     #[test]
     fn a_media_conflict_does_not_create_a_conflicted_copy() {
         let (vault, store, dir) = vault();
         let (id, m) = (Id::new(), journal_api::MediaId::new());
-        vault.save_media(&id, &m, &media_meta(), b"px").unwrap();
+        vault
+            .save_media(
+                &id,
+                &m,
+                journal_api::MediaVariant::Original,
+                &media_meta(),
+                &webp(b"px"),
+            )
+            .unwrap();
         let name = BlobName::try_from(format!("{id}.media-{m}")).unwrap();
         let ours = store.get(&name).unwrap().unwrap();
 
@@ -496,7 +506,15 @@ mod tests {
     fn a_conflicted_copy_adopts_the_losers_media() {
         let (vault, store, dir) = vault();
         let (id, m) = (Id::new(), journal_api::MediaId::new());
-        vault.save_media(&id, &m, &media_meta(), b"px").unwrap();
+        vault
+            .save_media(
+                &id,
+                &m,
+                journal_api::MediaVariant::Original,
+                &media_meta(),
+                &webp(b"px"),
+            )
+            .unwrap();
         let link = format!("![](media:{id}/{m})");
         let theirs = sealed(&vault, &store, &entry(id, "phone", "later", 1));
         let ours = sealed(&vault, &store, &entry(id, "laptop", &link, 30));
@@ -511,7 +529,14 @@ mod tests {
             .unwrap();
         let copy_entry = vault.get_entry(&copy.id).unwrap().unwrap();
         assert_eq!(copy_entry.markdown, format!("![](media:{}/{m})", copy.id));
-        assert_eq!(vault.get_media(&copy.id, &m).unwrap().unwrap().bytes, b"px");
+        assert_eq!(
+            vault
+                .get_media(&copy.id, &m, journal_api::MediaVariant::Original)
+                .unwrap()
+                .unwrap()
+                .bytes,
+            webp(b"px")
+        );
         std::fs::remove_dir_all(dir).ok();
     }
 

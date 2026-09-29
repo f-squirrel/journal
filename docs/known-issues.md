@@ -67,6 +67,15 @@ Images are stored as immutable encrypted blobs owned by their entry
   deleted. Conflicted copies are not affected: they copy their images.
 - **A sync conflicted copy can keep a link to images not yet pulled**, because
   entry names sort before media names.
-- **Import limits:** HEIC and other formats the webview cannot decode are
-  refused, animated GIFs keep their first frame, and screenshots lose a little
-  sharpness to lossy WebP.
+- **Originals are large.** Images are stored as the picked file, so first sync
+  and cloud quota grow with the photos (a 12 MP JPEG is 3–12 MB).
+- **Import needs a device that can decode the format.** A HEIC or TIFF file is
+  refused where the webview cannot read it (HEIC off Apple devices), because
+  the thumbnail and dimensions need a decode. Animated GIFs get a still
+  thumbnail.
+- **Exported images carry their location data.** Export writes the original
+  files, EXIF and GPS included; the export dialog says so.
+- **iOS caps display copies at about 16.7 MP** (the canvas limit). The
+  original is untouched.
+- **Images added before thumbnails existed** have none: the read view decrypts
+  their original.

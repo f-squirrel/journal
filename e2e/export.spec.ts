@@ -67,6 +67,9 @@ test("the confirmation names the folder and says the files are not encrypted", a
 
   await expect(dialog(page)).toContainText("Export 2 entries to");
   await expect(dialog(page)).toContainText("not encrypted");
+  await expect(dialog(page)).toContainText(
+    "original files, including any location data",
+  );
   await expect(dialog(page)).toContainText("read your whole journal");
   expect(await exportedTo(page)).toEqual([]);
 });

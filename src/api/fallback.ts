@@ -5,6 +5,7 @@ import type {
   JournalSettings,
   MediaId,
   MediaMeta,
+  MediaVariant,
   ProviderInfo,
   SearchMatch,
   Settings,
@@ -13,6 +14,7 @@ import type {
 } from "../types";
 import { byEntryDate } from "../utils/date";
 import { STALE_ENTRY_MESSAGE } from "../utils/errors";
+import { isWebSafe, sniffImageFormat } from "../media/format";
 import { findMediaRefs, mediaRef } from "../media/ref";
 import { newEntryId } from "../utils/id";
 
@@ -69,7 +71,8 @@ function toHeader(entry: JournalEntry): EntryHeader {
 //                       resolves true from then on
 //   ?fail=<ops>         comma-separated: has, unlock, list, get, save, delete,
 //                       history, restore, search, export, connect, sync,
-//                       save-media, get-media, adopt-media, version
+//                       save-media, get-media (originals and display copies),
+//                       get-thumb (thumbnails), adopt-media, version
 //                       (a history preview),
 //                       resolve (see "simulated sync" below), settings
 //                       (updateSettings rejects), settings-load (getSettings
@@ -87,6 +90,8 @@ function toHeader(entry: JournalEntry): EntryHeader {
 //                       delays only the first updateSettings call after page
 //                       load, unlike settings, which delays every call
 //   ?slowMs=<n>         non-negative delay for slow operations (default SLOW_MS)
+//   ?thumbs=off         saving a thumbnail succeeds but stores nothing, as for
+//                       an image added before thumbnails existed
 //   ?sync=<mode>        start connected to a provider: on, pull, conflict,
 //                       busy, reauth, key_mismatch (see below)
 //
@@ -109,6 +114,7 @@ type Op =
   | "sync"
   | "save-media"
   | "get-media"
+  | "get-thumb"
   | "adopt-media"
   | "resolve"
   | "settings"
@@ -126,6 +132,7 @@ interface Faults {
   failTimes: number;
   slow: Set<Op>;
   slowMs: number;
+  thumbsOff: boolean;
   sync: SyncMode;
 }
 
@@ -162,6 +169,7 @@ function parseFaults(search: string): Faults {
       Number.isFinite(requestedSlowMs) && requestedSlowMs >= 0
         ? requestedSlowMs
         : SLOW_MS,
+    thumbsOff: params.get("thumbs") === "off",
     sync: SYNC_MODES.find((mode) => mode === params.get("sync")) ?? "off",
   };
 }
@@ -171,10 +179,16 @@ const faults: Faults = parseFaults(window.location.search);
 const failedCalls = new Map<Op, number>();
 const fallbackEntries = new Map(seedEntries.map((entry) => [entry.id, entry]));
 
-/// Media, keyed `<entry-id>/<media-id>` like a blob name is. Lives here, at
-/// module scope, so none of it exists in a production bundle.
+/// Media, keyed `<entry-id>/<media-id>/<variant>` like a blob name is. Lives
+/// here, at module scope, so none of it exists in a production bundle.
 const fallbackMedia = new Map<string, { meta: MediaMeta; bytes: Uint8Array }>();
-const mediaKey = (entryId: string, mediaId: string) => `${entryId}/${mediaId}`;
+const mediaKey = (entryId: string, mediaId: string, variant: MediaVariant) =>
+  `${entryId}/${mediaId}/${variant}`;
+const MEDIA_VARIANTS: readonly MediaVariant[] = [
+  "original",
+  "display",
+  "thumb",
+];
 
 /// An entry's past versions, newest first, capped at `MAX_FALLBACK_HISTORY`.
 /// Mirrors `history::MAX_SNAPSHOTS_PER_ENTRY` in `crates/vault` loosely — it
@@ -317,19 +331,32 @@ export function deleteEntry(id: string): Promise<void> {
 const MEDIA_NOT_FOUND = "that image is no longer available";
 const MEDIA_TYPE = "that kind of file cannot be added to an entry";
 const MEDIA_TOO_LARGE = "that image is too large to store";
-const MAX_MEDIA_BYTES = 10 * 1024 * 1024;
+// Mirrors `MAX_ORIGINAL_BYTES`, `MAX_DISPLAY_BYTES` and `MAX_THUMB_BYTES`.
+const MAX_MEDIA_BYTES: Record<MediaVariant, number> = {
+  original: 50 * 1024 * 1024,
+  display: 25 * 1024 * 1024,
+  thumb: 1024 * 1024,
+};
 
+/// Mirrors `Vault::save_media`'s validation.
 export function saveMedia(
   entryId: string,
   mediaId: MediaId,
+  variant: MediaVariant,
   meta: MediaMeta,
   bytes: Uint8Array,
 ): Promise<void> {
   return run("save-media", () => {
     if (meta.kind !== "image" || meta.width === 0 || meta.height === 0)
       throw MEDIA_TYPE;
-    if (bytes.length > MAX_MEDIA_BYTES) throw MEDIA_TOO_LARGE;
-    const key = mediaKey(entryId, mediaId);
+    if (
+      (variant !== "original" && !isWebSafe(meta.format)) ||
+      sniffImageFormat(bytes) !== meta.format
+    )
+      throw MEDIA_TYPE;
+    if (bytes.length > MAX_MEDIA_BYTES[variant]) throw MEDIA_TOO_LARGE;
+    if (variant === "thumb" && faults.thumbsOff) return;
+    const key = mediaKey(entryId, mediaId, variant);
     // Immutable: an existing blob is a retry of the same bytes.
     if (!fallbackMedia.has(key)) fallbackMedia.set(key, { meta, bytes });
   });
@@ -338,17 +365,18 @@ export function saveMedia(
 export function getMedia(
   entryId: string,
   mediaId: MediaId,
+  variant: MediaVariant,
 ): Promise<{ meta: MediaMeta; bytes: Uint8Array }> {
-  return run("get-media", () => {
-    const found = fallbackMedia.get(mediaKey(entryId, mediaId));
+  return run(variant === "thumb" ? "get-thumb" : "get-media", () => {
+    const found = fallbackMedia.get(mediaKey(entryId, mediaId, variant));
     if (!found) throw MEDIA_NOT_FOUND;
     return found;
   });
 }
 
-/// Mirrors `Vault::adopt_media`: copies each foreign reference's media under
-/// `entryId` and rewrites the link; references to missing media stay as they
-/// are.
+/// Mirrors `Vault::adopt_media`: for each foreign reference whose original
+/// exists, copies every variant present under `entryId` and rewrites the
+/// link; other references stay as they are.
 export function adoptMedia(entryId: string, markdown: string): Promise<string> {
   return run("adopt-media", () => adoptMediaSync(entryId, markdown));
 }
@@ -357,11 +385,15 @@ function adoptMediaSync(entryId: string, markdown: string): string {
   let out = markdown;
   for (const ref of findMediaRefs(markdown).reverse()) {
     if (ref.entryId === entryId) continue;
-    const target = mediaKey(entryId, ref.mediaId);
-    if (!fallbackMedia.has(target)) {
-      const source = fallbackMedia.get(mediaKey(ref.entryId, ref.mediaId));
-      if (!source) continue;
-      fallbackMedia.set(target, source);
+    if (!fallbackMedia.has(mediaKey(ref.entryId, ref.mediaId, "original")))
+      continue;
+    for (const variant of MEDIA_VARIANTS) {
+      const target = mediaKey(entryId, ref.mediaId, variant);
+      const source = fallbackMedia.get(
+        mediaKey(ref.entryId, ref.mediaId, variant),
+      );
+      if (source && !fallbackMedia.has(target))
+        fallbackMedia.set(target, source);
     }
     out =
       out.slice(0, ref.start) +

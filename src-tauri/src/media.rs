@@ -1,6 +1,6 @@
 //! Media commands: images owned by an entry, stored as encrypted blobs.
 
-use journal_api::{Id, MediaId, MediaMeta};
+use journal_api::{Id, MediaId, MediaMeta, MediaVariant};
 use journal_vault::VaultError;
 use tauri::ipc::{InvokeBody, Request, Response};
 use tauri::State;
@@ -17,8 +17,8 @@ fn header<'a>(request: &'a Request<'_>, name: &str) -> Result<&'a str, String> {
 }
 
 /// The bytes travel as the raw request body, so they are not JSON-encoded;
-/// the ids and the metadata ride in headers (`entry-id`, `media-id`,
-/// `media-meta`, the last as `MediaMeta` JSON).
+/// the ids, the variant and the metadata ride in headers (`entry-id`,
+/// `media-id`, `media-variant`, `media-meta`, the last as `MediaMeta` JSON).
 #[tauri::command]
 pub(crate) async fn save_media(
     state: State<'_, VaultState>,
@@ -31,6 +31,10 @@ pub(crate) async fn save_media(
     let media: MediaId = header(&request, "media-id")?
         .parse()
         .map_err(|_| "bad `media-id` header".to_owned())?;
+    let variant: MediaVariant = serde_json::from_value(serde_json::Value::String(
+        header(&request, "media-variant")?.to_owned(),
+    ))
+    .map_err(|_| "bad `media-variant` header".to_owned())?;
     // An unknown kind or format, or a missing dimension, is not a storable
     // media item.
     let meta: MediaMeta = serde_json::from_str(header(&request, "media-meta")?)
@@ -41,10 +45,10 @@ pub(crate) async fn save_media(
     let bytes = bytes.clone();
     // Ids and sizes only, never bytes.
     log::info!(
-        "saving media: entry={entry}, media={media}, bytes={}",
+        "saving media: entry={entry}, media={media}, variant={variant:?}, bytes={}",
         bytes.len()
     );
-    blocking(move || vault.save_media(&entry, &media, &meta, &bytes)).await
+    blocking(move || vault.save_media(&entry, &media, variant, &meta, &bytes)).await
 }
 
 /// The body is the plaintext payload: the `MediaMeta` JSON, a newline, then
@@ -55,11 +59,12 @@ pub(crate) async fn get_media(
     state: State<'_, VaultState>,
     entry_id: Id,
     media_id: MediaId,
+    variant: MediaVariant,
 ) -> Result<Response, String> {
     let vault = vault(&state)?;
     let media = blocking(move || {
         vault
-            .get_media(&entry_id, &media_id)?
+            .get_media(&entry_id, &media_id, variant)?
             .ok_or(VaultError::MediaNotFound)
     })
     .await?;

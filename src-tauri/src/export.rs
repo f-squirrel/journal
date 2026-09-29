@@ -19,7 +19,7 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Local, NaiveDate, SecondsFormat, Utc};
-use journal_api::{Entry, Header, Id, MediaId, MediaMeta};
+use journal_api::{Entry, Header, Id, MediaId, MediaMeta, MediaVariant};
 use journal_vault::{media_refs, Vault, VaultError};
 use thiserror::Error;
 
@@ -126,7 +126,10 @@ fn write_entries(
                 let relative = match exported.get(&key) {
                     Some(relative) => relative.clone(),
                     None => {
-                        let Some(media) = vault.get_media(&found.entry, &found.media)? else {
+                        // Only the original: the thumbnail and display copy are ours.
+                        let Some(media) =
+                            vault.get_media(&found.entry, &found.media, MediaVariant::Original)?
+                        else {
                             media_missing += 1;
                             continue;
                         };
@@ -613,6 +616,10 @@ mod tests {
         }
     }
 
+    fn jpeg(body: &[u8]) -> Vec<u8> {
+        [&[0xFF, 0xD8, 0xFF][..], body].concat()
+    }
+
     fn export_all(vault: &Vault, out: &Scratch) -> Result<usize, ExportError> {
         let headers = vault.list_entries().unwrap();
         write_entries(vault, &out.0, &headers)
@@ -630,7 +637,13 @@ mod tests {
         );
         let vault = vault_with(&home, &[&e]);
         vault
-            .save_media(&e.header.id, &m, &image(), b"jpegbytes")
+            .save_media(
+                &e.header.id,
+                &m,
+                MediaVariant::Original,
+                &image(),
+                &jpeg(b"bytes"),
+            )
             .unwrap();
 
         assert_eq!(export_all(&vault, &out).unwrap(), 1);
@@ -639,7 +652,7 @@ mod tests {
         assert_eq!(names(&out.0.join("media")), [file.clone()]);
         assert_eq!(
             fs::read(out.0.join("media").join(&file)).unwrap(),
-            b"jpegbytes"
+            jpeg(b"bytes")
         );
         let md = fs::read_to_string(out.0.join(expected_name(&e))).unwrap();
         assert!(md.contains(&format!("![a](media/{file})")), "{md}");
@@ -656,7 +669,9 @@ mod tests {
         let a = entry("A", "2026-09-03T12:00:00Z", &link);
         let b = entry("B", "2026-09-02T12:00:00Z", &link);
         let vault = vault_with(&home, &[&a, &b]);
-        vault.save_media(&owner, &m, &image(), b"x").unwrap();
+        vault
+            .save_media(&owner, &m, MediaVariant::Original, &image(), &jpeg(b"x"))
+            .unwrap();
 
         assert_eq!(export_all(&vault, &out).unwrap(), 2);
 
@@ -699,7 +714,15 @@ mod tests {
         let m = MediaId::new();
         e.markdown = format!("![](media:{}/{m})", e.header.id);
         let vault = vault_with(&home, &[&e]);
-        vault.save_media(&e.header.id, &m, &image(), b"x").unwrap();
+        vault
+            .save_media(
+                &e.header.id,
+                &m,
+                MediaVariant::Original,
+                &image(),
+                &jpeg(b"x"),
+            )
+            .unwrap();
         // The entry's own file is taken, so the write fails after the image.
         fs::write(out.0.join(expected_name(&e)), "not yours").unwrap();
 
@@ -718,12 +741,52 @@ mod tests {
         let m = MediaId::new();
         e.markdown = format!("![](media:{}/{m})", e.header.id);
         let vault = vault_with(&home, &[&e]);
-        vault.save_media(&e.header.id, &m, &image(), b"x").unwrap();
+        vault
+            .save_media(
+                &e.header.id,
+                &m,
+                MediaVariant::Original,
+                &image(),
+                &jpeg(b"x"),
+            )
+            .unwrap();
         export_all(&vault, &out).unwrap();
         let file = out.0.join("media").join(format!("{}-{m}.jpg", e.header.id));
         assert_eq!(
             fs::metadata(file).unwrap().permissions().mode() & 0o777,
             0o600
         );
+    }
+
+    #[test]
+    fn only_the_original_is_exported_byte_for_byte() {
+        let home = Scratch::new("home");
+        let out = Scratch::new("out");
+        let mut e = entry("Pics", "2026-09-03T12:00:00Z", "");
+        let m = MediaId::new();
+        e.markdown = format!("![](media:{}/{m})", e.header.id);
+        let vault = vault_with(&home, &[&e]);
+        let heic = [&[0, 0, 0, 16][..], b"ftypheic", &[0; 4], b"EXIF-GPS"].concat();
+        let heic_meta = MediaMeta::Image {
+            format: journal_api::ImageFormat::Heic,
+            width: 4,
+            height: 4,
+        };
+        let id = e.header.id;
+        vault
+            .save_media(&id, &m, MediaVariant::Original, &heic_meta, &heic)
+            .unwrap();
+        vault
+            .save_media(&id, &m, MediaVariant::Display, &image(), &jpeg(b"display"))
+            .unwrap();
+        vault
+            .save_media(&id, &m, MediaVariant::Thumb, &image(), &jpeg(b"thumb"))
+            .unwrap();
+
+        export_all(&vault, &out).unwrap();
+
+        let file = format!("{id}-{m}.heic");
+        assert_eq!(names(&out.0.join("media")), [file.clone()]);
+        assert_eq!(fs::read(out.0.join("media").join(&file)).unwrap(), heic);
     }
 }
