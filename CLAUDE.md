@@ -100,7 +100,8 @@ Backend:
   viewer decrypts full size only while open. `MediaMeta` is a tagged enum: per-kind fields live on their
   variant and every `match` on it stays exhaustive (no `_` arm). Never add an
   SVG format. Every conflicted copy must go through `Vault::adopt_media` (Rust
-  resolver, `useAutosave`, fallback). Entry-owned blob naming is shared in
+  resolver, `useAutosave`, fallback). It adopts a ref only once its thumb is
+  here or its original is web-safe. Entry-owned blob naming is shared in
   `crates/vault/src/owned.rs`. The sync engine's `immutable` predicate
   (`is_media`) means a name in it must never be rewritten with different
   content.

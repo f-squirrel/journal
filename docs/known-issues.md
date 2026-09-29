@@ -66,7 +66,9 @@ Images are stored as immutable encrypted blobs owned by their entry
 - **Hand-pasted `media:` links between entries** break when the owning entry is
   deleted. Conflicted copies are not affected: they copy their images.
 - **A sync conflicted copy can keep a link to images not yet pulled**, because
-  entry names sort before media names.
+  entry names sort before media names. The same holds for a HEIC, AVIF or TIFF
+  whose thumbnail has not arrived yet: the copy waits for it by keeping the
+  link to the source entry.
 - **Originals are large.** Images are stored as the picked file, so first sync
   and cloud quota grow with the photos (a 12 MP JPEG is 3–12 MB).
 - **Import needs a device that can decode the format.** A HEIC or TIFF file is

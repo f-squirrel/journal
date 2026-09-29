@@ -116,7 +116,8 @@ fn merge(vault: &Vault, name: &BlobName, ours: &[u8], theirs: &[u8]) -> Result<(
     // The copy owns the media its text shows, so deleting the original later
     // cannot take the copy's images with it. Remaining gap: the loser's media
     // may not have been pulled yet, since entry names sort before media
-    // names; refs to media that is not here yet keep pointing at the
+    // names; refs to media that is not here yet, or to a non-web-safe
+    // original whose thumbnail has not arrived, keep pointing at the
     // original.
     let markdown = vault.adopt_media(&copy_id, &loser.markdown).map_err(text)?;
     let copy = Entry {

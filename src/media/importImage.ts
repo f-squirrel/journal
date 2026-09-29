@@ -18,6 +18,8 @@ export const MAX_DISPLAY_BYTES = 25 * 1024 * 1024;
 const RETRY_QUALITY = 0.8;
 
 const NOT_A_PICTURE = "Only pictures can be added to an entry.";
+const UNSUPPORTED_FORMAT =
+  "This image format isn't supported. Try JPEG, PNG, WebP, GIF or HEIC.";
 const CANNOT_DECODE =
   "This image format can't be read here. Try a JPEG or PNG.";
 const TOO_LARGE = "That image is too large to add.";
@@ -80,11 +82,24 @@ async function drawAndEncode(
   }
 }
 
+/// The message for a file whose bytes are no stored format: a picture the
+/// webview can draw (BMP, ICO, JPEG XL) is refused for its format, anything
+/// else is not a picture.
+async function refusal(file: File): Promise<string> {
+  try {
+    (await createImageBitmap(file)).close();
+    return UNSUPPORTED_FORMAT;
+  } catch {
+    return NOT_A_PICTURE;
+  }
+}
+
 /// Prepares a picked file for storage: the file itself as the original
 /// (EXIF and all), a thumbnail, and, for a format not every webview can show
 /// (HEIC, AVIF, TIFF), a full-resolution display copy. The format comes from
 /// the bytes, not the name or MIME type. The importing device has to be able
-/// to decode the file. Rejects with a readable message.
+/// to decode the file. A picture in any other format is refused, not
+/// converted: the original is stored byte for byte. Rejects with a readable message.
 export async function importImage(file: File): Promise<{
   original: Encoded;
   display: Encoded | null;
@@ -95,7 +110,7 @@ export async function importImage(file: File): Promise<{
   // SVG is a document that can carry script; it sniffs as nothing and is
   // never accepted.
   const format = sniffImageFormat(source);
-  if (!format) throw NOT_A_PICTURE;
+  if (!format) throw await refusal(file);
 
   let bitmap: ImageBitmap;
   try {

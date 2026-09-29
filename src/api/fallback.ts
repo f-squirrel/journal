@@ -375,18 +375,29 @@ export function getMedia(
 }
 
 /// Mirrors `Vault::adopt_media`: for each foreign reference whose original
-/// exists, copies every variant present under `entryId` and rewrites the
-/// link; other references stay as they are.
+/// exists and whose thumbnail is here or whose original is web-safe, copies
+/// every variant present under `entryId` and rewrites the link; other
+/// references stay as they are.
 export function adoptMedia(entryId: string, markdown: string): Promise<string> {
   return run("adopt-media", () => adoptMediaSync(entryId, markdown));
+}
+
+/// Mirrors `Vault::adoptable`.
+function adoptable(entryId: string, mediaId: MediaId): boolean {
+  const original = fallbackMedia.get(mediaKey(entryId, mediaId, "original"));
+  if (!original) return false;
+  if (fallbackMedia.has(mediaKey(entryId, mediaId, "thumb"))) return true;
+  switch (original.meta.kind) {
+    case "image":
+      return isWebSafe(original.meta.format);
+  }
 }
 
 function adoptMediaSync(entryId: string, markdown: string): string {
   let out = markdown;
   for (const ref of findMediaRefs(markdown).reverse()) {
     if (ref.entryId === entryId) continue;
-    if (!fallbackMedia.has(mediaKey(ref.entryId, ref.mediaId, "original")))
-      continue;
+    if (!adoptable(ref.entryId, ref.mediaId)) continue;
     for (const variant of MEDIA_VARIANTS) {
       const target = mediaKey(entryId, ref.mediaId, variant);
       const source = fallbackMedia.get(

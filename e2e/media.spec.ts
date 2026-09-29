@@ -417,6 +417,138 @@ test("a stale-save conflicted copy owns its own copy of the image", async ({
   await expect(editor(page)).toContainText(`media:${href}/`);
 });
 
+test("a stale-save conflicted copy leaves a HEIC without its thumbnail pointing at the original", async ({
+  page,
+}) => {
+  await page.clock.install();
+  await login(page, "?sync=pull&thumbs=off");
+  await page
+    .getByTestId("entry-row")
+    .filter({ hasText: "First day back" })
+    .click();
+  const id = page.url().match(/entries\/([0-9a-f-]{36})/)![1];
+  const media = "33333333-3333-4333-8333-333333333333";
+  await page.evaluate(
+    async ([id, media]) => {
+      const { saveMedia } = await import(
+        /* @vite-ignore */ "/src/api/media.ts"
+      );
+      const meta = {
+        kind: "image",
+        format: "heic",
+        width: 1,
+        height: 1,
+      } as const;
+      const heic = new Uint8Array([
+        0, 0, 0, 16, 0x66, 0x74, 0x79, 0x70, 0x68, 0x65, 0x69, 0x63, 0, 0, 0, 0,
+      ]);
+      await saveMedia(id, media, "original", meta, heic);
+    },
+    [id, media],
+  );
+  await page.getByRole("button", { name: "Entry actions" }).click();
+  await page.getByRole("menuitem", { name: "Edit" }).click();
+  await editor(page).fill(`mine ![](media:${id}/${media})`);
+
+  await page.getByTestId("sync-button").click();
+  const cloud = page.getByRole("dialog", { name: "Cloud sync" });
+  await cloud.getByRole("button", { name: "Sync now" }).click();
+  await cloud.getByRole("button", { name: "Close" }).click();
+  await page.clock.runFor(1000);
+
+  const copy = page
+    .getByTestId("entry-row")
+    .filter({ hasText: "(conflicted copy)" });
+  await expect(copy).toBeVisible();
+  await copy.click();
+  await expect(page.getByRole("heading", { level: 2 })).toContainText(
+    "(conflicted copy)",
+  );
+  await page.getByRole("button", { name: "Entry actions" }).click();
+  await page.getByRole("menuitem", { name: "Edit" }).click();
+  await expect(editor(page)).toContainText(`media:${id}/${media}`);
+});
+
+test("an image inside a link opens the link, not the viewer", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    const calls: string[] = [];
+    (window as unknown as { opened: string[] }).opened = calls;
+    window.open = (url) => {
+      calls.push(String(url));
+      return null;
+    };
+  });
+  await login(page);
+  await entryWithImage(page, "Linked");
+  const link = (await editor(page).innerText()).match(LINK)![0];
+  await editor(page).fill(`[${link}](https://example.com/)`);
+  await preview(page);
+  await page.getByTestId("media-image").click();
+  expect(
+    await page.evaluate(
+      () => (window as unknown as { opened: string[] }).opened,
+    ),
+  ).toEqual(["https://example.com/"]);
+  await expect(page.getByTestId("media-thumb")).toHaveCount(0);
+  await expect(page.getByTestId("image-viewer")).toHaveCount(0);
+});
+
+test("an image whose preview cannot be decoded shows the unavailable box", async ({
+  page,
+}) => {
+  await login(page, "?thumbs=off");
+  await newEntry(page, "Broken preview", "look");
+  await expect(page.getByTestId("save-status")).toHaveText("Saved");
+  const id = page.url().match(/entries\/([0-9a-f-]{36})/)![1];
+  const media = "44444444-4444-4444-8444-444444444444";
+  await page.evaluate(
+    async ([id, media]) => {
+      const { saveMedia } = await import(
+        /* @vite-ignore */ "/src/api/media.ts"
+      );
+      const meta = {
+        kind: "image",
+        format: "png",
+        width: 1,
+        height: 1,
+      } as const;
+      const sig = new Uint8Array([
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+      ]);
+      await saveMedia(id, media, "original", meta, sig);
+    },
+    [id, media],
+  );
+  await editor(page).fill(`![](media:${id}/${media})`);
+  await preview(page);
+  await expect(page.getByTestId("media-unavailable")).toBeVisible();
+});
+
+test("a picture in a format the app does not store is refused with a reason", async ({
+  page,
+}) => {
+  // A 1x1 24-bit BMP: 14-byte file header, 40-byte info header, one padded row.
+  const bmp = Buffer.alloc(58);
+  bmp.write("BM", 0);
+  bmp.writeUInt32LE(58, 2);
+  bmp.writeUInt32LE(54, 10);
+  bmp.writeUInt32LE(40, 14);
+  bmp.writeInt32LE(1, 18);
+  bmp.writeInt32LE(1, 22);
+  bmp.writeUInt16LE(1, 26);
+  bmp.writeUInt16LE(24, 28);
+  bmp.writeUInt32LE(4, 34);
+  await login(page);
+  await newEntry(page, "Bitmap", "text");
+  await pickImage(page, "image/bmp", "a.bmp", bmp);
+  await expect(page.getByTestId("media-error")).toContainText(
+    "isn't supported",
+  );
+  await expect(editor(page)).not.toContainText("media:");
+});
+
 test("the viewer toggles from the keyboard, and says so when the webview cannot decode the file", async ({
   page,
 }) => {

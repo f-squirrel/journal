@@ -1,4 +1,9 @@
-import { useState, type ComponentProps } from "react";
+import {
+  createContext,
+  useContext,
+  useState,
+  type ComponentProps,
+} from "react";
 import { Box } from "@mui/material";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
@@ -18,6 +23,10 @@ import ImageViewer from "./ImageViewer";
 
 const REMARK_PLUGINS = [remarkGfm];
 
+/// True below an `a`: an image there is part of the link, so it has no
+/// viewer and a click on it opens the link.
+const InLinkContext = createContext(false);
+
 /// Muted box shared by the loading, unavailable and hint states. A `span`,
 /// never a `div`: react-markdown puts an image inside a `<p>`.
 const boxSx = {
@@ -36,7 +45,10 @@ function MediaImage({ src, alt }: { src: string; alt: string }) {
   // The viewer mounts only while open, so the full image is decrypted on
   // open and its object URL revoked on close.
   const [open, setOpen] = useState(false);
-  if (error)
+  const inLink = useContext(InLinkContext);
+  // The URL the webview failed to decode, so a new URL starts clean.
+  const [badUrl, setBadUrl] = useState<string>();
+  if (error || (url && url === badUrl))
     return (
       <Box component="span" data-testid="media-unavailable" sx={boxSx}>
         Image unavailable{alt ? `: ${alt}` : ""}
@@ -50,6 +62,17 @@ function MediaImage({ src, alt }: { src: string; alt: string }) {
         sx={{ ...boxSx, width: rem(160), height: rem(96) }}
       />
     );
+  const image = (
+    <Box
+      component="img"
+      data-testid="media-image"
+      src={url}
+      alt={alt}
+      onError={() => setBadUrl(url)}
+      sx={{ maxWidth: "100%", maxHeight: rem(240), width: "auto" }}
+    />
+  );
+  if (inLink) return image;
   // A native button: phrasing content, so it is valid inside the `<p>`.
   return (
     <>
@@ -71,13 +94,7 @@ function MediaImage({ src, alt }: { src: string; alt: string }) {
           verticalAlign: "bottom",
         }}
       >
-        <Box
-          component="img"
-          data-testid="media-image"
-          src={url}
-          alt={alt}
-          sx={{ maxWidth: "100%", maxHeight: rem(240), width: "auto" }}
-        />
+        {image}
       </Box>
       {open && (
         <ImageViewer
@@ -119,7 +136,7 @@ const COMPONENTS = {
         else window.open(href, "_blank", "noopener,noreferrer");
       }}
     >
-      {children}
+      <InLinkContext.Provider value>{children}</InLinkContext.Provider>
     </a>
   ),
   img: Image,

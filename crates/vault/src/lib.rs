@@ -567,9 +567,11 @@ impl Vault {
 
     /// Makes `markdown` (the text of a conflicted copy, saved as `to`) own the
     /// media it references: each foreign `media:` reference whose original
-    /// exists gets the ciphertext of every variant present copied under `to`
-    /// (no decryption; the payload holds no ids) and its link rewritten.
-    /// References to missing originals are left alone. Idempotent, so safe
+    /// exists and is [`adoptable`](Self::adoptable) gets the ciphertext of every
+    /// variant present copied under `to` (no decryption; the payload holds no
+    /// ids) and its link rewritten. References to missing originals, and to a
+    /// non-web-safe original whose thumbnail has not synced yet, are left
+    /// alone. Idempotent, so safe
     /// under the sync resolver's at-least-once contract. Call it before saving
     /// the copy.
     pub fn adopt_media(&self, to: &Id, markdown: &str) -> Result<String, VaultError> {
@@ -579,8 +581,7 @@ impl Vault {
             if r.entry == *to {
                 continue;
             }
-            let original = owned::name::<MediaBlob>(&r.entry, &(r.media, MediaVariant::Original));
-            if !self.store.contains(&original)? {
+            if !self.adoptable(&r.entry, &r.media)? {
                 continue;
             }
             for variant in [
@@ -606,6 +607,30 @@ impl Vault {
             out.replace_range(r.range, &format!("media:{to}/{}", r.media));
         }
         Ok(out)
+    }
+
+    /// Whether a copy may take over `entry`'s image `media` now. The original
+    /// must be here. Then either its thumbnail is (a sync pass writes the
+    /// display copy before the thumbnail, so the display copy is here too), or
+    /// the original is web-safe, so the read view can show it as it is. A
+    /// HEIC without its thumbnail would stay undecodable in the copy forever.
+    fn adoptable(&self, entry: &Id, media: &MediaId) -> Result<bool, VaultError> {
+        let name = |variant| owned::name::<MediaBlob>(entry, &(*media, variant));
+        if !self.store.contains(&name(MediaVariant::Original))? {
+            return Ok(false);
+        }
+        if self.store.contains(&name(MediaVariant::Thumb))? {
+            return Ok(true);
+        }
+        Ok(
+            match self.get_media(entry, media, MediaVariant::Original)? {
+                Some(Media {
+                    meta: MediaMeta::Image { format, .. },
+                    ..
+                }) => format.is_web_safe(),
+                None => false,
+            },
+        )
     }
 
     /// Deletes `id`'s entry, its media and every snapshot it has.
@@ -2324,6 +2349,33 @@ mod tests {
             .get_media(&to, &m, MediaVariant::Thumb)
             .unwrap()
             .is_none());
+        discard(&store);
+    }
+
+    #[test]
+    fn adopt_media_leaves_a_heic_original_without_its_thumbnail() {
+        let store = temp_store();
+        let vault = fake_vault(store.clone());
+        let (from, to, m) = (Id::new(), Id::new(), MediaId::new());
+        save(
+            &vault,
+            &from,
+            &m,
+            MediaVariant::Original,
+            &meta_of(ImageFormat::Heic),
+            &heic(),
+        );
+        save(
+            &vault,
+            &from,
+            &m,
+            MediaVariant::Display,
+            &img(),
+            &webp(b"d"),
+        );
+        let md = format!("![](media:{from}/{m})");
+        assert_eq!(vault.adopt_media(&to, &md).unwrap(), md);
+        assert_eq!(media_count(&store), 2);
         discard(&store);
     }
 
