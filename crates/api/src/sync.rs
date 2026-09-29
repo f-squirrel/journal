@@ -52,6 +52,9 @@ pub struct SyncStatusPayload {
     /// The connected provider's name as the user knows it ("Dropbox"), for
     /// words like "Synced to Dropbox". `None` when nothing is connected.
     pub provider: Option<String>,
+    /// The connected provider's id (`ProviderInfo::id`), so a list of
+    /// providers can tell which one is connected. `None` when nothing is.
+    pub provider_id: Option<String>,
     /// Entries with local changes not yet uploaded. Includes an entry deleted
     /// here whose deletion has not been sent, so the frontend ignores ids with
     /// no row. Sent in every state, so an `offline` status still marks what
@@ -79,6 +82,10 @@ pub struct ProviderInfo {
     pub id: String,
     /// What the user calls it.
     pub name: String,
+    /// `false` = listed as coming later; it cannot be connected.
+    pub available: bool,
+    /// `true` = connecting can start now (Dropbox: an app key resolves).
+    pub configured: bool,
 }
 
 #[cfg(test)]
@@ -93,6 +100,7 @@ mod tests {
         let payload = SyncStatusPayload {
             state: SyncState::KeyMismatch,
             provider: Some("Dropbox".to_owned()),
+            provider_id: Some("dropbox".to_owned()),
             pending_ids: vec!["5c1f7c9e-6e8b-4a2f-9c1a-1f6b9b6b0a01".parse().unwrap()],
             conflicted_ids: vec![],
             pending_other: 1,
@@ -105,6 +113,7 @@ mod tests {
             serde_json::json!({
                 "state": "key_mismatch",
                 "provider": "Dropbox",
+                "provider_id": "dropbox",
                 "pending_ids": ["5c1f7c9e-6e8b-4a2f-9c1a-1f6b9b6b0a01"],
                 "conflicted_ids": [],
                 "pending_other": 1,

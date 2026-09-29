@@ -39,10 +39,18 @@ use journal_vault::is_media;
 use tauri::State;
 use url::Url;
 
-pub use dropbox::Dropbox;
+pub use dropbox::{Dropbox, KeySource};
 use resolver::{VaultHandle, VaultResolver};
 use status::Coalescer;
 use worker::{Timing, Worker};
+
+/// Providers the app lists as coming later. They have no adapter, so
+/// `connect_remote` refuses them as unknown.
+const PLANNED_PROVIDERS: [(&str, &str); 3] = [
+    ("google_drive", "Google Drive"),
+    ("icloud", "iCloud"),
+    ("webdav", "WebDAV"),
+];
 
 /// How long the user has to finish in the browser.
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(5 * 60);
@@ -114,6 +122,12 @@ pub trait Provider: Send + Sync {
     /// accepts any loopback port should do.
     fn redirect_port(&self) -> Option<u16> {
         None
+    }
+
+    /// Whether connecting can start now. A provider that needs a setting the
+    /// user has not made yet (Dropbox's app key) says `false`.
+    fn configured(&self) -> bool {
+        true
     }
 
     /// Starts connecting. `redirect_uri` is where the provider will send the
@@ -372,7 +386,20 @@ impl SyncControl {
             .map(|p| ProviderInfo {
                 id: p.id().to_owned(),
                 name: p.name().to_owned(),
+                available: true,
+                configured: p.configured(),
             })
+            .chain(
+                PLANNED_PROVIDERS
+                    .iter()
+                    .filter(|(id, _)| self.config.providers.iter().all(|p| p.id() != *id))
+                    .map(|(id, name)| ProviderInfo {
+                        id: (*id).to_owned(),
+                        name: (*name).to_owned(),
+                        available: false,
+                        configured: false,
+                    }),
+            )
             .collect()
     }
 
@@ -545,7 +572,7 @@ impl SyncControl {
             cfg.events.clone(),
             timing,
             poke.clone(),
-            provider.name(),
+            (provider.id(), provider.name()),
         )
         .map_err(|e| format!("could not start sync: {e}"))?;
         cfg.slot.set(worker.clone());

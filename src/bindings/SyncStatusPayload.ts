@@ -9,6 +9,11 @@ export type SyncStatusPayload = { state: SyncState,
  */
 provider: string | null, 
 /**
+ * The connected provider's id (`ProviderInfo::id`), so a list of
+ * providers can tell which one is connected. `None` when nothing is.
+ */
+provider_id: string | null, 
+/**
  * Entries with local changes not yet uploaded. Includes an entry deleted
  * here whose deletion has not been sent, so the frontend ignores ids with
  * no row. Sent in every state, so an `offline` status still marks what

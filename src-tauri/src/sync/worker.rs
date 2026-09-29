@@ -192,8 +192,8 @@ pub struct Worker {
     /// Why the last pass failed, in the error's own words. Read for the status
     /// message; the engine keeps only the kind.
     detail: Arc<Mutex<Option<String>>>,
-    /// The provider's name, for the words the status says about it.
-    provider: &'static str,
+    /// The provider's id and name, for the words the status says about it.
+    provider: (&'static str, &'static str),
     /// The `Timing` this worker was started with — the schedule itself runs
     /// on its own thread and is not otherwise observable, so tests that check
     /// `install` read a freshly stored interval before starting a worker
@@ -226,7 +226,7 @@ impl Worker {
         events: Arc<dyn Events>,
         timing: Timing,
         poke: Arc<dyn Fn() + Send + Sync>,
-        provider: &'static str,
+        provider: (&'static str, &'static str),
     ) -> std::io::Result<Arc<Self>> {
         let (tx, rx) = mpsc::channel();
         let detail = Arc::new(Mutex::new(None));
@@ -262,8 +262,8 @@ impl Worker {
         &self.engine
     }
 
-    /// The name of the provider this worker syncs with.
-    pub fn provider(&self) -> &'static str {
+    /// The id and name of the provider this worker syncs with.
+    pub fn provider(&self) -> (&'static str, &'static str) {
         self.provider
     }
 

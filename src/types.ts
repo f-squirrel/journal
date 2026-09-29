@@ -15,6 +15,8 @@ export type { SyncState } from "./bindings/SyncState";
 export type { ProviderInfo } from "./bindings/ProviderInfo";
 export type { Settings } from "./bindings/Settings";
 export type { DeviceSettings } from "./bindings/DeviceSettings";
+export type { SyncProviders } from "./bindings/SyncProviders";
+export type { DropboxSettings } from "./bindings/DropboxSettings";
 export type { JournalSettings } from "./bindings/JournalSettings";
 export type { ColorMode } from "./bindings/ColorMode";
 export type { WeekStart } from "./bindings/WeekStart";

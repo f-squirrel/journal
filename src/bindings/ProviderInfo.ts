@@ -11,4 +11,12 @@ id: string,
 /**
  * What the user calls it.
  */
-name: string, };
+name: string, 
+/**
+ * `false` = listed as coming later; it cannot be connected.
+ */
+available: boolean, 
+/**
+ * `true` = connecting can start now (Dropbox: an app key resolves).
+ */
+configured: boolean, };

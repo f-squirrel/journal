@@ -48,15 +48,15 @@ pub fn derive_state(connected: bool, status: &SyncStatus) -> SyncState {
     }
 }
 
-/// The payload for the frontend. `provider` is the connected provider's name,
-/// or `None` when nothing is connected.
+/// The payload for the frontend. `provider` is the connected provider's id and
+/// name, or `None` when nothing is connected.
 ///
 /// `detail` is the failing pass's own message, when the worker has one. Blob
 /// names become entry ids here, through the vault's own naming: the engine
 /// knows names only, and a pending blob that is not an entry is counted, not
 /// named.
 pub fn payload(
-    provider: Option<&str>,
+    provider: Option<(&str, &str)>,
     status: &SyncStatus,
     detail: Option<&str>,
 ) -> SyncStatusPayload {
@@ -68,14 +68,15 @@ pub fn payload(
 
     SyncStatusPayload {
         state: derive_state(provider.is_some(), status),
-        provider: provider.map(str::to_owned),
+        provider: provider.map(|(_, name)| name.to_owned()),
+        provider_id: provider.map(|(id, _)| id.to_owned()),
         pending_ids,
         conflicted_ids: ids(&status.conflicted),
         pending_other: u32::try_from(pending_other).unwrap_or(u32::MAX),
         last_synced_at: status.last_success.map(DateTime::<Utc>::from),
         message: status.last_error.map(|kind| {
             detail.map_or_else(
-                || default_message(provider.unwrap_or("the remote"), kind),
+                || default_message(provider.map_or("the remote", |(_, name)| name), kind),
                 str::to_owned,
             )
         }),
@@ -255,7 +256,7 @@ mod tests {
             ..SyncStatus::default()
         };
 
-        let payload = payload(Some("Dropbox"), &status, None);
+        let payload = payload(Some(("dropbox", "Dropbox")), &status, None);
 
         assert_eq!(payload.pending_ids, [a]);
         assert_eq!(payload.conflicted_ids, [b]);
@@ -276,7 +277,11 @@ mod tests {
             ..SyncStatus::default()
         };
 
-        let payload = payload(Some("Dropbox"), &status, Some("no route to host"));
+        let payload = payload(
+            Some(("dropbox", "Dropbox")),
+            &status,
+            Some("no route to host"),
+        );
 
         assert_eq!(payload.state, SyncState::Offline);
         assert_eq!(payload.pending_ids, [a]);
@@ -289,10 +294,17 @@ mod tests {
             last_error: Some(SyncErrorKind::Unauthorized),
             ..SyncStatus::default()
         };
-        assert!(payload(Some("Dropbox"), &status, None).message.is_some());
+        assert!(payload(Some(("dropbox", "Dropbox")), &status, None)
+            .message
+            .is_some());
         // And a success carries no message, even if a stale detail is around.
         assert_eq!(
-            payload(Some("Dropbox"), &SyncStatus::default(), Some("old")).message,
+            payload(
+                Some(("dropbox", "Dropbox")),
+                &SyncStatus::default(),
+                Some("old")
+            )
+            .message,
             None
         );
     }
@@ -310,7 +322,11 @@ mod tests {
             ..SyncStatus::default()
         };
 
-        let sent = payload(Some("Dropbox"), &status, Some(&error.to_string()));
+        let sent = payload(
+            Some(("dropbox", "Dropbox")),
+            &status,
+            Some(&error.to_string()),
+        );
 
         assert_eq!(sent.state, SyncState::Reauth);
         let message = sent.message.unwrap();
@@ -325,7 +341,7 @@ mod tests {
             ..SyncStatus::default()
         };
 
-        let message = payload(Some("Google Drive"), &status, None).message;
+        let message = payload(Some(("google_drive", "Google Drive")), &status, None).message;
 
         assert_eq!(message.as_deref(), Some("Could not reach Google Drive."));
     }
@@ -354,7 +370,7 @@ mod tests {
                 Duration::from_millis(100),
                 move || SyncStatusPayload {
                     pending_other: *pending.lock().unwrap(),
-                    ..payload(Some("Dropbox"), &SyncStatus::default(), None)
+                    ..payload(Some(("dropbox", "Dropbox")), &SyncStatus::default(), None)
                 },
                 recorder.clone(),
             )

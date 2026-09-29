@@ -16,6 +16,7 @@ import AutoStoriesIcon from "@mui/icons-material/AutoStories";
 import { useAppState } from "../context/AppStateContext";
 import { hasVault } from "../api/entries";
 import { rem } from "../components/chrome";
+import DropboxSettings from "../components/DropboxSettings";
 
 /// The shortest passphrase the create-vault form accepts, stated to the user
 /// in the field's helper text (and asserted against that rendered text by
@@ -44,6 +45,8 @@ export default function LoginPage() {
   // Joining a journal that already lives in the cloud (see `joinFrom`).
   const [joining, setJoining] = useState<string | null>(null);
   const [notice, setNotice] = useState("");
+  // The Dropbox app key block; open from the start when there is no key yet.
+  const [keyOpen, setKeyOpen] = useState<boolean | null>(null);
   // The passphrase input, for putting the cursor back after a disabled control
   // has dropped focus (see `handleSubmit` and `joinFrom`). Mount-time focus is
   // the `autoFocus` prop on the field, not this ref.
@@ -118,7 +121,9 @@ export default function LoginPage() {
     vaultExists === false &&
     syncLoaded &&
     sync.state === "off" &&
-    providers.length > 0;
+    providers.some((p) => p.available);
+  const joinable = providers.filter((p) => p.available);
+  const needsKey = joinable.some((p) => !p.configured);
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
@@ -326,19 +331,29 @@ export default function LoginPage() {
                   Already have a journal in the cloud? Connect the account it is
                   in to use it here.
                 </Typography>
-                {providers.map((provider) => (
+                {joinable.map((provider) => (
                   <Button
                     key={provider.id}
                     variant="outlined"
                     fullWidth
                     onClick={() => joinFrom(provider)}
-                    disabled={joining !== null || submitting}
+                    disabled={
+                      joining !== null || submitting || !provider.configured
+                    }
                   >
                     {joining === provider.id
                       ? `Waiting for ${provider.name}…`
                       : `Connect ${provider.name}`}
                   </Button>
                 ))}
+                <Button
+                  size="small"
+                  onClick={() => setKeyOpen(!(keyOpen ?? needsKey))}
+                  aria-expanded={keyOpen ?? needsKey}
+                >
+                  Dropbox app key…
+                </Button>
+                {(keyOpen ?? needsKey) && <DropboxSettings />}
               </>
             )}
           </Stack>

@@ -124,6 +124,10 @@ pub fn run() {
                 .snapshot()
                 .sync_interval_minutes
                 .map(settings::minutes_to_duration);
+            let dropbox_key: sync::KeySource = {
+                let device_settings = device_settings.clone();
+                Arc::new(move || device_settings.snapshot().sync_providers.dropbox.app_key)
+            };
             app.manage(device_settings);
 
             let handle = app.handle().clone();
@@ -135,7 +139,7 @@ pub fn run() {
                 events: Arc::new(sync::TauriEvents(app.handle().clone())),
                 // Every provider this build can connect to. Adding one is a line
                 // here and an adapter crate; nothing below names a provider.
-                providers: vec![Arc::new(sync::Dropbox::from_build())],
+                providers: vec![Arc::new(sync::Dropbox::from_build(dropbox_key))],
                 // In the config directory, not the data directory the journal
                 // lives in: a credential must never be somewhere that syncs.
                 credentials: Arc::new(FileCredentialStore::new(

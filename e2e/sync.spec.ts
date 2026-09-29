@@ -56,8 +56,27 @@ async function writeEntry(page: Page, title: string) {
   await expect(page.getByTestId("save-status")).toHaveText("Saved");
 }
 
-function dialog(page: Page) {
-  return page.getByRole("dialog", { name: "Cloud sync" });
+function section(page: Page) {
+  return page.getByTestId("sync-settings");
+}
+
+function dropboxRow(page: Page) {
+  return page.getByTestId("provider-dropbox");
+}
+
+/// Opens Settings › Sync from the rail and returns the section.
+async function openSync(page: Page) {
+  await rail(page).click();
+  const section = page.getByTestId("sync-settings");
+  await expect(section).toBeVisible();
+  return section;
+}
+
+/// Runs a pass with the entry pane still open. The Sync section replaces the
+/// pane, so a spec about a pass landing on an open entry cannot press "Sync
+/// now": the fallback lets it start one directly.
+async function syncWithoutLeaving(page: Page) {
+  await page.evaluate(() => window.__syncTestHooks?.syncNow());
 }
 
 test("sync is off until an account is connected, and marks nothing", async ({
@@ -80,11 +99,13 @@ test("connecting from the rail turns sync on and pulls what the cloud holds", as
   await login(page);
   await expect(page.getByTestId("entry-row")).toHaveCount(2);
 
-  await rail(page).click();
-  await expect(dialog(page)).toContainText("Keep a copy of your journal");
-  await dialog(page).getByRole("button", { name: "Connect Dropbox" }).click();
+  await openSync(page);
+  await expect(section(page)).toContainText("Keep a copy of your journal");
+  await dropboxRow(page)
+    .getByRole("button", { name: "Connect", exact: true })
+    .click();
 
-  await expect(dialog(page)).toContainText("Connected to Dropbox");
+  await expect(section(page)).toContainText("Connected to Dropbox");
   await expectRail(page, /^Synced/);
   // `sync://changed`: the first pass pulled an entry another device wrote, and
   // the list reloaded without being asked.
@@ -95,14 +116,16 @@ test("connecting from the rail turns sync on and pulls what the cloud holds", as
 test("a refused connection says why and stays off", async ({ page }) => {
   await login(page, "?fail=connect&failMessage=Dropbox%20said%20no");
 
-  await rail(page).click();
-  await dialog(page).getByRole("button", { name: "Connect Dropbox" }).click();
+  await openSync(page);
+  await dropboxRow(page)
+    .getByRole("button", { name: "Connect", exact: true })
+    .click();
 
-  await expect(dialog(page).getByRole("alert")).toHaveText("Dropbox said no");
+  await expect(section(page).getByRole("alert")).toHaveText("Dropbox said no");
   await expectRail(page, "Sync is off");
   // And it can be tried again.
   await expect(
-    dialog(page).getByRole("button", { name: "Connect Dropbox" }),
+    dropboxRow(page).getByRole("button", { name: "Connect", exact: true }),
   ).toBeEnabled();
 });
 
@@ -144,11 +167,11 @@ test("a failing pass leaves the mark and says offline", async ({ page }) => {
   await page.waitForTimeout(800);
   await expect(marks(page)).toHaveCount(1);
 
-  await rail(page).click();
-  await expect(dialog(page)).toContainText("no route to host");
-  await dialog(page).getByRole("button", { name: "Sync now" }).click();
+  await openSync(page);
+  await expect(section(page)).toContainText("no route to host");
+  await section(page).getByRole("button", { name: "Sync now" }).click();
   // Retrying fails the same way and says so, rather than looking like it worked.
-  await expect(dialog(page)).toContainText("no route to host");
+  await expect(section(page)).toContainText("no route to host");
   await expect(marks(page)).toHaveCount(1);
 });
 
@@ -195,15 +218,15 @@ test("a refused login says so and signing in again recovers", async ({
   await expect(marks(page)).toHaveCount(1);
   await expectRail(page, "Sign in to Dropbox again");
 
-  await rail(page).click();
-  await expect(dialog(page)).toContainText("reconnect to continue");
-  await dialog(page)
-    .getByRole("button", { name: "Sign in to Dropbox" })
+  await openSync(page);
+  await expect(section(page)).toContainText("reconnect to continue");
+  await dropboxRow(page)
+    .getByRole("button", { name: "Sign in", exact: true })
     .click();
 
-  await expect(dialog(page)).not.toContainText("reconnect to continue");
+  await expect(section(page)).not.toContainText("reconnect to continue");
   await expect(
-    dialog(page).getByRole("button", { name: "Sync now" }),
+    section(page).getByRole("button", { name: "Sync now" }),
   ).toBeVisible();
   // Its first pass uploads what waited.
   await expect(marks(page)).toHaveCount(0);
@@ -219,16 +242,20 @@ test("a cloud holding another journal says why and offers to disconnect", async 
     "This device and the cloud have different journal keys",
   );
 
-  await rail(page).click();
-  await expect(dialog(page)).toContainText(
+  await openSync(page);
+  await expect(section(page)).toContainText(
     "the journal key on this device differs from the one in the cloud",
   );
   // Retrying cannot help, and says so rather than looking like it worked.
-  await dialog(page).getByRole("button", { name: "Sync now" }).click();
-  await expect(dialog(page).getByRole("alert")).toHaveCount(2);
+  await section(page).getByRole("button", { name: "Sync now" }).click();
+  await expect(section(page).getByRole("alert")).toHaveCount(2);
 
-  await dialog(page).getByRole("button", { name: "Disconnect" }).click();
-  await dialog(page).getByRole("button", { name: "Disconnect" }).click();
+  await section(page)
+    .getByRole("button", { name: "Disconnect", exact: false })
+    .click();
+  await section(page)
+    .getByRole("button", { name: "Disconnect", exact: false })
+    .click();
   await expectRail(page, "Sync is off");
   await expect(page.getByTestId("entry-row")).toHaveCount(2);
 });
@@ -240,19 +267,25 @@ test("disconnecting warns about what has not been uploaded", async ({
   await writeEntry(page, "Unsent");
   await expect(marks(page)).toHaveCount(1);
 
-  await rail(page).click();
-  await dialog(page).getByRole("button", { name: "Disconnect" }).click();
+  await openSync(page);
+  await section(page)
+    .getByRole("button", { name: "Disconnect", exact: false })
+    .click();
 
-  await expect(dialog(page)).toContainText(
+  await expect(section(page)).toContainText(
     "1 change has not been uploaded. They stay on this device but will not reach Dropbox.",
   );
   // Backing out changes nothing.
-  await dialog(page).getByRole("button", { name: "Keep syncing" }).click();
+  await section(page).getByRole("button", { name: "Keep syncing" }).click();
   await expectRail(page, /Offline/);
 
-  await dialog(page).getByRole("button", { name: "Disconnect" }).click();
-  await dialog(page).getByRole("button", { name: "Disconnect" }).click();
-  await expect(dialog(page)).toContainText("Keep a copy of your journal");
+  await section(page)
+    .getByRole("button", { name: "Disconnect", exact: false })
+    .click();
+  await section(page)
+    .getByRole("button", { name: "Disconnect", exact: false })
+    .click();
+  await expect(section(page)).toContainText("Keep a copy of your journal");
   await expectRail(page, "Sync is off");
   // The entry is still here; only its mark is gone.
   await expect(row(page, "Unsent")).toBeVisible();
@@ -264,13 +297,15 @@ test("disconnecting with nothing pending does not scare anyone", async ({
 }) => {
   await login(page, "?sync=on");
 
-  await rail(page).click();
-  await dialog(page).getByRole("button", { name: "Disconnect" }).click();
+  await openSync(page);
+  await section(page)
+    .getByRole("button", { name: "Disconnect", exact: false })
+    .click();
 
-  await expect(dialog(page)).toContainText(
+  await expect(section(page)).toContainText(
     "Your journal on this device is not touched",
   );
-  await expect(dialog(page)).not.toContainText("not been uploaded");
+  await expect(section(page)).not.toContainText("not been uploaded");
 });
 
 test("a new device joins a journal from the cloud before it has a vault", async ({
@@ -325,9 +360,8 @@ test("on a phone the rail lives in the drawer, and a mark costs a row no height"
   // The rail is behind the menu here, and its button is reachable and named.
   await page.getByRole("button", { name: "Open menu" }).click();
   await expectRail(page, /^Offline/);
-  await rail(page).click();
-  await expect(dialog(page)).toBeVisible();
-  const box = await dialog(page).boundingBox();
+  const section = await openSync(page);
+  const box = await section.boundingBox();
   expect(box!.x).toBeGreaterThanOrEqual(0);
   expect(box!.x + box!.width).toBeLessThanOrEqual(390);
 });
@@ -386,9 +420,7 @@ test("a pass that pulls the open entry shows the new text", async ({
     "Started journaling again",
   );
 
-  await rail(page).click();
-  await dialog(page).getByRole("button", { name: "Sync now" }).click();
-  await dialog(page).getByRole("button", { name: "Close" }).click();
+  await syncWithoutLeaving(page);
 
   // The pane had nothing unsaved, so it refreshed itself on `sync://changed`
   // rather than waiting for a save to meet Stale.
@@ -410,9 +442,7 @@ test("an edit made while a pass pulled the entry is kept as a conflicted copy", 
   // when the pass below lands.
   await page.getByTestId("entry-body").locator(".cm-content").fill("mine");
 
-  await rail(page).click();
-  await dialog(page).getByRole("button", { name: "Sync now" }).click();
-  await dialog(page).getByRole("button", { name: "Close" }).click();
+  await syncWithoutLeaving(page);
 
   // The debounce fires: the save meets Stale, and the draft becomes a copy.
   await page.clock.runFor(1000);
@@ -445,9 +475,7 @@ test("a conflicted copy that fails to save can be retried", async ({
   // when the pass below lands.
   await page.getByTestId("entry-body").locator(".cm-content").fill("mine");
 
-  await rail(page).click();
-  await dialog(page).getByRole("button", { name: "Sync now" }).click();
-  await dialog(page).getByRole("button", { name: "Close" }).click();
+  await syncWithoutLeaving(page);
 
   // The debounce fires: the save meets Stale, and the conflicted-copy write
   // itself fails once. Dirty stays set, status is "error", and nothing

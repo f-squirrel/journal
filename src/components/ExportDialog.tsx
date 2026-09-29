@@ -22,7 +22,7 @@ const entriesOf = (n: number) => `${n} ${n === 1 ? "entry" : "entries"}`;
 /// The one place the app puts the journal on disk unencrypted, so nothing is
 /// written until the person has picked a folder *and* been shown its name next
 /// to a plain statement of what that means. It stays mounted while closed, like
-/// `SyncDialog`, and forgets its state only once the close has finished
+/// `ShortcutsDialog`, and forgets its state only once the close has finished
 /// animating, so the last thing on screen is not rewritten as it fades.
 export default function ExportDialog({
   open,

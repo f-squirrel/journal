@@ -105,12 +105,12 @@ test("the idle lock lands with the cursor in the field", async ({ page }) => {
 
 /// A modal is on screen when the timer fires; the layout unmounts wholesale,
 /// dialog included, so nothing of it may keep focus.
-test("the idle lock with the sync dialog open still focuses the field", async ({
+test("the idle lock with a dialog open still focuses the field", async ({
   page,
 }) => {
   await login(page);
-  await page.getByTestId("sync-button").click();
-  await expect(page.getByRole("dialog", { name: "Cloud sync" })).toBeVisible();
+  await page.getByRole("button", { name: "Export journal" }).click();
+  await expect(page.getByRole("dialog")).toBeVisible();
 
   await page.clock.runFor(IDLE_MS);
 

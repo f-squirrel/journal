@@ -398,10 +398,7 @@ test("a stale-save conflicted copy owns its own copy of the image", async ({
 
   // A sync pass rewrites the entry under the open pane; the debounced save
   // then meets Stale and the draft becomes a copy.
-  await page.getByTestId("sync-button").click();
-  const cloud = page.getByRole("dialog", { name: "Cloud sync" });
-  await cloud.getByRole("button", { name: "Sync now" }).click();
-  await cloud.getByRole("button", { name: "Close" }).click();
+  await page.evaluate(() => window.__syncTestHooks?.syncNow());
   await page.clock.runFor(1000);
 
   const copy = page
@@ -450,10 +447,7 @@ test("a stale-save conflicted copy leaves a HEIC without its thumbnail pointing 
   await page.getByRole("menuitem", { name: "Edit" }).click();
   await editor(page).fill(`mine ![](media:${id}/${media})`);
 
-  await page.getByTestId("sync-button").click();
-  const cloud = page.getByRole("dialog", { name: "Cloud sync" });
-  await cloud.getByRole("button", { name: "Sync now" }).click();
-  await cloud.getByRole("button", { name: "Close" }).click();
+  await page.evaluate(() => window.__syncTestHooks?.syncNow());
   await page.clock.runFor(1000);
 
   const copy = page

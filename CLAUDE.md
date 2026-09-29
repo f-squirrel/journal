@@ -76,6 +76,9 @@ Backend:
   (synced, encrypted `.journal-settings` blob, per-field merge) in
   `journal-settings`; the frontend sees one flat `Settings` via
   `useSettings()` and writes patches — never a `localStorage` key (ADR 0016).
+  A provider's own settings are a field of `DeviceSettings::sync_providers`
+  (one struct per provider); providers not built yet are only listed
+  (`PLANNED_PROVIDERS`), and Settings › Sync is where sync is managed.
   Layering and sync design: ADRs 0009, 0010, 0012.
 - Every Tauri command is `async` and does storage work through the
   `blocking` helper; crates below `src-tauri` stay synchronous.

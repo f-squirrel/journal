@@ -1,5 +1,6 @@
 import type {
   DeviceSettings,
+  SyncProviders,
   EntryHeader,
   JournalEntry,
   JournalSettings,
@@ -92,6 +93,8 @@ function toHeader(entry: JournalEntry): EntryHeader {
 //   ?slowMs=<n>         non-negative delay for slow operations (default SLOW_MS)
 //   ?thumbs=off         saving a thumbnail succeeds but stores nothing, as for
 //                       an image added before thumbnails existed
+//   ?dropboxKey=none    the build has no Dropbox app key, so Dropbox needs one
+//                       from Settings (default: the build has one)
 //   ?sync=<mode>        start connected to a provider: on, pull, conflict,
 //                       busy, reauth, key_mismatch (see below)
 //
@@ -134,6 +137,7 @@ interface Faults {
   slowMs: number;
   thumbsOff: boolean;
   sync: SyncMode;
+  noBuildKey: boolean;
 }
 
 type SyncMode =
@@ -171,6 +175,7 @@ function parseFaults(search: string): Faults {
         : SLOW_MS,
     thumbsOff: params.get("thumbs") === "off",
     sync: SYNC_MODES.find((mode) => mode === params.get("sync")) ?? "off",
+    noBuildKey: params.get("dropboxKey") === "none",
   };
 }
 
@@ -562,7 +567,32 @@ function snippet(markdown: string, needle: string): string {
 //
 // A pass also fails for `sync_now`, which then rejects as the real one does.
 
-const providers: ProviderInfo[] = [{ id: "dropbox", name: "Dropbox" }];
+const DROPBOX = { id: "dropbox", name: "Dropbox" };
+
+/// Listed as coming later, as `PLANNED_PROVIDERS` does in Rust.
+const PLANNED_PROVIDERS = [
+  { id: "google_drive", name: "Google Drive" },
+  { id: "icloud", name: "iCloud" },
+  { id: "webdav", name: "WebDAV" },
+];
+
+/// A key resolves when the user entered one or the (simulated) build has one.
+function dropboxConfigured(): boolean {
+  return (
+    deviceSettings.sync_providers.dropbox.app_key !== null || !faults.noBuildKey
+  );
+}
+
+function providers(): ProviderInfo[] {
+  return [
+    { ...DROPBOX, available: true, configured: dropboxConfigured() },
+    ...PLANNED_PROVIDERS.map((p) => ({
+      ...p,
+      available: false,
+      configured: false,
+    })),
+  ];
+}
 
 /// How long after a save the simulated pass runs. The real one waits about two
 /// seconds; a test has no use for that.
@@ -586,7 +616,7 @@ const theirVersion: JournalEntry = {
   markdown: "# First day back\n\nWritten on the phone, offline.",
 };
 
-let connected: ProviderInfo | null = null;
+let connected: { id: string; name: string } | null = null;
 const pending = new Set<string>();
 const conflicted = new Set<string>();
 /// What halts sync until the user acts, with the words the backend would send
@@ -615,7 +645,7 @@ const statusListeners = new Set<(status: SyncStatusPayload) => void>();
 const changedListeners = new Set<() => void>();
 
 if (faults.sync !== "off") {
-  connected = providers[0];
+  connected = DROPBOX;
   lastSyncedAt = new Date().toISOString();
   if (faults.sync === "conflict") conflicted.add(seedEntries[0].id);
   if (faults.sync === "reauth" || faults.sync === "key_mismatch") {
@@ -643,6 +673,7 @@ function status(): SyncStatusPayload {
   return {
     state,
     provider: connected?.name ?? null,
+    provider_id: connected?.id ?? null,
     pending_ids: [...pending],
     conflicted_ids: [...conflicted],
     pending_other: 0,
@@ -766,13 +797,16 @@ export function syncStatus(): Promise<SyncStatusPayload> {
 }
 
 export function listProviders(): Promise<ProviderInfo[]> {
-  return Promise.resolve(providers);
+  return Promise.resolve(providers());
 }
 
 export async function connectRemote(providerId: string): Promise<void> {
   await run("connect", () => {
-    const provider = providers.find((p) => p.id === providerId);
-    if (!provider) throw `unknown sync provider "${providerId}"`;
+    const provider = providers().find((p) => p.id === providerId);
+    if (!provider?.available) throw `unknown sync provider "${providerId}"`;
+    if (!provider.configured) {
+      throw "Dropbox has no app key: enter one in Settings › Sync";
+    }
     connected = provider;
     failure = null;
     // A new login is what `reauth` waits for. A key mismatch is not about
@@ -843,6 +877,7 @@ const DEFAULT_DEVICE_SETTINGS: DeviceSettings = {
   idle_lock_minutes: 5,
   sync_interval_minutes: 1,
   shortcuts: {},
+  sync_providers: { dropbox: { app_key: null } },
 };
 
 const DEFAULT_JOURNAL_SETTINGS: JournalSettings = {
@@ -872,6 +907,21 @@ function readMinutesOrDefault(
     return value;
   }
   return undefined;
+}
+
+const APP_KEY = /^[A-Za-z0-9]{1,64}$/;
+const APP_KEY_ERROR = "the Dropbox app key must be 1 to 64 letters and digits";
+
+/// `undefined` means "not present or not valid", as for the other readers.
+function readSyncProviders(raw: unknown): SyncProviders | undefined {
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const dropbox = (raw as Record<string, unknown>).dropbox;
+  if (dropbox === undefined) return { dropbox: { app_key: null } };
+  if (typeof dropbox !== "object" || dropbox === null) return undefined;
+  const key = (dropbox as Record<string, unknown>).app_key ?? null;
+  if (key === null) return { dropbox: { app_key: null } };
+  if (typeof key !== "string" || !APP_KEY.test(key)) return undefined;
+  return { dropbox: { app_key: key } };
 }
 
 /// `idle_lock_minutes`/`sync_interval_minutes`/`shortcuts`' size limits are
@@ -961,6 +1011,9 @@ function sanitizeDevice(raw: unknown): DeviceSettings {
         ? DEFAULT_DEVICE_SETTINGS.sync_interval_minutes
         : syncIntervalMinutes,
     shortcuts,
+    sync_providers:
+      readSyncProviders(obj.sync_providers) ??
+      DEFAULT_DEVICE_SETTINGS.sync_providers,
   };
 }
 
@@ -992,6 +1045,7 @@ const DEVICE_KEYS = new Set<string>([
   "idle_lock_minutes",
   "sync_interval_minutes",
   "shortcuts",
+  "sync_providers",
 ]);
 const JOURNAL_KEYS = new Set<string>([
   "week_starts_on",
@@ -1052,6 +1106,10 @@ function applyPatch(patch: SettingsPatch): {
         devicePatch[key] = value;
       } else if (key === "shortcuts") {
         devicePatch[key] = assertShortcuts(value);
+      } else if (key === "sync_providers") {
+        const valid = readSyncProviders(value);
+        if (!valid) throw APP_KEY_ERROR;
+        devicePatch[key] = valid;
       }
     } else {
       throw `unknown setting: "${key}"`;
@@ -1150,6 +1208,10 @@ declare global {
       /// reflects calls made after this hook was installed).
       loads(): number;
     };
+    /// Runs a sync pass without leaving the page: the Sync section is a
+    /// route of its own, so a spec that needs a pass to land while an entry
+    /// is open cannot press its button.
+    __syncTestHooks?: { syncNow(): Promise<void> };
   }
 }
 
@@ -1159,4 +1221,5 @@ if (typeof window !== "undefined") {
     calls: settingsCalls,
     loads: () => settingsLoads,
   };
+  window.__syncTestHooks = { syncNow };
 }

@@ -27,6 +27,13 @@ import { test as base, type Page } from "@playwright/test";
 export { expect } from "@playwright/test";
 export type { Page } from "@playwright/test";
 
+declare global {
+  interface Window {
+    /// Only the dev fallback installs this (`src/api/fallback.ts`).
+    __syncTestHooks?: { syncNow(): Promise<void> };
+  }
+}
+
 const enabled = !!process.env.COVERAGE;
 const outDir = ".nyc_output";
 

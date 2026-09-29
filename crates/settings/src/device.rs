@@ -16,6 +16,8 @@ use crate::error::SettingsError;
 const MAX_SHORTCUT_LEN: usize = 64;
 /// The at most 64 shortcut overrides `DeviceSettings::validate` allows.
 const MAX_SHORTCUTS: usize = 64;
+/// The longest Dropbox app key `DeviceSettings::validate` allows.
+const MAX_APP_KEY_LEN: usize = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[cfg_attr(
@@ -29,6 +31,32 @@ pub enum ColorMode {
     System,
     Light,
     Dark,
+}
+
+/// Dropbox's own settings.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "ts",
+    derive(ts_rs::TS),
+    ts(export, export_to = "../../../src/bindings/")
+)]
+#[serde(default)]
+pub struct DropboxSettings {
+    /// `None` = the build's key.
+    pub app_key: Option<String>,
+}
+
+/// One field per sync provider, each holding that provider's own settings.
+/// Which provider is connected is not stored here; the saved login says.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "ts",
+    derive(ts_rs::TS),
+    ts(export, export_to = "../../../src/bindings/")
+)]
+#[serde(default)]
+pub struct SyncProviders {
+    pub dropbox: DropboxSettings,
 }
 
 /// This device only. Plaintext, never synced, readable while locked.
@@ -51,6 +79,8 @@ pub struct DeviceSettings {
     /// the frontend (ADR 0015), so the frontend still sanitises what it
     /// reads here.
     pub shortcuts: BTreeMap<String, Option<String>>,
+    /// Per-provider sync settings (Dropbox's app key).
+    pub sync_providers: SyncProviders,
 }
 
 impl Default for DeviceSettings {
@@ -60,6 +90,7 @@ impl Default for DeviceSettings {
             idle_lock_minutes: Some(5),
             sync_interval_minutes: Some(1),
             shortcuts: BTreeMap::new(),
+            sync_providers: SyncProviders::default(),
         }
     }
 }
@@ -99,8 +130,24 @@ impl DeviceSettings {
                 }
             }
         }
+        if let Some(key) = &self.sync_providers.dropbox.app_key {
+            validate_app_key(key)?;
+        }
         Ok(())
     }
+}
+
+/// 1..=64 ASCII letters and digits. The error never echoes the key.
+fn validate_app_key(key: &str) -> Result<(), SettingsError> {
+    if key.is_empty()
+        || key.len() > MAX_APP_KEY_LEN
+        || !key.bytes().all(|b| b.is_ascii_alphanumeric())
+    {
+        return Err(SettingsError::InvalidValue(format!(
+            "the Dropbox app key must be 1 to {MAX_APP_KEY_LEN} letters and digits"
+        )));
+    }
+    Ok(())
 }
 
 impl Validate for DeviceSettings {
@@ -269,6 +316,48 @@ mod tests {
         let mut settings = DeviceSettings::default();
         settings.shortcuts.insert("a".to_owned(), None);
         assert!(settings.validate().is_ok());
+    }
+
+    fn with_key(key: Option<&str>) -> DeviceSettings {
+        DeviceSettings {
+            sync_providers: SyncProviders {
+                dropbox: DropboxSettings {
+                    app_key: key.map(str::to_owned),
+                },
+            },
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn validate_checks_the_dropbox_app_key() {
+        assert!(with_key(Some("abc123XYZ")).validate().is_ok());
+        assert!(with_key(None).validate().is_ok());
+        assert!(with_key(Some(&"a".repeat(64))).validate().is_ok());
+        for bad in [String::new(), "has space".to_owned(), "a".repeat(65)] {
+            let err = with_key(Some(&bad)).validate().unwrap_err().to_string();
+            assert!(err.contains("Dropbox app key"), "{err}");
+            if !bad.is_empty() {
+                assert!(!err.contains(&bad), "{err}");
+            }
+        }
+    }
+
+    #[test]
+    fn sync_providers_serialise_nested() {
+        let value = serde_json::to_value(with_key(None).sync_providers).unwrap();
+        assert_eq!(value, serde_json::json!({"dropbox": {"app_key": null}}));
+        let value = serde_json::to_value(with_key(Some("abc")).sync_providers).unwrap();
+        assert_eq!(value, serde_json::json!({"dropbox": {"app_key": "abc"}}));
+    }
+
+    #[test]
+    fn sync_providers_missing_dropbox_decodes_to_the_default() {
+        let path = temp_path();
+        std::fs::write(&path, br#"{"sync_providers":{}}"#).unwrap();
+        let loaded = DeviceSettingsFile::new(&path).load();
+        assert_eq!(loaded.sync_providers, SyncProviders::default());
+        std::fs::remove_file(&path).ok();
     }
 
     fn temp_path() -> PathBuf {

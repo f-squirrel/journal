@@ -43,6 +43,7 @@ import {
 const SYNC_OFF: SyncStatusPayload = {
   state: "off",
   provider: null,
+  provider_id: null,
   pending_ids: [],
   conflicted_ids: [],
   pending_other: 0,
@@ -132,6 +133,9 @@ interface AppStateContextValue {
   conflictedIds: ReadonlySet<string>;
   /// The cloud providers this build can connect to.
   providers: ProviderInfo[];
+  /// Re-reads the provider list, for when a setting changed what can connect
+  /// (the Dropbox app key).
+  refreshProviders: () => Promise<void>;
   /// Waits for the user in their browser, so it can take minutes. Rejects with
   /// the reason it could not connect.
   connectSync: (provider: string) => Promise<void>;
@@ -453,6 +457,14 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     [],
   );
 
+  const refreshProviders = useCallback(
+    () =>
+      listProviders()
+        .then(setProviders)
+        .catch((err) => console.error("Failed to list sync providers:", err)),
+    [],
+  );
+
   const connectSync = useCallback(
     async (provider: string) => {
       try {
@@ -524,6 +536,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       pendingIds,
       conflictedIds,
       providers,
+      refreshProviders,
       connectSync,
       disconnectSync,
       syncNow,
@@ -623,6 +636,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       pendingIds,
       conflictedIds,
       providers,
+      refreshProviders,
       connectSync,
       disconnectSync,
       syncNow,

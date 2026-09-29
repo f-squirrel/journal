@@ -26,6 +26,7 @@ const LOAD_FAILED_SETTINGS: Settings = {
   idle_lock_minutes: 5, // never null: keeps auto-lock on
   sync_interval_minutes: 1,
   shortcuts: {}, // default bindings
+  sync_providers: { dropbox: { app_key: null } },
   week_starts_on: "sunday",
   time_format: "locale",
   entry_template: "",

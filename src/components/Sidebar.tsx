@@ -25,7 +25,6 @@ import type { SyncState } from "../types";
 import { onThisDay } from "../utils/date";
 import { syncSummary } from "../utils/sync";
 import ExportDialog from "./ExportDialog";
-import SyncDialog from "./SyncDialog";
 import { HEADER_HEIGHT, SIDEBAR_WIDTH, rem } from "./chrome";
 
 /// One rail button: an icon, and the label only on hover. The label is also
@@ -140,8 +139,8 @@ function syncAppearance(state: SyncState): {
 }
 
 /// The rail's sync button. Its label is the status itself ("2 changes not
-/// uploaded yet"), which is also its accessible name, and pressing it opens the
-/// dialog where the account is connected, disconnected and retried.
+/// uploaded yet"), which is also its accessible name, and pressing it opens
+/// Settings › Sync, where the account is connected, disconnected and retried.
 function SyncButton({ onClick }: { onClick: () => void }) {
   const { sync } = useAppState();
   // Only a "synced · 5 min ago" label goes stale on its own.
@@ -212,7 +211,6 @@ export default function Sidebar({
   const navigate = useNavigate();
   const newEntry = useNewEntry();
   const { bindingFor } = useShortcuts();
-  const [syncOpen, setSyncOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const settingsActive = useMatch("/settings") !== null;
 
@@ -267,7 +265,12 @@ export default function Sidebar({
 
       <Box sx={{ width: "100%", borderTop: 1, borderColor: "divider", py: 1 }}>
         <Stack alignItems="center" spacing={0.5}>
-          <SyncButton onClick={() => setSyncOpen(true)} />
+          <SyncButton
+            onClick={() => {
+              navigate("/settings", { state: { scrollTo: "sync" } });
+              onNavigate?.();
+            }}
+          />
           <RailButton
             label="Export journal"
             icon={<ExportIcon fontSize="small" />}
@@ -311,7 +314,6 @@ export default function Sidebar({
           />
         </Stack>
       </Box>
-      <SyncDialog open={syncOpen} onClose={() => setSyncOpen(false)} />
       <ExportDialog open={exportOpen} onClose={() => setExportOpen(false)} />
     </Stack>
   );

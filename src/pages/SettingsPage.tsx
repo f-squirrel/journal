@@ -18,8 +18,9 @@ import BrightnessAutoIcon from "@mui/icons-material/BrightnessAuto";
 import DarkModeIcon from "@mui/icons-material/DarkMode";
 import KeyboardIcon from "@mui/icons-material/Keyboard";
 import LightModeIcon from "@mui/icons-material/LightMode";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import ShortcutsDialog from "../components/ShortcutsDialog";
+import SyncSettings from "../components/SyncSettings";
 import { HEADER_HEIGHT, READING_WIDTH, TYPE, rem } from "../components/chrome";
 import { useAppState } from "../context/AppStateContext";
 import { useSettings } from "../context/SettingsContext";
@@ -30,8 +31,6 @@ const ENTRY_TEMPLATE_LIMIT = 10_000;
 
 /// Minutes offered for the idle lock. `null` is "Never".
 const IDLE_LOCK_OPTIONS: readonly (number | null)[] = [1, 5, 15, 30, 60, null];
-/// Minutes offered for the periodic sync check. `null` is "only when I sync".
-const SYNC_INTERVAL_OPTIONS: readonly (number | null)[] = [1, 5, 15, 60, null];
 
 /// A `Select`-flavoured `TextField` whose value is `number | null`: MUI's
 /// `Select` wants a primitive it can compare by `===`, and `null` fails that
@@ -44,8 +43,8 @@ function minutesLabel(minutes: number): string {
 }
 
 /// `options` plus `current`, if it isn't already one of them — sorted back
-/// into place, `null` (always "Never"/"Only when I sync") last. The backend
-/// accepts any value in its range (1..=240 / 1..=1440), not just the handful
+/// into place, `null` (always "Never") last. The backend
+/// accepts any value in its range (1..=240), not just the handful
 /// this page offers by default, so a value set some other way (an older
 /// build, a future one, directly through `update_settings`) still shows as a
 /// selected option instead of leaving the field blank.
@@ -63,10 +62,19 @@ export default function SettingsPage() {
   const theme = useTheme();
   const compact = useMediaQuery(theme.breakpoints.down("md"));
   const navigate = useNavigate();
-  const { sync, registerFlush } = useAppState();
+  const location = useLocation();
+  const { registerFlush } = useAppState();
   const { settings, update } = useSettings();
   const [error, setError] = useState("");
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+
+  // The sidebar's sync button lands here with `scrollTo` in the navigation
+  // state; `location.key` changes on every navigation, so it also works when
+  // this page is already open.
+  useEffect(() => {
+    const target = (location.state as { scrollTo?: string } | null)?.scrollTo;
+    if (target) document.getElementById(target)?.scrollIntoView();
+  }, [location.key, location.state]);
 
   const change = useCallback(
     async (patch: SettingsPatch) => {
@@ -253,39 +261,6 @@ export default function SettingsPage() {
               )}
             </TextField>
 
-            <TextField
-              select
-              label="Check for sync every"
-              disabled={sync.state === "off"}
-              helperText={
-                sync.state === "off"
-                  ? "Connect a cloud account to change this."
-                  : undefined
-              }
-              sx={{ maxWidth: rem(280) }}
-              value={String(settings.sync_interval_minutes ?? NEVER)}
-              onChange={(event) => {
-                const raw = event.target.value;
-                void change({
-                  sync_interval_minutes: raw === NEVER ? null : Number(raw),
-                });
-              }}
-            >
-              {withCurrent(
-                SYNC_INTERVAL_OPTIONS,
-                settings.sync_interval_minutes,
-              ).map((minutes) => (
-                <MenuItem
-                  key={minutes ?? NEVER}
-                  value={String(minutes ?? NEVER)}
-                >
-                  {minutes === null
-                    ? "Only when I sync"
-                    : minutesLabel(minutes)}
-                </MenuItem>
-              ))}
-            </TextField>
-
             <Box>
               <Button
                 startIcon={<KeyboardIcon />}
@@ -295,6 +270,8 @@ export default function SettingsPage() {
               </Button>
             </Box>
           </Stack>
+
+          <SyncSettings />
 
           <Stack component="section" spacing={3}>
             <Typography

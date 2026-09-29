@@ -25,7 +25,7 @@ mod patch;
 mod stamped;
 
 pub use decode::{decode_tolerant, Validate};
-pub use device::{ColorMode, DeviceSettings, DeviceSettingsFile};
+pub use device::{ColorMode, DeviceSettings, DeviceSettingsFile, DropboxSettings, SyncProviders};
 pub use error::SettingsError;
 pub use journal::{JournalSettings, TimeFormat, WeekStart};
 pub use patch::{apply_patch, Patched};
@@ -76,6 +76,7 @@ mod tests {
             "idle_lock_minutes",
             "sync_interval_minutes",
             "shortcuts",
+            "sync_providers",
             "week_starts_on",
             "time_format",
             "entry_template",

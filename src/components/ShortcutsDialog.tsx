@@ -22,7 +22,7 @@ import { rem } from "./chrome";
 /// Opened by the `help.shortcuts` shortcut (registered in `JournalLayout`,
 /// which owns `open`/`onClose` so the dialog survives the sidebar being
 /// unmounted on phones) and by the "Keyboard shortcuts" rail button. The
-/// **Close** button matches `SyncDialog`/`ExportDialog`; without it this
+/// **Close** button matches `ExportDialog`; without it this
 /// dialog would have no focusable content at all.
 ///
 /// **Change** turns a row's chord cell into a focused recorder ("Press

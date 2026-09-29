@@ -576,7 +576,7 @@ fn sync_is_off_until_an_account_is_connected() {
 
 #[test]
 fn a_build_without_an_app_key_says_how_to_get_one() {
-    let rig = Rig::with_providers(vec![Arc::new(Dropbox::new(None))]);
+    let rig = Rig::with_providers(vec![Arc::new(Dropbox::new(Arc::new(|| None), None))]);
 
     let error = rig
         .invoke("connect_remote", json!({ "provider": "dropbox" }))
@@ -589,11 +589,46 @@ fn a_build_without_an_app_key_says_how_to_get_one() {
     assert_eq!(rig.status()["state"], "off");
 }
 
+/// The user's key wins over the build's, the build's is the fallback, and
+/// with neither there is nothing to connect.
+#[test]
+fn the_users_app_key_wins_over_the_builds() {
+    let chosen =
+        |key: Option<&'static str>| -> KeySource { Arc::new(move || key.map(str::to_owned)) };
+
+    let both = Dropbox::new(chosen(Some("mine")), Some("built"));
+    assert_eq!(both.app_key().as_deref(), Some("mine"));
+    let built = Dropbox::new(chosen(None), Some("built"));
+    assert_eq!(built.app_key().as_deref(), Some("built"));
+    assert!(built.configured());
+
+    let neither = Dropbox::new(chosen(None), None);
+    assert_eq!(neither.app_key(), None);
+    assert_eq!(neither.redirect_port(), None);
+    assert!(!neither.configured());
+    assert!(neither.key().unwrap_err().contains("Settings"));
+}
+
+#[test]
+fn a_planned_provider_cannot_be_connected() {
+    let rig = Rig::with_providers(vec![Fake::provider("one", Arc::new(MemoryRemote::new()))]);
+
+    let error = rig
+        .invoke("connect_remote", json!({ "provider": "icloud" }))
+        .unwrap_err();
+
+    assert!(error.as_str().unwrap().contains("unknown sync provider"));
+    assert_eq!(rig.status()["state"], "off");
+}
+
 /// Dropbox matches the redirect against the URI registered with the app, so it
 /// asks for that port; a provider that says nothing gets any free one.
 #[test]
 fn only_a_provider_that_needs_a_fixed_redirect_port_asks_for_one() {
-    assert_eq!(Dropbox::new(Some("key")).redirect_port(), Some(53682));
+    assert_eq!(
+        Dropbox::new(Arc::new(|| None), Some("key")).redirect_port(),
+        Some(53682)
+    );
     assert_eq!(
         Fake::provider("fake", Arc::new(MemoryRemote::new())).redirect_port(),
         None
@@ -612,8 +647,11 @@ fn the_build_lists_its_providers_for_the_connect_dialog() {
     assert_eq!(
         providers,
         json!([
-            { "id": "one", "name": "Fake Cloud" },
-            { "id": "two", "name": "Fake Cloud" },
+            { "id": "one", "name": "Fake Cloud", "available": true, "configured": true },
+            { "id": "two", "name": "Fake Cloud", "available": true, "configured": true },
+            { "id": "google_drive", "name": "Google Drive", "available": false, "configured": false },
+            { "id": "icloud", "name": "iCloud", "available": false, "configured": false },
+            { "id": "webdav", "name": "WebDAV", "available": false, "configured": false },
         ])
     );
 }
@@ -622,9 +660,11 @@ fn the_build_lists_its_providers_for_the_connect_dialog() {
 fn the_status_names_the_provider_only_while_one_is_connected() {
     let rig = Rig::new(Arc::new(MemoryRemote::new()));
     assert_eq!(rig.status()["provider"], Value::Null);
+    assert_eq!(rig.status()["provider_id"], Value::Null);
 
     rig.connect();
     assert_eq!(rig.status()["provider"], "Fake Cloud");
+    assert_eq!(rig.status()["provider_id"], "fake");
 
     rig.ok("disconnect_remote", json!({}));
     assert_eq!(rig.status()["provider"], Value::Null);

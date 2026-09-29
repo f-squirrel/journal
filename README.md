@@ -56,7 +56,9 @@ scopes `files.metadata.read`, `files.content.read`, `files.content.write` and
 DROPBOX_APP_KEY=your-app-key make run
 ```
 
-A build without the key runs normally with sync unavailable.
+A build without the key runs normally, and the key can instead be entered in
+Settings › Sync, or on the login screen of a device with no journal yet. Use the
+same key on every device: each app has its own Dropbox folder.
 
 Release builds use one production Dropbox app, registered and owned by the
 maintainer. Its key is public (the flow is PKCE, with no client secret), but
