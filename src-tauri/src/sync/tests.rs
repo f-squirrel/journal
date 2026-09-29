@@ -78,6 +78,10 @@ struct Fake {
     /// Makes the next `revoke` call fail, then resets itself: a revoke is
     /// fire-and-forget, so a test checks it does not stop the local change.
     fail_next_revoke: AtomicBool,
+    /// The app the next `begin` grants under, like a Dropbox app key.
+    app: Mutex<Option<&'static str>>,
+    /// The app each `account`/`remote`/`revoke` call was given, in order.
+    apps_seen: Mutex<Vec<(&'static str, Option<String>)>>,
 }
 
 impl Fake {
@@ -88,7 +92,32 @@ impl Fake {
             next_token: AtomicUsize::new(1),
             revoked: Mutex::new(Vec::new()),
             fail_next_revoke: AtomicBool::new(false),
+            app: Mutex::new(Some("fake-app")),
+            apps_seen: Mutex::new(Vec::new()),
         })
+    }
+
+    /// The next connection is granted under `app`.
+    fn use_app(&self, app: &'static str) {
+        *self.app.lock().unwrap() = Some(app);
+    }
+
+    /// The app each call of `method` was given, in order.
+    fn apps_seen(&self, method: &str) -> Vec<Option<String>> {
+        self.apps_seen
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(m, _)| *m == method)
+            .map(|(_, app)| app.clone())
+            .collect()
+    }
+
+    fn see(&self, method: &'static str, app: Option<&str>) {
+        self.apps_seen
+            .lock()
+            .unwrap()
+            .push((method, app.map(str::to_owned)));
     }
 
     fn provider(id: &'static str, remote: Arc<dyn RemoteStore>) -> Arc<dyn Provider> {
@@ -131,6 +160,7 @@ impl Provider for Fake {
         Ok(Connection {
             url,
             state: "fake-state".to_owned(),
+            app: self.app.lock().unwrap().map(str::to_owned),
             redeem: Box::new(move |code| match code {
                 "the-code" => Ok(RefreshToken::new(token)),
                 other => Err(format!("unexpected code {other}")),
@@ -138,15 +168,18 @@ impl Provider for Fake {
         })
     }
 
-    fn account(&self, _: &RefreshToken) -> Result<String, String> {
+    fn account(&self, app: Option<&str>, _: &RefreshToken) -> Result<String, String> {
+        self.see("account", app);
         Ok(self.account.lock().unwrap().0.to_owned())
     }
 
-    fn remote(&self, _: &RefreshToken) -> Result<Arc<dyn RemoteStore>, String> {
+    fn remote(&self, app: Option<&str>, _: &RefreshToken) -> Result<Arc<dyn RemoteStore>, String> {
+        self.see("remote", app);
         Ok(self.account.lock().unwrap().1.clone())
     }
 
-    fn revoke(&self, token: &RefreshToken) -> Result<(), String> {
+    fn revoke(&self, app: Option<&str>, token: &RefreshToken) -> Result<(), String> {
+        self.see("revoke", app);
         self.revoked.lock().unwrap().push(token.expose().to_owned());
         if self.fail_next_revoke.swap(false, Ordering::SeqCst) {
             return Err("could not reach Fake Cloud".to_owned());
@@ -607,6 +640,94 @@ fn the_users_app_key_wins_over_the_builds() {
     assert_eq!(neither.redirect_port(), None);
     assert!(!neither.configured());
     assert!(neither.key().unwrap_err().contains("Settings"));
+}
+
+/// A saved Dropbox login is used only under the key stored with it. The key
+/// source panics, so this also shows it is never read.
+#[test]
+fn a_saved_dropbox_login_never_reads_the_live_key() {
+    let dropbox = Dropbox::new(Arc::new(|| panic!("the live key was read")), None);
+    let token = RefreshToken::new("refresh");
+
+    for error in [
+        dropbox.remote(None, &token).err().unwrap(),
+        dropbox.revoke(None, &token).unwrap_err(),
+        dropbox.account(None, &token).unwrap_err(),
+    ] {
+        assert!(error.contains("connect again"), "{error}");
+    }
+    assert!(dropbox.remote(Some("k"), &token).is_ok());
+}
+
+/// A login saved before the app was stored has no app line: it does not resume,
+/// and nothing is erased or replaced on the way.
+#[test]
+fn a_pre_change_dropbox_login_does_not_resume() {
+    let rig = Rig::with_providers(vec![Arc::new(Dropbox::new(
+        Arc::new(|| Some("live".to_owned())),
+        None,
+    ))]);
+    let login = rig.dir.join("config").join("login");
+    std::fs::create_dir_all(login.parent().unwrap()).unwrap();
+    std::fs::write(&login, "dropbox\nrefresh\ndbid:A\n").unwrap();
+    let state = rig.dir.join("sync-state.json");
+    std::fs::write(&state, "{}").unwrap();
+
+    rig.control.resume();
+
+    assert_eq!(rig.status()["state"], "off");
+    assert!(login.exists(), "the login stays until the user reconnects");
+    assert_eq!(std::fs::read_to_string(&state).unwrap(), "{}");
+}
+
+#[test]
+fn connecting_saves_the_app_the_login_was_granted_to() {
+    let fake = Fake::new("fake", Arc::new(MemoryRemote::new()));
+    let rig = Rig::with_providers(vec![fake.clone()]);
+    rig.unlock();
+
+    rig.connect();
+
+    let saved = FileCredentialStore::new(rig.dir.join("config").join("login"))
+        .load()
+        .unwrap()
+        .unwrap();
+    assert_eq!(saved.app.as_deref(), Some("fake-app"));
+    assert_eq!(fake.apps_seen("account"), [Some("fake-app".to_owned())]);
+    assert_eq!(fake.apps_seen("remote"), [Some("fake-app".to_owned())]);
+}
+
+/// Another app is another app folder: the old cursor and bases must not be
+/// applied there, even for the same account.
+#[test]
+fn reconnecting_under_a_different_app_starts_from_clean_state() {
+    let remote = Forgetful::new(Arc::new(MemoryRemote::new()));
+    let fake = Fake::new("fake", remote.clone());
+    let rig = Rig::with_providers(vec![fake.clone()]);
+    rig.unlock();
+    rig.save(ID, "Today", "words", "2026-03-01T10:00:00Z");
+    rig.connect();
+    let before = remote.full_listings();
+
+    fake.use_app("other-app");
+    rig.connect();
+
+    assert!(remote.full_listings() > before, "the state was erased");
+    assert_eq!(rig.titles(), ["Today"]);
+}
+
+#[test]
+fn revoke_uses_the_old_logins_app() {
+    let fake = Fake::new("fake", Arc::new(MemoryRemote::new()));
+    let rig = Rig::with_providers(vec![fake.clone()]);
+    rig.unlock();
+    rig.connect();
+
+    fake.use_app("other-app");
+    rig.connect();
+
+    wait_for("the revoke", || !fake.revoked().is_empty());
+    assert_eq!(fake.apps_seen("revoke"), [Some("fake-app".to_owned())]);
 }
 
 #[test]

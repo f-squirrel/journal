@@ -16,10 +16,24 @@ use super::{Connection, Provider};
 const REDIRECT_PORT: u16 = 53682;
 
 /// Where the user's own app key (Settings › Sync) is read from, at each use.
+///
+/// It locks the device settings, so it must never be called while
+/// `SyncControl`'s `lifecycle` lock is held: `update_settings` holds the
+/// device settings while it waits for that lock.
 pub type KeySource = Arc<dyn Fn() -> Option<String> + Send + Sync>;
 
+/// The app a saved login was granted to. Never the live setting: a refresh
+/// token works only with the key that minted it.
+fn key_for(app: Option<&str>) -> Result<&str, String> {
+    app.ok_or_else(|| {
+        "This Dropbox login was saved by an older version; connect again in Settings › Sync"
+            .to_owned()
+    })
+}
+
 /// Dropbox, under the user's app key or, failing that, the one this build was
-/// made with.
+/// made with. The live key is used only to start a connection; the login then
+/// keeps the key it was granted under.
 ///
 /// The key is public — PKCE means the app carries no secret — but it names an
 /// app registered by whoever ships the build (`DROPBOX_APP_KEY=… make run`) or
@@ -83,23 +97,29 @@ impl Provider for Dropbox {
     }
 
     fn begin(&self, redirect_uri: &str) -> Result<Connection, String> {
-        let (url, pending) = authorize_url(&self.key()?, redirect_uri);
+        let key = self.key()?;
+        let (url, pending) = authorize_url(&key, redirect_uri);
         Ok(Connection {
             url,
             state: pending.state().to_owned(),
+            app: Some(key),
             redeem: Box::new(move |code| finish(pending, code).map_err(|e| e.to_string())),
         })
     }
 
-    fn account(&self, token: &RefreshToken) -> Result<String, String> {
-        account_id(&self.key()?, token).map_err(|e| e.to_string())
+    fn account(&self, app: Option<&str>, token: &RefreshToken) -> Result<String, String> {
+        account_id(key_for(app)?, token).map_err(|e| e.to_string())
     }
 
-    fn remote(&self, token: &RefreshToken) -> Result<Arc<dyn RemoteStore>, String> {
-        Ok(Arc::new(DropboxRemote::new(&self.key()?, token)))
+    fn remote(
+        &self,
+        app: Option<&str>,
+        token: &RefreshToken,
+    ) -> Result<Arc<dyn RemoteStore>, String> {
+        Ok(Arc::new(DropboxRemote::new(key_for(app)?, token)))
     }
 
-    fn revoke(&self, token: &RefreshToken) -> Result<(), String> {
-        revoke(&self.key()?, token).map_err(|e| e.to_string())
+    fn revoke(&self, app: Option<&str>, token: &RefreshToken) -> Result<(), String> {
+        revoke(key_for(app)?, token).map_err(|e| e.to_string())
     }
 }

@@ -100,6 +100,10 @@ pub struct Connection {
     pub url: Url,
     /// What the redirect must echo back as `state`.
     pub state: String,
+    /// The app the grant will be for, when the provider has one per build or
+    /// per user. Saved with the login; every later use of the token goes
+    /// through this app, never the one configured now.
+    pub app: Option<String>,
     pub redeem: Redeem,
 }
 
@@ -138,10 +142,21 @@ pub trait Provider: Send + Sync {
     /// per connection, after the code is redeemed, and saved with the login:
     /// sync state describes one account's remote, so a different account of
     /// the same provider must start from a clean state. Blocks on the network.
-    fn account(&self, token: &RefreshToken) -> Result<String, String>;
+    ///
+    /// `app` is the [`Connection::app`] the token was granted under.
+    fn account(&self, app: Option<&str>, token: &RefreshToken) -> Result<String, String>;
 
-    /// The remote for an account that has been connected.
-    fn remote(&self, token: &RefreshToken) -> Result<Arc<dyn RemoteStore>, String>;
+    /// The remote for an account that has been connected. `app` is the one
+    /// saved with the login.
+    ///
+    /// `install` calls this *before* taking the `lifecycle` lock, so it must
+    /// not block on the network, and may read settings without inverting the
+    /// lock order (see `settings.rs`).
+    fn remote(
+        &self,
+        app: Option<&str>,
+        token: &RefreshToken,
+    ) -> Result<Arc<dyn RemoteStore>, String>;
 
     /// Revokes `token` at the provider, so a login this app no longer uses
     /// stops working there too (SEC-2).
@@ -150,8 +165,8 @@ pub trait Provider: Send + Sync {
     /// the caller, never surfaced to the user — the local disconnect or
     /// reconnect has already succeeded by the time this runs. The default does
     /// nothing, for a provider with no revoke endpoint.
-    fn revoke(&self, token: &RefreshToken) -> Result<(), String> {
-        let _ = token;
+    fn revoke(&self, app: Option<&str>, token: &RefreshToken) -> Result<(), String> {
+        let _ = (app, token);
         Ok(())
     }
 }
@@ -348,7 +363,7 @@ impl SyncControl {
         let spawned = thread::Builder::new()
             .name("sync-revoke".to_owned())
             .spawn(move || {
-                if let Err(e) = provider.revoke(&credential.token) {
+                if let Err(e) = provider.revoke(credential.app.as_deref(), &credential.token) {
                     log::warn!("could not revoke the old {} login: {e}", provider.name());
                 }
             });
@@ -435,15 +450,25 @@ impl SyncControl {
         let provider = self.provider(provider_id)?;
         let port = provider.redirect_port().unwrap_or(0);
         let (listener, redirect_uri) = oauth::bind(port, provider.name())?;
-        let Connection { url, state, redeem } = provider.begin(&redirect_uri)?;
+        let Connection {
+            url,
+            state,
+            app,
+            redeem,
+        } = provider.begin(&redirect_uri)?;
         (cfg.open_url)(&url).map_err(|e| format!("could not open the browser: {e}"))?;
         let code = oauth::await_code(&listener, &state, LOGIN_TIMEOUT, provider.name())?;
         drop(listener);
         let token = redeem(&code)?;
-        let account = provider.account(&token)?;
-        let credential = Credential::new(provider.id(), token)
+        let account = provider.account(app.as_deref(), &token)?;
+        let mut credential = Credential::new(provider.id(), token)
             .try_with_account(account)
             .ok_or_else(|| format!("{} returned an unusable account id", provider.name()))?;
+        if let Some(app) = app {
+            credential = credential
+                .try_with_app(app)
+                .ok_or_else(|| format!("{} returned an unusable app id", provider.name()))?;
+        }
 
         // Read before `install` so a failed install (the old login may still
         // be the one in use) revokes nothing.
@@ -497,7 +522,8 @@ impl SyncControl {
     ///
     /// The engine's state — a cursor and revisions — describes one account's
     /// remote, so it is kept only while that account stays the one: the same
-    /// provider *and* the same account id. Replacing a running worker
+    /// provider, the same account id *and* the same app (another app is
+    /// another app folder). Replacing a running worker
     /// (reconnecting after a revoked login) and `resuming` in a new run of an
     /// account that was already connected keep it. Anything else throws it
     /// away: connecting from nothing, to a different provider, or as a
@@ -512,17 +538,23 @@ impl SyncControl {
         login: Login,
     ) -> Result<Arc<Worker>, String> {
         let cfg = &self.config;
+        // Resolved before `turn()`: a provider's `remote` may read settings,
+        // and `DeviceSettingsState::update` holds those while it waits for the
+        // `lifecycle` lock. It also fails before anything is stopped, erased
+        // or saved.
+        let remote = provider.remote(credential.app.as_deref(), &credential.token)?;
         let _turn = self.turn();
 
         let keep_state = match login {
             Login::Saved => true,
             // Unreadable counts as different, and so does a saved login with
-            // no account recorded: losing the state is safe.
+            // no account or no app recorded: losing the state is safe.
             Login::New => matches!(
                 cfg.credentials.load(),
                 Ok(Some(saved)) if saved.provider == credential.provider
                     && saved.account.is_some()
                     && saved.account == credential.account
+                    && saved.app == credential.app
             ),
         };
         if let Some(old) = cfg.slot.take() {
@@ -543,7 +575,6 @@ impl SyncControl {
                 .map_err(|e| e.to_string())?;
         }
 
-        let remote = provider.remote(&credential.token)?;
         let poke = self.coalescer.poker();
         let on_status = {
             let poke = poke.clone();

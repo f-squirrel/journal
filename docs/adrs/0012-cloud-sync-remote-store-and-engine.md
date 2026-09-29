@@ -52,11 +52,14 @@ Two parts that were not in the original plan are also part of this decision:
   lists the providers it offers. Adding one means an adapter crate, one file
   under `src-tauri/src/sync/`, and one line in `lib.rs`.
 - **A provider-neutral login** (`journal-credential`). The saved login holds
-  the refresh token, the provider's id and the account's id, in a 0600 file
-  outside the synced store. The engine's state (a cursor and bases) describes
-  one account's remote. It is kept only while the provider and the account
-  both stay the same. Kept across accounts, the new folder's listing would
-  read as every entry deleted.
+  the refresh token, the provider's id, the account's id and the app (OAuth
+  client) it was granted to, in a 0600 file outside the synced store. The token
+  is used, checked and revoked only under that app, never the one configured
+  now. The engine's state (a cursor and bases) describes one account's remote.
+  It is kept only while the provider, the account and the app all stay the
+  same. Kept across accounts, the new folder's listing would read as every
+  entry deleted. (Amended 2026-09-29: the app was added; a Dropbox login saved
+  without one must be connected again.)
 
 ## Reasons
 

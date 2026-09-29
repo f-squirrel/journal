@@ -24,6 +24,11 @@
 //! the interval actually changed, `lifecycle` is not held across network I/O
 //! (the browser wait in `connect` excepted, which is not on this path), and
 //! settings changes are rare and user-initiated.
+//!
+//! The lock order is therefore always the device lock (`current`), then
+//! `lifecycle`. Nothing that runs under `lifecycle` may take `current`: that is
+//! why `SyncControl::install` resolves the provider's remote before taking
+//! `lifecycle`, and why the Dropbox key source is never called from `install`.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};

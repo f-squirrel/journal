@@ -81,3 +81,7 @@ Images are stored as immutable encrypted blobs owned by their entry
   original is untouched.
 - **Images added before thumbnails existed** have none: the read view decrypts
   their original.
+- **A failed sync resume says nothing in the UI.** If the saved login cannot
+  be resumed at launch (for example a Dropbox login saved before the app key
+  was stored with it), sync stays off and the reason is only in the log.
+  Settings › Sync then offers Connect, and connecting again fixes it.

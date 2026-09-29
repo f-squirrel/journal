@@ -7,9 +7,9 @@
 //! API: the adapters (`journal-dropbox`) mint and use the token, and
 //! `src-tauri` decides when to save it.
 //!
-//! The provider id and the account id are stored *with* the token, in one
-//! file, so that "which account is connected" and "what it is logged in with"
-//! cannot disagree.
+//! The provider id, the account id and the app id are stored *with* the token,
+//! in one file, so that "which account is connected", "which app it was
+//! granted to" and "what it is logged in with" cannot disagree.
 
 #![cfg_attr(all(test, coverage_nightly), feature(coverage_attribute))]
 
@@ -58,6 +58,11 @@ pub struct Credential {
     /// known. `None` for a login saved before accounts were recorded; the app
     /// treats that as "some other account". Never contains a newline.
     pub account: Option<String>,
+    /// The id of the provider's app (OAuth client) the token was granted to,
+    /// when the provider has one. A token works only with the app that minted
+    /// it, so the app uses this and never its current setting. Never contains
+    /// a newline.
+    pub app: Option<String>,
 }
 
 impl Credential {
@@ -75,6 +80,7 @@ impl Credential {
             provider,
             token,
             account: None,
+            app: None,
         }
     }
 
@@ -106,6 +112,33 @@ impl Credential {
         let account = account.into();
         is_one_line(&account).then(|| Self {
             account: Some(account),
+            ..self
+        })
+    }
+
+    /// The same credential, granted to the app the provider calls `app`.
+    ///
+    /// # Panics
+    ///
+    /// If `app` is empty or contains a newline.
+    pub fn with_app(self, app: impl Into<String>) -> Self {
+        let app = app.into();
+        assert!(
+            is_one_line(&app),
+            "an app id is one non-empty line, not {app:?}"
+        );
+        Self {
+            app: Some(app),
+            ..self
+        }
+    }
+
+    /// The same credential for `app`, or `None` if it cannot be stored on one
+    /// line. The fallible sibling of [`Self::with_app`].
+    pub fn try_with_app(self, app: impl Into<String>) -> Option<Self> {
+        let app = app.into();
+        is_one_line(&app).then(|| Self {
+            app: Some(app),
             ..self
         })
     }
@@ -156,7 +189,8 @@ pub enum CredentialStoreError {
 
 /// A [`CredentialStore`] that keeps the credential in one file, readable by its
 /// owner alone: the provider id on the first line, the token on the second,
-/// and the account id, when there is one, on the third.
+/// the account id, when there is one, on the third (empty when only the app is
+/// known), and the app id, when there is one, on the fourth.
 ///
 /// The refresh token is the only secret kept. The providers we know of do not
 /// rotate it, so there is nothing to save after a refresh.
@@ -218,6 +252,7 @@ impl CredentialStore for FileCredentialStore {
         let provider = lines.next().filter(|line| !line.is_empty());
         let token = lines.next().filter(|line| !line.is_empty());
         let account = lines.next().filter(|line| !line.is_empty());
+        let app = lines.next().filter(|line| !line.is_empty());
         let rest = lines.find(|line| !line.is_empty());
         // Validated before constructing: `str::lines` strips a `\r` only
         // before a `\n` and `trim` only at the ends, so an interior one reaches
@@ -227,13 +262,17 @@ impl CredentialStore for FileCredentialStore {
             (Some(provider), Some(token), None)
                 if is_one_line(provider)
                     && is_one_line(token)
-                    && account.is_none_or(is_one_line) =>
+                    && account.is_none_or(is_one_line)
+                    && app.is_none_or(is_one_line) =>
             {
-                let credential = Credential::new(provider, RefreshToken::new(token));
-                Some(match account {
-                    Some(account) => credential.with_account(account),
-                    None => credential,
-                })
+                let mut credential = Credential::new(provider, RefreshToken::new(token));
+                if let Some(account) = account {
+                    credential = credential.with_account(account);
+                }
+                if let Some(app) = app {
+                    credential = credential.with_app(app);
+                }
+                Some(credential)
             }
             _ => None,
         };
@@ -270,9 +309,13 @@ impl CredentialStore for FileCredentialStore {
             file.write_all(credential.provider.as_bytes())?;
             file.write_all(b"\n")?;
             file.write_all(credential.token.expose().as_bytes())?;
-            if let Some(account) = &credential.account {
+            if credential.account.is_some() || credential.app.is_some() {
                 file.write_all(b"\n")?;
-                file.write_all(account.as_bytes())?;
+                file.write_all(credential.account.as_deref().unwrap_or("").as_bytes())?;
+            }
+            if let Some(app) = &credential.app {
+                file.write_all(b"\n")?;
+                file.write_all(app.as_bytes())?;
             }
             file.sync_all()?;
             fs::rename(&temp, &self.path)
@@ -468,8 +511,70 @@ mod tests {
         assert!(!error.contains("just-a-token"), "{error}");
 
         // Nor is a file with more lines than any version wrote.
-        fs::write(store.path(), "dropbox\ntoken\naccount\nmore").unwrap();
+        fs::write(store.path(), "dropbox\ntoken\naccount\napp\nmore").unwrap();
         assert!(store.load().is_err());
+    }
+
+    #[test]
+    fn the_app_round_trips_with_and_without_an_account() {
+        let store = store();
+        store
+            .save(
+                &credential("dropbox", "refresh-1")
+                    .with_account("dbid:A")
+                    .with_app("key-1"),
+            )
+            .unwrap();
+        let loaded = store.load().unwrap().unwrap();
+        assert_eq!(loaded.account.as_deref(), Some("dbid:A"));
+        assert_eq!(loaded.app.as_deref(), Some("key-1"));
+
+        store
+            .save(&credential("dropbox", "refresh-1").with_app("key-1"))
+            .unwrap();
+        assert_eq!(
+            fs::read_to_string(store.path()).unwrap(),
+            "dropbox\nrefresh-1\n\nkey-1"
+        );
+        let loaded = store.load().unwrap().unwrap();
+        assert_eq!(loaded.account, None);
+        assert_eq!(loaded.app.as_deref(), Some("key-1"));
+    }
+
+    #[test]
+    fn a_file_without_an_app_line_loads_with_no_app() {
+        let store = store();
+        store.save(&credential("dropbox", "x")).unwrap();
+        fs::write(store.path(), "dropbox\nrefresh-1\ndbid:A\n").unwrap();
+
+        let loaded = store.load().unwrap().unwrap();
+
+        assert_eq!(loaded.account.as_deref(), Some("dbid:A"));
+        assert_eq!(loaded.app, None);
+    }
+
+    #[test]
+    fn try_with_app_refuses_an_unusable_id() {
+        for bad in ["", "   ", "key\rA", "key\nA"] {
+            assert!(
+                credential("dropbox", "refresh-1")
+                    .try_with_app(bad)
+                    .is_none(),
+                "{bad:?}"
+            );
+        }
+
+        let ok = credential("dropbox", "refresh-1")
+            .try_with_app("key-1")
+            .unwrap();
+        assert_eq!(ok.app.as_deref(), Some("key-1"));
+        assert_eq!(ok.token.expose(), "refresh-1");
+    }
+
+    #[test]
+    fn the_app_does_not_unhide_the_token() {
+        let debug = format!("{:?}", credential("dropbox", "hunter2").with_app("key-1"));
+        assert!(!debug.contains("hunter2"));
     }
 
     #[test]
@@ -483,6 +588,7 @@ mod tests {
             "drop\rbox\nrefresh-1\n",
             "dropbox\nrefresh\r-1\n",
             "dropbox\nrefresh-1\ndbid\r:A\n",
+            "dropbox\nrefresh-1\ndbid:A\nap\rp\n",
         ] {
             fs::write(store.path(), damaged).unwrap();
 
