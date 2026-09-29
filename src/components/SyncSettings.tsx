@@ -16,30 +16,12 @@ import { errorMessage } from "../utils/errors";
 import { pendingCount, syncSummary } from "../utils/sync";
 import { rem } from "./chrome";
 import DropboxSettings from "./DropboxSettings";
+import { NEVER, minutesLabel, withCurrent } from "./minutesSelect";
 
 type Busy = "connect" | "sync" | "disconnect" | null;
 
 /// Minutes offered for the periodic sync check. `null` is "only when I sync".
 const SYNC_INTERVAL_OPTIONS: readonly (number | null)[] = [1, 5, 15, 60, null];
-/// `null` travels as this string between the select and the setting.
-const NEVER = "never";
-
-function minutesLabel(minutes: number): string {
-  return minutes === 1 ? "1 minute" : `${minutes} minutes`;
-}
-
-/// `options` plus `current`, if it isn't one of them, sorted back into place
-/// with `null` last: the backend accepts any value in its range, so one set
-/// some other way still shows as selected.
-function withCurrent(
-  options: readonly (number | null)[],
-  current: number | null,
-): (number | null)[] {
-  if (current === null || options.includes(current)) return [...options];
-  const numbers = options.filter((o): o is number => o !== null);
-  const sorted: (number | null)[] = [...numbers, current].sort((a, b) => a - b);
-  return [...sorted, null];
-}
 
 /// Settings › Sync: the connection and its status, when to check, the
 /// providers, and each provider's own settings.

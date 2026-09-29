@@ -22,6 +22,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import ShortcutsDialog from "../components/ShortcutsDialog";
 import SyncSettings from "../components/SyncSettings";
 import { HEADER_HEIGHT, READING_WIDTH, TYPE, rem } from "../components/chrome";
+import { NEVER, minutesLabel, withCurrent } from "../components/minutesSelect";
 import { useAppState } from "../context/AppStateContext";
 import { useSettings } from "../context/SettingsContext";
 import type { ColorMode, SettingsPatch, TimeFormat, WeekStart } from "../types";
@@ -31,32 +32,6 @@ const ENTRY_TEMPLATE_LIMIT = 10_000;
 
 /// Minutes offered for the idle lock. `null` is "Never".
 const IDLE_LOCK_OPTIONS: readonly (number | null)[] = [1, 5, 15, 30, 60, null];
-
-/// A `Select`-flavoured `TextField` whose value is `number | null`: MUI's
-/// `Select` wants a primitive it can compare by `===`, and `null` fails that
-/// silently (the menu just shows nothing selected), so `null` travels as the
-/// sentinel string `"never"` between the field and the caller.
-const NEVER = "never";
-
-function minutesLabel(minutes: number): string {
-  return minutes === 1 ? "1 minute" : `${minutes} minutes`;
-}
-
-/// `options` plus `current`, if it isn't already one of them — sorted back
-/// into place, `null` (always "Never") last. The backend
-/// accepts any value in its range (1..=240), not just the handful
-/// this page offers by default, so a value set some other way (an older
-/// build, a future one, directly through `update_settings`) still shows as a
-/// selected option instead of leaving the field blank.
-function withCurrent(
-  options: readonly (number | null)[],
-  current: number | null,
-): (number | null)[] {
-  if (current === null || options.includes(current)) return [...options];
-  const numbers = options.filter((o): o is number => o !== null);
-  const sorted: (number | null)[] = [...numbers, current].sort((a, b) => a - b);
-  return [...sorted, null];
-}
 
 export default function SettingsPage() {
   const theme = useTheme();
