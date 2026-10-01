@@ -108,6 +108,9 @@ Backend:
   `crates/vault/src/owned.rs`. The sync engine's `immutable` predicate
   (`is_media`) means a name in it must never be rewritten with different
   content.
+- Connecting probes the cloud's key first (`probe_key`); the only way to
+  replace a local journal is `SyncControl::adopt_remote`, which erases sync
+  state *before* moving the journal aside, and never deletes it.
 - Search decrypts on every call, no index (ADR 0014) — don't add one without
   measurements.
 - Keep the `dropbox_sdk::oauth2` log target at `info`+ (it logs tokens).

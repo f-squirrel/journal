@@ -40,7 +40,8 @@ applies:
   not lose text.
 - **D5: `.vault-key` is never merged.** If this device and the remote hold
   different keys, sync stops with `KeyMismatch` and changes nothing. Choosing
-  which journal to keep is not built yet (`docs/known-issues.md`).
+  which journal to keep is the user's, through the switch described in the
+  2026-10-01 amendment below.
 - **D8: the trait and the engine are synchronous.** The engine runs on its
   own thread. Each adapter hides its client: Dropbox uses the official
   `dropbox-sdk` on its blocking `ureq` routes, with no tokio in its tree.
@@ -121,3 +122,22 @@ text is lost. D1 is unchanged for the resolver. One known limit: the check and
 the write are not atomic against the engine's pulls, which write beneath the
 vault, so a pull landing in that window of a few milliseconds is still
 overwritten.
+
+## Amendment — 2026-10-01: choosing which journal to keep
+
+D5 stays: the engine never merges keys. What was missing was a way out. Connecting
+now calls `probe_key` (read-only, same sealed-bytes rule as `sync_key`) before
+saving the login. If both sides hold different keys, the login stays in memory
+and the user chooses: cancel, export, or "use the cloud's journal"
+(`SyncControl::adopt_remote`). Replacing the cloud's journal with this device's
+stays ruled out: it would destroy what other devices wrote.
+
+Switching moves the local journal to `entries.backup-<timestamp>` (never
+deleted, no restore UI) and the first pass downloads the cloud's. The step order
+is the decision: lock the vault and wait for commands still using it, erase the
+sync state, save the new login, move the journal, start the worker. State must
+go *before* the move, because state next to an empty journal reads as every blob
+deleted and the pass would delete them from the cloud. A crash after any step
+leaves either the old journal with a halting key mismatch or an empty journal
+that downloads. The same switch is offered while sync is halted on
+`key_mismatch`.
