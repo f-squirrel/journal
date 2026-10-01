@@ -1874,10 +1874,8 @@ fn moving_a_missing_journal_reports_no_backup() {
 #[test]
 fn cloud_has_journal_reports_the_remote_key() {
     let (_remote, _fake, local) = cloud_and_local();
-    assert_eq!(
-        local.control.cloud_has_journal().unwrap_err(),
-        "Nothing is connected."
-    );
+    // Nothing connected: no cloud to ask, nothing is on its way.
+    assert!(!local.control.cloud_has_journal().unwrap());
 
     // Connected, with the cloud's journal arriving: true.
     local.connect_outcome();

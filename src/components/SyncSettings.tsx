@@ -66,10 +66,15 @@ export default function SyncSettings() {
   const connect = (id: string) =>
     run("connect", () => {
       setConnecting(id);
+      // Cleared as a connect starts: a second one discards the login the
+      // panel is about to ask about, so the panel must not outlive it.
+      setDifferentFrom(null);
       return connectSync(id).then((outcome) => {
-        if (outcome === "different_journal") {
-          setDifferentFrom(providers.find((p) => p.id === id)?.name ?? id);
-        }
+        setDifferentFrom(
+          outcome === "different_journal"
+            ? (providers.find((p) => p.id === id)?.name ?? id)
+            : null,
+        );
       });
     });
 

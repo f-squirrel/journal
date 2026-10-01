@@ -580,6 +580,7 @@ function snippet(markdown: string, needle: string): string {
 //                     has arrived (it comes 1.5 s later), so the login screen
 //                     can be seen waiting
 //   ?fail=cloud_has_journal  the login screen's check of the cloud rejects
+//                     while connected (nothing connected makes no call)
 //   ?fail=sync        every pass fails: the ids stay pending, and the state is
 //                     `offline` with the fault message
 //   ?fail=connect     connecting is refused
@@ -917,8 +918,10 @@ export function discardPendingConnection(): Promise<void> {
 }
 
 export function cloudHasJournal(): Promise<boolean> {
+  // Nothing connected: no cloud to ask, so nothing is on its way, and no
+  // network call for a fault to hit.
+  if (!connected) return Promise.resolve(false);
   return run("cloud_has_journal", () => {
-    if (!connected) throw "Nothing is connected.";
     // Connecting always brings the key (see `connectRemote`), so a cloud with
     // no journal is only one that has nothing on its way.
     return arriving || vaultPresent;

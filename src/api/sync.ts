@@ -49,7 +49,8 @@ export async function discardPendingConnection(): Promise<void> {
 }
 
 /// Whether the connected cloud holds a journal, which may still be on its way
-/// to this device. Rejects when it cannot tell.
+/// to this device. Resolves false when nothing is connected; rejects when it
+/// cannot tell.
 export async function cloudHasJournal(): Promise<boolean> {
   if (backend) return invoke("cloud_has_journal");
   return (await fallback()).cloudHasJournal();

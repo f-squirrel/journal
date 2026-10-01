@@ -19,6 +19,7 @@ import { test, expect, type Page } from "./coverage";
 //   ?slow=adopt                 the switch resolves before the journal has
 //                               arrived (1.5 s later)
 //   ?fail=cloud_has_journal     the login screen's check of the cloud rejects
+//                               while connected
 //   ?fail=sync                  every pass fails
 //   ?fail=connect               connecting is refused
 //   ?slow=sync                  a pass starts after 1.2 s, long enough to see
@@ -632,6 +633,34 @@ test("the login screen waits for a journal still downloading", async ({
   // The journal arrives, and the form becomes a sign-in.
   await expect(page.getByRole("button", { name: "Sign in" })).toBeVisible();
   await expect(waiting).toHaveCount(0);
+});
+
+test("the waiting notice always offers Disconnect", async ({ page }) => {
+  await login(page, "?sync=other_journal&slow=adopt");
+  await connectDropbox(page);
+  await switchToCloud(page);
+
+  const waiting = page.getByTestId("awaiting-cloud-journal");
+  await expect(waiting).toContainText("Waiting for your journal to arrive");
+  await expect(
+    waiting.getByRole("button", { name: "Disconnect" }),
+  ).toBeVisible();
+});
+
+test("a second connect clears the different-journal panel", async ({
+  page,
+}) => {
+  // The first connect finds the other journal; the second is refused. The
+  // backend dropped the pending login at the start of the second, so the
+  // panel (which would act on it) must be gone.
+  await login(page, "?sync=other_journal&fail=connect&failAfter=1");
+  await connectDropbox(page);
+  await expect(panel(page)).toBeVisible();
+
+  await dropboxRow(page)
+    .getByRole("button", { name: "Connect", exact: true })
+    .click();
+  await expect(panel(page)).toHaveCount(0);
 });
 
 test("the login screen never offers creation when the check fails", async ({

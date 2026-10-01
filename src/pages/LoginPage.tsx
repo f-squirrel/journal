@@ -44,11 +44,12 @@ export default function LoginPage() {
   // page, with a restart as the only way back into the app.
   const [checkAttempt, setCheckAttempt] = useState(0);
   const [checkFailed, setCheckFailed] = useState(false);
-  // Whether the connected cloud holds a journal that is on its way here, which
-  // the backend knows and a frontend flag would forget on a restart. null
-  // until it answers; "error" when it cannot (offline, or nothing connected
-  // after all). Neither of those ever offers to create a journal: a journal
-  // made now would be a third one.
+  // Whether a journal is on its way here from the cloud, which the backend
+  // knows (from the saved login, so it holds even when the sync worker failed
+  // to start) and a frontend flag would forget on a restart. false when
+  // nothing is connected. null until it answers, which counts as pending (no
+  // form, no notice); "error" when it cannot (offline). Neither of those ever
+  // offers to create a journal: a journal made now would be a third one.
   const [cloudJournal, setCloudJournal] = useState<boolean | null | "error">(
     null,
   );
@@ -86,11 +87,18 @@ export default function LoginPage() {
     };
   }, [checkAttempt]);
 
-  const syncConnected = syncLoaded && sync.state !== "off";
+  // Asked whenever there is no vault, not only while sync is on: a switch
+  // whose worker failed to start leaves the status `off` with the login saved.
+  // Asked again when `sync.state` changes, so a Disconnect re-asks; the old
+  // answer stands until the new one lands, so a download does not flicker.
+  // Not gated on `syncLoaded`: the backend reads the saved login itself, and a
+  // status that never loads must not leave this page checking forever.
   useEffect(() => {
-    if (vaultExists !== false || !syncConnected) return;
-    let cancelled = false;
     setCloudJournal(null);
+  }, [vaultExists]);
+  useEffect(() => {
+    if (vaultExists !== false) return;
+    let cancelled = false;
     cloudHasJournal()
       .then((has) => {
         if (!cancelled) setCloudJournal(has);
@@ -102,9 +110,10 @@ export default function LoginPage() {
     return () => {
       cancelled = true;
     };
-  }, [vaultExists, syncConnected]);
+  }, [vaultExists, sync.state]);
   const awaitingJournal =
-    vaultExists === false && syncConnected && cloudJournal !== false;
+    vaultExists === false &&
+    (cloudJournal === true || cloudJournal === "error");
 
   // The journal arrives through a pass: ask again whenever one reports.
   useEffect(() => {
@@ -136,7 +145,8 @@ export default function LoginPage() {
   // `isNewVault` drive the rendering would flash the confirm field, the
   // warning and "Create vault" on every launch until `has_vault` answers,
   // which trains a returning user to ignore the one warning that matters.
-  const pending = vaultExists === null;
+  const pending =
+    vaultExists === null || (vaultExists === false && cloudJournal === null);
 
   /// The second device's way in: connect the account, which runs a pass, and
   /// the journal's key arrives with it. Asking again then finds a vault, and
@@ -298,15 +308,15 @@ export default function LoginPage() {
               severity="info"
               data-testid="awaiting-cloud-journal"
               action={
-                cloudJournal === "error" ? (
-                  <Button
-                    color="inherit"
-                    size="small"
-                    onClick={() => void disconnectSync().catch(() => {})}
-                  >
-                    Disconnect
-                  </Button>
-                ) : undefined
+                // Always offered: a first pass that keeps failing for a local
+                // reason would otherwise trap the user here.
+                <Button
+                  color="inherit"
+                  size="small"
+                  onClick={() => void disconnectSync().catch(() => {})}
+                >
+                  Disconnect
+                </Button>
               }
             >
               Waiting for your journal to arrive from{" "}

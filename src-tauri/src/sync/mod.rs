@@ -542,14 +542,13 @@ impl SyncControl {
 
     /// Whether the connected cloud holds a journal (a key). Answers `true` for
     /// anything but an empty cloud, so the login screen never offers to create
-    /// a journal while one is on its way. Takes no lock and writes nothing.
+    /// a journal while one is on its way, and `false` with no saved login
+    /// (there is no cloud to ask). Takes no lock and writes nothing.
     pub fn cloud_has_journal(&self) -> Result<bool, String> {
         let cfg = &self.config;
-        let credential = cfg
-            .credentials
-            .load()
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| NOTHING_CONNECTED.to_owned())?;
+        let Some(credential) = cfg.credentials.load().map_err(|e| e.to_string())? else {
+            return Ok(false);
+        };
         let provider = self.provider(&credential.provider)?;
         let remote = provider.remote(credential.app.as_deref(), &credential.token)?;
         let probe = probe_key(&*cfg.local, &*remote).map_err(|e| e.to_string())?;
@@ -559,10 +558,11 @@ impl SyncControl {
     /// Switches this device to the cloud's journal: this device's journal is
     /// moved aside (never deleted), and the first pass downloads the cloud's.
     ///
-    /// `Err` means nothing changed: the journal is in place, the saved login
-    /// and the engine state are as they were, the vault is unlocked again and
-    /// a pending login is still pending. `Ok` means the journal was moved and
-    /// the vault is locked, even when a later step failed (`ready: false`).
+    /// `Err` means the journal is in place, the saved login and the vault are
+    /// as they were (unlocked again) and a pending login is still pending. The
+    /// sync state may have been cleared, which only costs the next pass a full
+    /// comparison. `Ok` means the journal was moved and the vault is locked,
+    /// even when a later step failed (`ready: false`).
     ///
     /// The order is chosen so that a failure, or a crash, after any step
     /// leaves something the next launch handles safely: the state is erased
@@ -598,8 +598,8 @@ impl SyncControl {
         lock_vault: &dyn Fn() -> Result<VaultUndo, String>,
     ) -> Result<(Option<Arc<Worker>>, Option<String>), String> {
         let cfg = &self.config;
-        let old = cfg.credentials.load().map_err(|e| e.to_string())?;
-        let credential = match (pending, &old) {
+        let seen = cfg.credentials.load().map_err(|e| e.to_string())?;
+        let credential = match (pending, &seen) {
             (Some(pending), _) => pending.clone(),
             (None, Some(saved)) => saved.clone(),
             (None, None) => return Err(NOTHING_CONNECTED.to_owned()),
@@ -612,6 +612,16 @@ impl SyncControl {
         }
 
         let _turn = self.turn();
+        // Read again under the turn: a disconnect or another connect may have
+        // run since the probe.
+        let old = cfg.credentials.load().map_err(|e| e.to_string())?;
+        if pending.is_none()
+            && old
+                .as_ref()
+                .is_none_or(|saved| saved.token.expose() != credential.token.expose())
+        {
+            return Err("The connection changed. Try again.".to_owned());
+        }
         let undo = lock_vault()?;
         let had_worker = cfg.slot.take();
         if let Some(worker) = &had_worker {
