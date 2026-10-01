@@ -16,6 +16,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - run: rustc --version
       - uses: Swatinem/rust-cache@v2
 
       # Cheap, needs no system libraries, and is the most likely thing to be
@@ -23,19 +24,10 @@ jobs:
       - name: Check src/bindings is not stale
         run: make check-bindings
 
-      # Tauri v2 on Ubuntu 24.04. Only `src-tauri` needs these; the other
-      # crates build without them.
+      # Tauri v2 system libraries; the package list lives in scripts/setup.sh.
+      # Only `src-tauri` needs them; the other crates build without them.
       - name: Install Tauri system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            libxdo-dev \
-            libssl-dev \
-            build-essential \
-            curl wget file
+        run: scripts/setup.sh --system
 
       - run: make rust-test
 
@@ -46,7 +38,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version-file: .nvmrc
           cache: npm
 
       - run: npm ci

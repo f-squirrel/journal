@@ -1,0 +1,62 @@
+name: setup
+
+# Proves `make setup` alone takes a clean machine to a working build: no
+# setup-node or rust-toolchain action on purpose.
+#
+# The repository is private for now, where macOS minutes bill at 10x. Until the
+# repository variable FULL_MACOS is `true` the macOS leg only runs
+# `cargo check` and skips e2e, and the push and schedule triggers are inert.
+# Set FULL_MACOS to true once the repository is public; macOS minutes are then
+# free.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - scripts/setup.sh
+      - Brewfile
+      - rust-toolchain.toml
+      - .nvmrc
+      - Makefile
+      - .github/workflows/setup.yml
+  push:
+    branches: [main, develop]
+  schedule:
+    - cron: "17 5 * * 1"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  setup:
+    name: setup (${{ matrix.os }})
+    if: vars.FULL_MACOS == 'true' || github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - run: make setup
+      # A second run proves idempotence.
+      - run: make setup
+      - name: Put cargo and node on PATH for later steps
+        run: |
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          if [ "$(uname -s)" = Darwin ]; then
+            echo "$(brew --prefix node@$(cat .nvmrc))/bin" >> "$GITHUB_PATH"
+          fi
+      - run: make check-bindings
+      - run: npm run build
+      - run: make check-no-fallback
+
+      - if: runner.os == 'Linux' || vars.FULL_MACOS == 'true'
+        run: make rust-test
+      - if: runner.os == 'Linux' || vars.FULL_MACOS == 'true'
+        run: make test-e2e
+      # Compiles the Tauri crate against the macOS toolchain and system WebKit
+      # for a fraction of the build time.
+      - if: runner.os == 'macOS' && vars.FULL_MACOS != 'true'
+        run: cargo check --workspace

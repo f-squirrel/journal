@@ -13,6 +13,8 @@ change drops local data, say so and confirm with the user.
 
 ## Commands
 
+- `make setup` — install system packages, Rust, Node deps and Playwright
+  (`scripts/setup.sh`, idempotent; `--coverage` adds the nightly tooling).
 - `make run` — full Tauri app (regenerates `src/bindings/` first). Primary
   way to see real behavior; `npm run dev` is the browser-only frontend.
 - `make build` — native installers; fails if `src/bindings/` is stale.

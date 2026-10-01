@@ -30,6 +30,14 @@ Google Drive, iCloud, iOS, and Android support are planned.
 
 ### Prerequisites
 
+Run `make setup` (or `scripts/setup.sh`). It installs everything below on
+macOS (needs [Homebrew](https://brew.sh); prompts for the Xcode command line
+tools) and Debian/Ubuntu (uses `sudo` for apt), and is safe to re-run. It also
+takes `--system`, `--rust`, `--js` and `--coverage` to run single steps;
+`make coverage` needs `scripts/setup.sh --coverage` once.
+
+To set up by hand instead:
+
 - [Node.js 22](https://nodejs.org/) and npm
 - The [stable Rust toolchain](https://rustup.rs/)
 - GNU Make

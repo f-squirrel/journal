@@ -1,4 +1,9 @@
-.PHONY: run build test rust-test test-e2e bindings check-bindings check-no-fallback format rust-format ts-format coverage-rust coverage-web coverage coverage-summary coverage-open
+.PHONY: setup run build test rust-test test-e2e bindings check-bindings check-no-fallback format rust-format ts-format coverage-rust coverage-web coverage coverage-summary coverage-open
+
+# Install everything needed to build, test and run the app; see
+# scripts/setup.sh. Idempotent.
+setup:
+	scripts/setup.sh
 
 # Regenerate first: launching the app against stale bindings is how a broken
 # `invoke` bridge stays invisible (`tsc` passes, the command fails at runtime).
@@ -28,9 +33,9 @@ bindings:
 # Fail if the committed bindings are stale. Without this the generated types
 # silently drift from the Rust ones and `tsc` stops catching bridge mismatches.
 check-bindings:
-	@before=$$(cat src/bindings/*.ts 2>/dev/null | sha256sum); \
+	@before=$$(cat src/bindings/*.ts 2>/dev/null | cksum); \
 	 $(MAKE) --no-print-directory bindings >/dev/null; \
-	 after=$$(cat src/bindings/*.ts 2>/dev/null | sha256sum); \
+	 after=$$(cat src/bindings/*.ts 2>/dev/null | cksum); \
 	 test "$$before" = "$$after" \
 	   || { echo "src/bindings was stale; regenerated — commit the result."; exit 1; }
 
@@ -70,8 +75,7 @@ format: rust-format ts-format
 # `build.rs`, `MemoryRemote` (test support behind the `testing` feature) and
 # the `main.rs` shim. `clean` first, so a stale profile cannot leak in. The
 # lcov file's paths are made repo-relative, as Codecov expects.
-# One-time setup: `cargo binstall cargo-llvm-cov` and
-# `rustup component add llvm-tools-preview --toolchain nightly`.
+# One-time setup: `scripts/setup.sh --coverage`.
 COV_TOOLCHAIN ?= +nightly
 COV_IGNORE := (^|/)(tests|examples|benches)/|(^|/)build\.rs$$|crates/remote/src/memory\.rs$$|src-tauri/src/main\.rs$$
 
