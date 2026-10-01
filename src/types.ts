@@ -12,6 +12,8 @@ export type { Entry as JournalEntry } from "./bindings/Entry";
 export type { SearchMatch } from "./bindings/SearchMatch";
 export type { SyncStatusPayload } from "./bindings/SyncStatusPayload";
 export type { SyncState } from "./bindings/SyncState";
+export type { ConnectOutcome } from "./bindings/ConnectOutcome";
+export type { AdoptedJournal } from "./bindings/AdoptedJournal";
 export type { ProviderInfo } from "./bindings/ProviderInfo";
 export type { Settings } from "./bindings/Settings";
 export type { DeviceSettings } from "./bindings/DeviceSettings";

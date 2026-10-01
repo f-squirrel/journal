@@ -93,13 +93,17 @@ pub fn run() {
             settings::update_settings,
             sync::list_providers,
             sync::connect_remote,
+            sync::adopt_remote_journal,
+            sync::discard_pending_connection,
+            sync::cloud_has_journal,
             sync::disconnect_remote,
             sync::sync_now,
             sync::sync_status
         ])
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
-            let entries = FsStore::new(data_dir.join("entries"));
+            let journal_dir = data_dir.join("entries");
+            let entries = FsStore::new(journal_dir.clone());
 
             // The vault writes through a store that reports each write to sync,
             // and sync reads and writes the store beneath it: its own pulls are
@@ -135,6 +139,7 @@ pub fn run() {
             let control = Arc::new(SyncControl::new(sync::SyncConfig {
                 slot,
                 local: Arc::new(entries),
+                journal_dir,
                 vault: Arc::new(move || vault::get(&handle.state::<vault::VaultState>()).ok()),
                 events: Arc::new(sync::TauriEvents(app.handle().clone())),
                 // Every provider this build can connect to. Adding one is a line

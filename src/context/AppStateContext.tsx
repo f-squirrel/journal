@@ -14,6 +14,8 @@ import type {
   ProviderInfo,
   SearchMatch,
   SyncStatusPayload,
+  AdoptedJournal,
+  ConnectOutcome,
 } from "../types";
 import { useIdleLock } from "../hooks/useIdleLock";
 import { useSettings } from "./SettingsContext";
@@ -29,7 +31,9 @@ import {
 } from "../api/entries";
 import { errorMessage } from "../utils/errors";
 import {
+  adoptRemoteJournal,
   connectRemote,
+  discardPendingConnection as discardPendingBackend,
   disconnectRemote,
   listProviders,
   onSyncChanged,
@@ -138,7 +142,15 @@ interface AppStateContextValue {
   refreshProviders: () => Promise<void>;
   /// Waits for the user in their browser, so it can take minutes. Rejects with
   /// the reason it could not connect.
-  connectSync: (provider: string) => Promise<void>;
+  /// Resolves `different_journal` when the cloud holds another journal: nothing
+  /// was saved, and the caller picks `discardPendingConnection` or
+  /// `switchToCloudJournal`.
+  connectSync: (provider: string) => Promise<ConnectOutcome>;
+  /// Drops a connection that found a different journal.
+  discardPendingConnection: () => Promise<void>;
+  /// Moves this device's journal aside, pulls the cloud's and lands on the
+  /// login screen. Rejects only when nothing changed.
+  switchToCloudJournal: () => Promise<AdoptedJournal>;
   /// Forgets the account. The journal on this device is untouched.
   disconnectSync: () => Promise<void>;
   /// Runs a pass now; rejects with why it failed.
@@ -468,13 +480,17 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const connectSync = useCallback(
     async (provider: string) => {
       try {
-        await connectRemote(provider);
+        return await connectRemote(provider);
       } finally {
         await refreshSync();
       }
     },
     [refreshSync],
   );
+
+  const discardPendingConnection = useCallback(async () => {
+    await discardPendingBackend();
+  }, []);
 
   const disconnectSync = useCallback(async () => {
     try {
@@ -483,6 +499,19 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       await refreshSync();
     }
   }, [refreshSync]);
+
+  // The backend locks the vault itself and guarantees nothing changed when it
+  // rejects, so this never calls `lockBackend`, and on rejection the session
+  // is left alone. Drafts are written first: the backend waits for commands
+  // using the vault, and a pane unmounted afterwards could not save.
+  const switchToCloudJournal = useCallback(async () => {
+    await flushAll();
+    const adopted = await adoptRemoteJournal();
+    loginAttempt.current += 1;
+    clearSessionUi();
+    await refreshSync();
+    return adopted;
+  }, [flushAll, clearSessionUi, refreshSync]);
 
   const syncNow = useCallback(async () => {
     try {
@@ -538,6 +567,8 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       providers,
       refreshProviders,
       connectSync,
+      discardPendingConnection,
+      switchToCloudJournal,
       disconnectSync,
       syncNow,
       searchQuery,
@@ -638,6 +669,8 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       providers,
       refreshProviders,
       connectSync,
+      discardPendingConnection,
+      switchToCloudJournal,
       disconnectSync,
       syncNow,
       searchQuery,

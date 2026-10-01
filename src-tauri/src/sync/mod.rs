@@ -30,11 +30,12 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
 use std::time::Duration;
 
-use journal_api::{ProviderInfo, SyncStatusPayload};
+use journal_api::{AdoptedJournal, ConnectOutcome, ProviderInfo, SyncStatusPayload};
 use journal_credential::{Credential, CredentialStore, RefreshToken};
+use journal_key::Keyring;
 use journal_remote::RemoteStore;
 use journal_store::{BlobName, BlobStore};
-use journal_sync_engine::{erase_state, SyncEngine, SyncStatus};
+use journal_sync_engine::{erase_state, probe_key, KeyProbe, SyncEngine, SyncStatus};
 use journal_vault::is_media;
 use tauri::State;
 use url::Url;
@@ -231,12 +232,17 @@ pub struct SyncConfig {
     pub providers: Vec<Arc<dyn Provider>>,
     /// The one saved login, and which provider it is for.
     pub credentials: Arc<dyn CredentialStore>,
+    /// The directory `local` lives in, which switching journals moves aside.
+    pub journal_dir: PathBuf,
     /// The engine's per-device state. Outside the store, so it is never synced.
     pub state_path: PathBuf,
     /// Shows the user the provider's page.
     pub open_url: OpenUrl,
     pub timing: Timing,
 }
+
+/// Puts back a vault that [`SyncControl::adopt_remote`] locked.
+pub type VaultUndo = Box<dyn FnOnce() + Send>;
 
 /// Where a login being installed came from.
 #[derive(Clone, Copy)]
@@ -260,6 +266,10 @@ pub struct SyncControl {
     /// read by `install` under the same `lifecycle` lock a running worker's
     /// update is sent under (see `set_interval`'s doc comment).
     timing: Mutex<Timing>,
+    /// A login that was granted but found the cloud holding a different
+    /// journal, waiting for the user to choose. Memory only: it is never
+    /// saved, so a restart forgets it and the old login keeps working.
+    pending: Mutex<Option<Credential>>,
     /// Test-only: how many times `set_interval` was called, so a test can
     /// check `settings::DeviceSettingsState::update` skips the call when the
     /// interval did not change.
@@ -283,6 +293,7 @@ impl SyncControl {
             coalescer,
             lifecycle: Mutex::new(()),
             timing,
+            pending: Mutex::new(None),
             #[cfg(test)]
             set_interval_calls: std::sync::atomic::AtomicUsize::new(0),
         })
@@ -445,8 +456,17 @@ impl SyncControl {
     /// Connecting to a different provider than the one connected replaces it.
     /// The old login is only replaced once the new one has been granted, so a
     /// browser tab closed halfway leaves what was working still working.
-    pub fn connect(&self, provider_id: &str) -> Result<(), String> {
+    ///
+    /// Before anything is saved, the cloud's key is compared with this
+    /// device's ([`probe_key`]). If they are two different journals the login
+    /// is kept in memory only and the outcome is
+    /// [`ConnectOutcome::DifferentJournal`]: nothing changed, so a login that
+    /// was working still works, and the user chooses between
+    /// [`discard_pending_connection`](Self::discard_pending_connection) and
+    /// [`adopt_remote`](Self::adopt_remote).
+    pub fn connect(&self, provider_id: &str) -> Result<ConnectOutcome, String> {
         let cfg = &self.config;
+        self.discard_pending();
         let provider = self.provider(provider_id)?;
         let port = provider.redirect_port().unwrap_or(0);
         let (listener, redirect_uri) = oauth::bind(port, provider.name())?;
@@ -470,10 +490,18 @@ impl SyncControl {
                 .ok_or_else(|| format!("{} returned an unusable app id", provider.name()))?;
         }
 
+        let remote = provider.remote(credential.app.as_deref(), &credential.token)?;
+        let probe = probe_key(&*cfg.local, &*remote).map_err(|e| e.to_string())?;
+        if probe == KeyProbe::Different {
+            log::info!("connect found a different journal; waiting for the user");
+            *self.pending.lock().unwrap_or_else(PoisonError::into_inner) = Some(credential);
+            return Ok(ConnectOutcome::DifferentJournal);
+        }
+
         // Read before `install` so a failed install (the old login may still
         // be the one in use) revokes nothing.
         let old = cfg.credentials.load().ok().flatten();
-        let worker = self.install(provider, &credential, Login::New)?;
+        let worker = self.install_with(provider, &credential, Login::New, remote)?;
         // A new grant leaves the old token valid at the provider even when it
         // is the same account, so compare tokens, not accounts.
         if let Some(old) = old {
@@ -484,12 +512,190 @@ impl SyncControl {
         if let Err(e) = worker.sync_now() {
             log::warn!("the first sync after connecting failed: {e}");
         }
+        Ok(ConnectOutcome::Connected)
+    }
+
+    fn take_pending(&self) -> Option<Credential> {
+        self.pending
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
+    }
+
+    fn restore_pending(&self, credential: Credential) {
+        *self.pending.lock().unwrap_or_else(PoisonError::into_inner) = Some(credential);
+    }
+
+    /// Drops the pending login and revokes its token: it was granted and never
+    /// used.
+    fn discard_pending(&self) {
+        if let Some(credential) = self.take_pending() {
+            self.revoke_later(credential);
+        }
+    }
+
+    /// The user chose "cancel" on a different journal.
+    pub fn discard_pending_connection(&self) -> Result<(), String> {
+        self.discard_pending();
         Ok(())
+    }
+
+    /// Whether the connected cloud holds a journal (a key). Answers `true` for
+    /// anything but an empty cloud, so the login screen never offers to create
+    /// a journal while one is on its way. Takes no lock and writes nothing.
+    pub fn cloud_has_journal(&self) -> Result<bool, String> {
+        let cfg = &self.config;
+        let credential = cfg
+            .credentials
+            .load()
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| NOTHING_CONNECTED.to_owned())?;
+        let provider = self.provider(&credential.provider)?;
+        let remote = provider.remote(credential.app.as_deref(), &credential.token)?;
+        let probe = probe_key(&*cfg.local, &*remote).map_err(|e| e.to_string())?;
+        Ok(probe != KeyProbe::NoRemoteKey)
+    }
+
+    /// Switches this device to the cloud's journal: this device's journal is
+    /// moved aside (never deleted), and the first pass downloads the cloud's.
+    ///
+    /// `Err` means nothing changed: the journal is in place, the saved login
+    /// and the engine state are as they were, the vault is unlocked again and
+    /// a pending login is still pending. `Ok` means the journal was moved and
+    /// the vault is locked, even when a later step failed (`ready: false`).
+    ///
+    /// The order is chosen so that a failure, or a crash, after any step
+    /// leaves something the next launch handles safely: the state is erased
+    /// *before* the journal moves (state next to an empty journal reads as
+    /// every blob deleted, and the pass would delete them from the cloud), and
+    /// the new login is saved before the move (a new login over the old
+    /// journal halts on the key mismatch before touching anything).
+    pub fn adopt_remote(
+        &self,
+        lock_vault: &dyn Fn() -> Result<VaultUndo, String>,
+    ) -> Result<AdoptedJournal, String> {
+        let cfg = &self.config;
+        let pending = self.take_pending();
+        let result = self.adopt_inner(pending.as_ref(), lock_vault);
+        if let (Err(_), Some(credential)) = (&result, pending) {
+            self.restore_pending(credential);
+        }
+        let (worker, backup_dir) = result?;
+        // After `turn()` is released: the first pass downloads everything.
+        if let Some(worker) = worker {
+            if let Err(e) = worker.sync_now() {
+                log::warn!("the first sync after switching journals failed: {e}");
+            }
+        }
+        let ready = Keyring::exists(&*cfg.local).unwrap_or(false);
+        Ok(AdoptedJournal { backup_dir, ready })
+    }
+
+    /// Steps 1–9 of the switch. `Err` only before the journal moves.
+    fn adopt_inner(
+        &self,
+        pending: Option<&Credential>,
+        lock_vault: &dyn Fn() -> Result<VaultUndo, String>,
+    ) -> Result<(Option<Arc<Worker>>, Option<String>), String> {
+        let cfg = &self.config;
+        let old = cfg.credentials.load().map_err(|e| e.to_string())?;
+        let credential = match (pending, &old) {
+            (Some(pending), _) => pending.clone(),
+            (None, Some(saved)) => saved.clone(),
+            (None, None) => return Err(NOTHING_CONNECTED.to_owned()),
+        };
+        let provider = self.provider(&credential.provider)?;
+        let remote = provider.remote(credential.app.as_deref(), &credential.token)?;
+        match probe_key(&*cfg.local, &*remote).map_err(|e| e.to_string())? {
+            KeyProbe::Different => {}
+            _ => return Err("This cloud holds the same journal as this device.".to_owned()),
+        }
+
+        let _turn = self.turn();
+        let undo = lock_vault()?;
+        let had_worker = cfg.slot.take();
+        if let Some(worker) = &had_worker {
+            worker.stop();
+        }
+        // Puts everything back as it was: the vault, and the old worker for
+        // the saved login. Best effort, like the restart at the end.
+        let roll_back = |undo: VaultUndo| {
+            undo();
+            if had_worker.is_some() {
+                if let Some(saved) = &old {
+                    self.restart_old_worker(saved, &_turn);
+                }
+            }
+        };
+
+        if let Err(e) = erase_state(&cfg.state_path) {
+            roll_back(undo);
+            return Err(format!("could not clear the old sync state: {e}"));
+        }
+        if pending.is_some() {
+            if let Err(e) = cfg.credentials.save(&credential) {
+                roll_back(undo);
+                return Err(e.to_string());
+            }
+        }
+        let backup_dir = match move_journal_aside(
+            &cfg.journal_dir,
+            &chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string(),
+        ) {
+            Ok(dir) => dir,
+            Err(e) => {
+                if pending.is_some() {
+                    let restored = match &old {
+                        Some(saved) => cfg.credentials.save(saved),
+                        None => cfg.credentials.clear(),
+                    };
+                    if let Err(e) = restored {
+                        log::warn!("could not restore the saved login: {e}");
+                    }
+                }
+                roll_back(undo);
+                return Err(e);
+            }
+        };
+        if let Some(dir) = &backup_dir {
+            log::info!("moved the journal to {dir}");
+        }
+        // The vault stays locked: `undo` is dropped unused.
+        drop(undo);
+
+        let worker = match self.start_worker_locked(provider, remote, &_turn) {
+            Ok(worker) => Some(worker),
+            Err(e) => {
+                log::warn!("could not start sync after switching journals: {e}");
+                None
+            }
+        };
+        if pending.is_some() {
+            if let Some(old) = old {
+                if old.token.expose() != credential.token.expose() {
+                    self.revoke_later(old);
+                }
+            }
+        }
+        Ok((worker, backup_dir))
+    }
+
+    /// Starts a worker for the saved login again after a switch that did not
+    /// happen. Only logged on failure.
+    fn restart_old_worker(&self, saved: &Credential, turn: &std::sync::MutexGuard<'_, ()>) {
+        let started = self.provider(&saved.provider).and_then(|provider| {
+            let remote = provider.remote(saved.app.as_deref(), &saved.token)?;
+            self.start_worker_locked(provider, remote, turn)
+        });
+        if let Err(e) = started {
+            log::warn!("could not restart sync after a switch that did not happen: {e}");
+        }
     }
 
     /// Stops syncing and forgets the account: the credential and the engine's
     /// state go. The journal on this device is not touched.
     pub fn disconnect(&self) -> Result<(), String> {
+        self.discard_pending();
         let _turn = self.turn();
         // Read before it is cleared: once `clear` succeeds there is nothing
         // left to revoke.
@@ -537,14 +743,37 @@ impl SyncControl {
         credential: &Credential,
         login: Login,
     ) -> Result<Arc<Worker>, String> {
-        let cfg = &self.config;
         // Resolved before `turn()`: a provider's `remote` may read settings,
         // and `DeviceSettingsState::update` holds those while it waits for the
         // `lifecycle` lock. It also fails before anything is stopped, erased
         // or saved.
         let remote = provider.remote(credential.app.as_deref(), &credential.token)?;
-        let _turn = self.turn();
+        self.install_with(provider, credential, login, remote)
+    }
 
+    /// [`install`](Self::install) with the remote already resolved.
+    fn install_with(
+        &self,
+        provider: &dyn Provider,
+        credential: &Credential,
+        login: Login,
+        remote: Arc<dyn RemoteStore>,
+    ) -> Result<Arc<Worker>, String> {
+        let turn = self.turn();
+        self.replace_login_locked(credential, login, &turn)?;
+        self.start_worker_locked(provider, remote, &turn)
+    }
+
+    /// The first half of [`install`](Self::install): the `keep_state`
+    /// decision, stopping the running worker, erasing the state and saving a
+    /// new login.
+    fn replace_login_locked(
+        &self,
+        credential: &Credential,
+        login: Login,
+        _turn: &std::sync::MutexGuard<'_, ()>,
+    ) -> Result<(), String> {
+        let cfg = &self.config;
         let keep_state = match login {
             Login::Saved => true,
             // Unreadable counts as different, and so does a saved login with
@@ -574,7 +803,18 @@ impl SyncControl {
                 .save(credential)
                 .map_err(|e| e.to_string())?;
         }
+        Ok(())
+    }
 
+    /// The second half of [`install`](Self::install): opens the engine and
+    /// starts a worker, which goes in the slot.
+    fn start_worker_locked(
+        &self,
+        provider: &dyn Provider,
+        remote: Arc<dyn RemoteStore>,
+        _turn: &std::sync::MutexGuard<'_, ()>,
+    ) -> Result<Arc<Worker>, String> {
+        let cfg = &self.config;
         let poke = self.coalescer.poker();
         let on_status = {
             let poke = poke.clone();
@@ -612,6 +852,29 @@ impl SyncControl {
     }
 }
 
+const NOTHING_CONNECTED: &str = "Nothing is connected.";
+
+/// Moves the journal directory to `entries.backup-<timestamp>` beside it.
+/// Nothing is deleted. `None` when there was no directory to move.
+///
+/// `fs::rename` silently replaces an *empty* directory on Unix, so the
+/// sibling's absence is checked first rather than trusted to the rename.
+fn move_journal_aside(
+    journal_dir: &std::path::Path,
+    stamp: &str,
+) -> Result<Option<String>, String> {
+    if std::fs::symlink_metadata(journal_dir).is_err() {
+        return Ok(None);
+    }
+    let sibling = journal_dir.with_file_name(format!("entries.backup-{stamp}"));
+    if std::fs::symlink_metadata(&sibling).is_ok() {
+        return Err(format!("{} already exists", sibling.display()));
+    }
+    std::fs::rename(journal_dir, &sibling)
+        .map_err(|e| format!("could not move the journal aside: {e}"))?;
+    Ok(Some(sibling.display().to_string()))
+}
+
 /// The providers this build can connect to, for the connect dialog.
 #[tauri::command]
 pub async fn list_providers(
@@ -625,9 +888,49 @@ pub async fn list_providers(
 pub async fn connect_remote(
     provider: String,
     control: State<'_, Arc<SyncControl>>,
-) -> Result<(), String> {
+) -> Result<ConnectOutcome, String> {
     let control = control.inner().clone();
     crate::blocking(move || control.connect(&provider)).await
+}
+
+/// Switches to the cloud's journal: this device's is moved aside and the
+/// vault is locked. See [`SyncControl::adopt_remote`].
+#[tauri::command]
+pub async fn adopt_remote_journal(
+    app: tauri::AppHandle,
+    control: State<'_, Arc<SyncControl>>,
+) -> Result<AdoptedJournal, String> {
+    use tauri::Manager;
+    let control = control.inner().clone();
+    crate::blocking(move || {
+        control.adopt_remote(&|| {
+            let drained = crate::vault::take_drained(
+                &app.state::<crate::vault::VaultState>(),
+                crate::vault::DRAIN_TIMEOUT,
+            )?;
+            let app = app.clone();
+            Ok(Box::new(move || {
+                drained.undo(&app.state::<crate::vault::VaultState>())
+            }))
+        })
+    })
+    .await
+}
+
+/// Cancels a connection that found a different journal.
+#[tauri::command]
+pub async fn discard_pending_connection(
+    control: State<'_, Arc<SyncControl>>,
+) -> Result<(), String> {
+    let control = control.inner().clone();
+    crate::blocking(move || control.discard_pending_connection()).await
+}
+
+/// Whether the connected cloud holds a journal.
+#[tauri::command]
+pub async fn cloud_has_journal(control: State<'_, Arc<SyncControl>>) -> Result<bool, String> {
+    let control = control.inner().clone();
+    crate::blocking(move || control.cloud_has_journal()).await
 }
 
 /// Forgets the account. Local data is untouched.

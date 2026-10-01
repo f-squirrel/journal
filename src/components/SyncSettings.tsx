@@ -15,6 +15,7 @@ import { formatAgo } from "../utils/date";
 import { errorMessage } from "../utils/errors";
 import { pendingCount, syncSummary } from "../utils/sync";
 import { rem } from "./chrome";
+import DifferentJournalPanel from "./DifferentJournalPanel";
 import DropboxSettings from "./DropboxSettings";
 import { NEVER, minutesLabel, withCurrent } from "./minutesSelect";
 
@@ -37,6 +38,9 @@ export default function SyncSettings() {
   const [connecting, setConnecting] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [confirmingDisconnect, setConfirmingDisconnect] = useState(false);
+  // The provider a connection was refused for, while its login waits unsaved
+  // for the user to choose (see `DifferentJournalPanel`).
+  const [differentFrom, setDifferentFrom] = useState<string | null>(null);
 
   const connected = sync.state !== "off";
   // A login the provider refuses is connected in the backend's eyes but needs
@@ -46,7 +50,7 @@ export default function SyncSettings() {
   const provider = sync.provider ?? "the cloud";
   const now = Date.now();
 
-  async function run(kind: Exclude<Busy, null>, work: () => Promise<void>) {
+  async function run(kind: Exclude<Busy, null>, work: () => Promise<unknown>) {
     setBusy(kind);
     setError("");
     try {
@@ -62,7 +66,11 @@ export default function SyncSettings() {
   const connect = (id: string) =>
     run("connect", () => {
       setConnecting(id);
-      return connectSync(id);
+      return connectSync(id).then((outcome) => {
+        if (outcome === "different_journal") {
+          setDifferentFrom(providers.find((p) => p.id === id)?.name ?? id);
+        }
+      });
     });
 
   const disconnect = () =>
@@ -135,6 +143,14 @@ export default function SyncSettings() {
         )}
         {error && <Alert severity="error">{error}</Alert>}
       </Stack>
+
+      {(differentFrom !== null || sync.state === "key_mismatch") && (
+        <DifferentJournalPanel
+          provider={differentFrom ?? provider}
+          pending={differentFrom !== null}
+          onDone={() => setDifferentFrom(null)}
+        />
+      )}
 
       {connected &&
         (confirmingDisconnect ? (

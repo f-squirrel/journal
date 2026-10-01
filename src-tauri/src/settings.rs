@@ -229,6 +229,7 @@ mod tests {
         let control = SyncControl::new(crate::sync::SyncConfig {
             slot: Arc::new(crate::sync::Slot::default()),
             local: Arc::new(journal_fs_store::FsStore::new(dir.join("entries"))),
+            journal_dir: dir.join("entries"),
             vault: Arc::new(|| None),
             events: Arc::new(NoEvents),
             providers: Vec::new(),

@@ -1,4 +1,6 @@
 import type {
+  AdoptedJournal,
+  ConnectOutcome,
   DeviceSettings,
   SyncProviders,
   EntryHeader,
@@ -96,7 +98,7 @@ function toHeader(entry: JournalEntry): EntryHeader {
 //   ?dropboxKey=none    the build has no Dropbox app key, so Dropbox needs one
 //                       from Settings (default: the build has one)
 //   ?sync=<mode>        start connected to a provider: on, pull, conflict,
-//                       busy, reauth, key_mismatch (see below)
+//                       busy, reauth, key_mismatch, other_journal (see below)
 //
 // The app uses HashRouter, so the query string goes *before* the hash:
 // `page.goto("/?fail=save")`, not `/#/?fail=save`.
@@ -114,6 +116,8 @@ type Op =
   | "search"
   | "export"
   | "connect"
+  | "adopt"
+  | "cloud_has_journal"
   | "sync"
   | "save-media"
   | "get-media"
@@ -141,7 +145,14 @@ interface Faults {
 }
 
 type SyncMode =
-  "off" | "on" | "pull" | "conflict" | "busy" | "reauth" | "key_mismatch";
+  | "off"
+  | "on"
+  | "pull"
+  | "conflict"
+  | "busy"
+  | "reauth"
+  | "key_mismatch"
+  | "other_journal";
 const SYNC_MODES: readonly SyncMode[] = [
   "off",
   "on",
@@ -150,6 +161,7 @@ const SYNC_MODES: readonly SyncMode[] = [
   "busy",
   "reauth",
   "key_mismatch",
+  "other_journal",
 ];
 
 function parseFaults(search: string): Faults {
@@ -240,6 +252,7 @@ async function run<T>(op: Op, work: () => T): Promise<T> {
     op !== "has" &&
     op !== "unlock" &&
     op !== "connect" &&
+    op !== "cloud_has_journal" &&
     op !== "settings-load"
   ) {
     throw "vault is locked";
@@ -557,7 +570,16 @@ function snippet(markdown: string, needle: string): string {
 //   ?sync=reauth      starts connected with a login the provider refuses: sync
 //                     is halted until connecting again succeeds
 //   ?sync=key_mismatch  starts connected to a cloud holding another journal's
-//                     key: halted, and only disconnecting ends it
+//                     key: halted; disconnecting, or switching to the cloud's
+//                     journal, ends it
+//   ?sync=other_journal  starts off; connecting finds a cloud holding another
+//                     journal, and asks before saving the login. Switching
+//                     replaces the entries with the cloud's and locks
+//   ?fail=adopt       switching to the cloud's journal is refused, and nothing
+//                     changes; ?slow=adopt makes it resolve before the journal
+//                     has arrived (it comes 1.5 s later), so the login screen
+//                     can be seen waiting
+//   ?fail=cloud_has_journal  the login screen's check of the cloud rejects
 //   ?fail=sync        every pass fails: the ids stay pending, and the state is
 //                     `offline` with the fault message
 //   ?fail=connect     connecting is refused
@@ -629,6 +651,13 @@ const HALT_MESSAGES: Record<Halt, string> = {
     "the journal key on this device differs from the one in the cloud; sync is stopped until you choose which to keep",
 };
 let halted: Halt | null = null;
+/// `?sync=other_journal`: a login granted but not saved, waiting for the user.
+let pendingOther = false;
+/// The cloud's journal is on its way after a `?slow=adopt` switch.
+let arriving = false;
+let arrivalTimer: ReturnType<typeof setTimeout> | undefined;
+/// How long after a `?slow=adopt` switch the cloud's journal arrives.
+const ARRIVAL_MS = 1500;
 
 /// Whether `?sync=pull`'s one-shot remote edit has already landed, so a later
 /// pass (a retry, `sync_now`, the debounce after a save) does not repeat it.
@@ -644,7 +673,7 @@ let pushTimer: ReturnType<typeof setTimeout> | undefined;
 const statusListeners = new Set<(status: SyncStatusPayload) => void>();
 const changedListeners = new Set<() => void>();
 
-if (faults.sync !== "off") {
+if (faults.sync !== "off" && faults.sync !== "other_journal") {
   connected = DROPBOX;
   lastSyncedAt = new Date().toISOString();
   if (faults.sync === "conflict") conflicted.add(seedEntries[0].id);
@@ -800,12 +829,19 @@ export function listProviders(): Promise<ProviderInfo[]> {
   return Promise.resolve(providers());
 }
 
-export async function connectRemote(providerId: string): Promise<void> {
-  await run("connect", () => {
+export async function connectRemote(
+  providerId: string,
+): Promise<ConnectOutcome> {
+  const outcome = await run("connect", (): ConnectOutcome => {
     const provider = providers().find((p) => p.id === providerId);
     if (!provider?.available) throw `unknown sync provider "${providerId}"`;
     if (!provider.configured) {
       throw "Dropbox has no app key: enter one in Settings › Sync";
+    }
+    // Nothing is saved: the choice is the user's (see `adoptRemoteJournal`).
+    if (faults.sync === "other_journal" && !adopted) {
+      pendingOther = true;
+      return "different_journal";
     }
     connected = provider;
     failure = null;
@@ -821,15 +857,80 @@ export async function connectRemote(providerId: string): Promise<void> {
       changedListeners.forEach((listener) => listener());
     }
     emitStatus();
+    return "connected";
   });
-  // Then a pass for what this device holds, as `connect` runs one before it
-  // returns. Its failure is in the status; the connection itself succeeded.
-  clearTimeout(pushTimer);
-  await pass();
+  if (outcome === "connected") {
+    // Then a pass for what this device holds, as `connect` runs one before it
+    // returns. Its failure is in the status; the connection itself succeeded.
+    clearTimeout(pushTimer);
+    await pass();
+  }
+  return outcome;
+}
+
+/// Whether the cloud's journal has replaced this one (`adoptRemoteJournal`).
+let adopted = false;
+
+export function adoptRemoteJournal(): Promise<AdoptedJournal> {
+  return run("adopt", () => {
+    if (!connected && !pendingOther) throw "Nothing is connected.";
+    clearTimeout(pushTimer);
+    clearTimeout(arrivalTimer);
+    adopted = true;
+    pendingOther = false;
+    halted = null;
+    failure = null;
+    connected = DROPBOX;
+    lastSyncedAt = new Date().toISOString();
+    pending.clear();
+    conflicted.clear();
+    rerun = false;
+    fallbackEntries.clear();
+    fallbackEntries.set(cloudEntry.id, cloudEntry);
+    // As the real backend: the vault is locked, and the user signs in with the
+    // cloud journal's passphrase.
+    locked = true;
+    const ready = !faults.slow.has("adopt");
+    if (!ready) {
+      vaultPresent = false;
+      arriving = true;
+      arrivalTimer = setTimeout(() => {
+        arriving = false;
+        vaultPresent = true;
+        changedListeners.forEach((listener) => listener());
+      }, ARRIVAL_MS);
+    } else {
+      vaultPresent = true;
+    }
+    changedListeners.forEach((listener) => listener());
+    emitStatus();
+    return {
+      backup_dir: "/fallback/entries.backup-20261001T000000Z",
+      ready,
+    };
+  });
+}
+
+export function discardPendingConnection(): Promise<void> {
+  pendingOther = false;
+  return Promise.resolve();
+}
+
+export function cloudHasJournal(): Promise<boolean> {
+  return run("cloud_has_journal", () => {
+    if (!connected) throw "Nothing is connected.";
+    // Connecting always brings the key (see `connectRemote`), so a cloud with
+    // no journal is only one that has nothing on its way.
+    return arriving || vaultPresent;
+  });
 }
 
 export function disconnectRemote(): Promise<void> {
   clearTimeout(pushTimer);
+  // A journal still on its way is not coming any more.
+  clearTimeout(arrivalTimer);
+  arriving = false;
+  pendingOther = false;
   rerun = false;
   halted = null;
   connected = null;

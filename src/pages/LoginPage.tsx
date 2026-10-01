@@ -15,6 +15,7 @@ import {
 import AutoStoriesIcon from "@mui/icons-material/AutoStories";
 import { useAppState } from "../context/AppStateContext";
 import { hasVault } from "../api/entries";
+import { cloudHasJournal, onSyncChanged } from "../api/sync";
 import { rem } from "../components/chrome";
 import DropboxSettings from "../components/DropboxSettings";
 
@@ -28,7 +29,8 @@ import DropboxSettings from "../components/DropboxSettings";
 const MIN_PASSPHRASE_LENGTH = 12;
 
 export default function LoginPage() {
-  const { login, sync, syncLoaded, providers, connectSync } = useAppState();
+  const { login, sync, syncLoaded, providers, connectSync, disconnectSync } =
+    useAppState();
   const navigate = useNavigate();
   const [password, setPassword] = useState("");
   const [confirmation, setConfirmation] = useState("");
@@ -42,6 +44,14 @@ export default function LoginPage() {
   // page, with a restart as the only way back into the app.
   const [checkAttempt, setCheckAttempt] = useState(0);
   const [checkFailed, setCheckFailed] = useState(false);
+  // Whether the connected cloud holds a journal that is on its way here, which
+  // the backend knows and a frontend flag would forget on a restart. null
+  // until it answers; "error" when it cannot (offline, or nothing connected
+  // after all). Neither of those ever offers to create a journal: a journal
+  // made now would be a third one.
+  const [cloudJournal, setCloudJournal] = useState<boolean | null | "error">(
+    null,
+  );
   // Joining a journal that already lives in the cloud (see `joinFrom`).
   const [joining, setJoining] = useState<string | null>(null);
   const [notice, setNotice] = useState("");
@@ -75,6 +85,48 @@ export default function LoginPage() {
       cancelled = true;
     };
   }, [checkAttempt]);
+
+  const syncConnected = syncLoaded && sync.state !== "off";
+  useEffect(() => {
+    if (vaultExists !== false || !syncConnected) return;
+    let cancelled = false;
+    setCloudJournal(null);
+    cloudHasJournal()
+      .then((has) => {
+        if (!cancelled) setCloudJournal(has);
+      })
+      .catch((err) => {
+        console.error("Failed to check the cloud for a journal:", err);
+        if (!cancelled) setCloudJournal("error");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [vaultExists, syncConnected]);
+  const awaitingJournal =
+    vaultExists === false && syncConnected && cloudJournal !== false;
+
+  // The journal arrives through a pass: ask again whenever one reports.
+  useEffect(() => {
+    if (!awaitingJournal) return;
+    let cancelled = false;
+    let stop: (() => void) | undefined;
+    const recheck = () =>
+      hasVault()
+        .then((exists) => {
+          if (!cancelled && exists) setVaultExists(true);
+        })
+        .catch(() => {});
+    void recheck();
+    onSyncChanged(recheck).then((off) => {
+      if (cancelled) off();
+      else stop = off;
+    });
+    return () => {
+      cancelled = true;
+      stop?.();
+    };
+  }, [awaitingJournal, sync]);
 
   // What `handleSubmit` enforces: strict unless we know a vault exists, so a
   // `hasVault()` rejection fails safe — creating one is the irreversible
@@ -234,130 +286,160 @@ export default function LoginPage() {
         <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
           {pending
             ? "Checking your journal…"
-            : isNewVault
-              ? "Create a passphrase to secure your journal"
-              : "Sign in to continue"}
+            : awaitingJournal
+              ? "Your journal is on its way"
+              : isNewVault
+                ? "Create a passphrase to secure your journal"
+                : "Sign in to continue"}
         </Typography>
-        <Box component="form" onSubmit={handleSubmit} noValidate>
+        {awaitingJournal ? (
           <Stack spacing={2} textAlign="left">
-            <TextField
-              label="Passphrase"
-              type="password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              // Focused on mount, which covers first launch and every return to
-              // this route (idle lock, log out). Safe while `pending`: the
-              // field is live then, typing early is deliberate.
-              autoFocus
-              inputRef={passphraseInput}
-              autoComplete={
-                pending
-                  ? "off"
-                  : isNewVault
-                    ? "new-password"
-                    : "current-password"
-              }
-              helperText={
-                pending || !isNewVault
-                  ? undefined
-                  : `Use at least ${MIN_PASSPHRASE_LENGTH} characters.`
-              }
-              fullWidth
-            />
-            {!pending && isNewVault && (
-              <TextField
-                label="Confirm passphrase"
-                type="password"
-                value={confirmation}
-                onChange={(event) => setConfirmation(event.target.value)}
-                autoComplete="new-password"
-                fullWidth
-              />
-            )}
-            {!pending && isNewVault && (
-              <Alert severity="warning">
-                There's no way to recover this passphrase or your entries if you
-                forget it: it unlocks the key file your entries are encrypted
-                to, and that key exists nowhere else. Keep it somewhere safe.
-              </Alert>
-            )}
-            {notice && <Alert severity="info">{notice}</Alert>}
-            {error && (
-              <Alert
-                severity="error"
-                action={
-                  checkFailed ? (
-                    // Must not be a submit button: it sits above the submit one
-                    // in the Stack, so it would become the form's default
-                    // button. MUI's ButtonBase defaults to type="button".
-                    <Button
-                      color="inherit"
-                      size="small"
-                      onClick={() => {
-                        setError("");
-                        setCheckAttempt((n) => n + 1);
-                      }}
-                    >
-                      Try again
-                    </Button>
-                  ) : undefined
-                }
-              >
-                {error}
-              </Alert>
-            )}
-            {/* Disabled while the answer is unknown, so the form cannot be
-                submitted against an unknown vault state at all. The fields
-                stay live: typing early is fine, submitting early is not. */}
-            <Button
-              type="submit"
-              variant="contained"
-              size="large"
-              disableElevation
-              fullWidth
-              disabled={submitting || pending}
-              startIcon={
-                pending ? (
-                  <CircularProgress size={16} color="inherit" />
+            <Alert
+              severity="info"
+              data-testid="awaiting-cloud-journal"
+              action={
+                cloudJournal === "error" ? (
+                  <Button
+                    color="inherit"
+                    size="small"
+                    onClick={() => void disconnectSync().catch(() => {})}
+                  >
+                    Disconnect
+                  </Button>
                 ) : undefined
               }
             >
-              {pending ? "Checking…" : isNewVault ? "Create vault" : "Sign in"}
-            </Button>
-            {canJoin && (
-              <>
-                <Divider>or</Divider>
-                <Typography variant="body2" color="text.secondary">
-                  Already have a journal in the cloud? Connect the account it is
-                  in to use it here.
-                </Typography>
-                {joinable.map((provider) => (
-                  <Button
-                    key={provider.id}
-                    variant="outlined"
-                    fullWidth
-                    onClick={() => joinFrom(provider)}
-                    disabled={
-                      joining !== null || submitting || !provider.configured
-                    }
-                  >
-                    {joining === provider.id
-                      ? `Waiting for ${provider.name}…`
-                      : `Connect ${provider.name}`}
-                  </Button>
-                ))}
-                <Button
-                  size="small"
-                  onClick={() => setKeyOpen(!(keyOpen ?? needsKey))}
-                  aria-expanded={keyOpen ?? needsKey}
-                >
-                  Dropbox app key…
-                </Button>
-                {(keyOpen ?? needsKey) && <DropboxSettings />}
-              </>
-            )}
+              Waiting for your journal to arrive from{" "}
+              {sync.provider ?? "the cloud"}…
+            </Alert>
           </Stack>
-        </Box>
+        ) : (
+          <Box component="form" onSubmit={handleSubmit} noValidate>
+            <Stack spacing={2} textAlign="left">
+              <TextField
+                label="Passphrase"
+                type="password"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                // Focused on mount, which covers first launch and every return to
+                // this route (idle lock, log out). Safe while `pending`: the
+                // field is live then, typing early is deliberate.
+                autoFocus
+                inputRef={passphraseInput}
+                autoComplete={
+                  pending
+                    ? "off"
+                    : isNewVault
+                      ? "new-password"
+                      : "current-password"
+                }
+                helperText={
+                  pending || !isNewVault
+                    ? undefined
+                    : `Use at least ${MIN_PASSPHRASE_LENGTH} characters.`
+                }
+                fullWidth
+              />
+              {!pending && isNewVault && (
+                <TextField
+                  label="Confirm passphrase"
+                  type="password"
+                  value={confirmation}
+                  onChange={(event) => setConfirmation(event.target.value)}
+                  autoComplete="new-password"
+                  fullWidth
+                />
+              )}
+              {!pending && isNewVault && (
+                <Alert severity="warning">
+                  There's no way to recover this passphrase or your entries if
+                  you forget it: it unlocks the key file your entries are
+                  encrypted to, and that key exists nowhere else. Keep it
+                  somewhere safe.
+                </Alert>
+              )}
+              {notice && <Alert severity="info">{notice}</Alert>}
+              {error && (
+                <Alert
+                  severity="error"
+                  action={
+                    checkFailed ? (
+                      // Must not be a submit button: it sits above the submit one
+                      // in the Stack, so it would become the form's default
+                      // button. MUI's ButtonBase defaults to type="button".
+                      <Button
+                        color="inherit"
+                        size="small"
+                        onClick={() => {
+                          setError("");
+                          setCheckAttempt((n) => n + 1);
+                        }}
+                      >
+                        Try again
+                      </Button>
+                    ) : undefined
+                  }
+                >
+                  {error}
+                </Alert>
+              )}
+              {/* Disabled while the answer is unknown, so the form cannot be
+                submitted against an unknown vault state at all. The fields
+                stay live: typing early is fine, submitting early is not. */}
+              <Button
+                type="submit"
+                variant="contained"
+                size="large"
+                disableElevation
+                fullWidth
+                disabled={submitting || pending}
+                startIcon={
+                  pending ? (
+                    <CircularProgress size={16} color="inherit" />
+                  ) : undefined
+                }
+              >
+                {pending
+                  ? "Checking…"
+                  : isNewVault
+                    ? "Create vault"
+                    : "Sign in"}
+              </Button>
+              {canJoin && (
+                <>
+                  <Divider>or</Divider>
+                  <Typography variant="body2" color="text.secondary">
+                    Already have a journal in the cloud? Connect the account it
+                    is in to use it here.
+                  </Typography>
+                  {joinable.map((provider) => (
+                    <Button
+                      key={provider.id}
+                      variant="outlined"
+                      fullWidth
+                      onClick={() => joinFrom(provider)}
+                      disabled={
+                        joining !== null || submitting || !provider.configured
+                      }
+                    >
+                      {joining === provider.id
+                        ? `Waiting for ${provider.name}…`
+                        : `Connect ${provider.name}`}
+                    </Button>
+                  ))}
+                  <Button
+                    size="small"
+                    onClick={() => setKeyOpen(!(keyOpen ?? needsKey))}
+                    aria-expanded={keyOpen ?? needsKey}
+                  >
+                    Dropbox app key…
+                  </Button>
+                  {(keyOpen ?? needsKey) && <DropboxSettings />}
+                </>
+              )}
+            </Stack>
+          </Box>
+        )}
       </Paper>
     </Box>
   );

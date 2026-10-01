@@ -13,7 +13,8 @@ means different from the base; no clocks are compared. So a delete never
 outranks an edit, a conflict is parked for the resolver rather than settled by
 last-writer-wins, and losing the state file costs extra comparison, not text.
 The sealed key blob (`KEY_BLOB`) is never merged: two different keys stop the
-pass with `SyncError::KeyMismatch`. Base state is written per blob after it
+pass with `SyncError::KeyMismatch`. `probe_key` asks the same question
+without a pass (read-only), so a caller can check before it saves a login. Base state is written per blob after it
 succeeds and the cursor last, so any failed pass can simply be re-run. A cursor
 the remote no longer honours (`RemoteError::CursorExpired`) is not a failure:
 the pass lists everything from scratch, the same way a first run does, and a

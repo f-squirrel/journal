@@ -434,6 +434,7 @@ impl Rig {
             SyncControl::new(SyncConfig {
                 slot,
                 local: Arc::new(entries),
+                journal_dir: dir.join("entries"),
                 vault: Arc::new(move || crate::vault::get(&handle.state::<VaultState>()).ok()),
                 events: events.clone(),
                 providers,
@@ -1448,4 +1449,443 @@ fn two_devices_changing_different_journal_settings_both_end_up_with_both() {
     let phone_settings = phone.get_settings();
     assert_eq!(phone_settings["time_format"], "h24");
     assert_eq!(phone_settings["week_starts_on"], "monday");
+}
+
+// ---- Two journals: probing at connect, and switching to the cloud's. ----
+
+/// Stands in for `vault::take_drained`: counts locks and undos.
+#[derive(Default)]
+struct FakeLock {
+    locks: Arc<AtomicUsize>,
+    undos: Arc<AtomicUsize>,
+    refuse: AtomicBool,
+}
+
+impl FakeLock {
+    fn call(&self) -> Result<VaultUndo, String> {
+        if self.refuse.load(Ordering::SeqCst) {
+            return Err("A save is still running. Try again.".to_owned());
+        }
+        self.locks.fetch_add(1, Ordering::SeqCst);
+        let undos = self.undos.clone();
+        Ok(Box::new(move || {
+            undos.fetch_add(1, Ordering::SeqCst);
+        }))
+    }
+
+    fn locks(&self) -> usize {
+        self.locks.load(Ordering::SeqCst)
+    }
+
+    fn undos(&self) -> usize {
+        self.undos.load(Ordering::SeqCst)
+    }
+}
+
+const KEY: &str = ".vault-key";
+const OTHER_ID: &str = "5c1f7c9e-6e8b-4a2f-9c1a-1f6b9b6b0a02";
+
+impl Rig {
+    fn connect_outcome(&self) -> Value {
+        self.ok("connect_remote", json!({ "provider": "fake" }))
+    }
+
+    fn adopt(&self, lock: &FakeLock) -> Result<AdoptedJournal, String> {
+        self.control.adopt_remote(&|| lock.call())
+    }
+
+    fn journal(&self) -> PathBuf {
+        self.dir.join("entries")
+    }
+
+    fn key_bytes(&self) -> Option<Vec<u8>> {
+        std::fs::read(self.journal().join(KEY)).ok()
+    }
+
+    fn backups(&self) -> Vec<PathBuf> {
+        std::fs::read_dir(&self.dir)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| {
+                p.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("entries.backup-")
+            })
+            .collect()
+    }
+
+    fn pending_is_set(&self) -> bool {
+        self.control.pending.lock().unwrap().is_some()
+    }
+
+    fn worker_runs(&self) -> bool {
+        self.control.config.slot.get().is_some()
+    }
+}
+
+fn remote_key(remote: &MemoryRemote) -> Vec<u8> {
+    remote
+        .get(&BlobName::try_from(KEY).unwrap())
+        .unwrap()
+        .expect("the cloud holds a key")
+        .0
+}
+
+/// A cloud holding another device's journal, and a device with its own,
+/// not connected to anything.
+fn cloud_and_local() -> (Arc<MemoryRemote>, Arc<Fake>, Rig) {
+    let remote = Arc::new(MemoryRemote::new());
+    let cloud_device = Rig::new(remote.clone());
+    cloud_device.unlock();
+    cloud_device.save(
+        ID,
+        "Written on the laptop",
+        "cloud words",
+        "2026-03-01T10:00:00Z",
+    );
+    cloud_device.connect();
+    drop(cloud_device);
+
+    let fake = Fake::new("fake", remote.clone());
+    let local = Rig::with_providers(vec![fake.clone()]);
+    local.unlock();
+    local.save(OTHER_ID, "Mine", "local words", "2026-03-01T11:00:00Z");
+    (remote, fake, local)
+}
+
+#[test]
+fn connecting_to_a_different_journal_saves_nothing() {
+    let (_remote, _fake, local) = cloud_and_local();
+
+    assert_eq!(local.connect_outcome(), json!("different_journal"));
+
+    assert_eq!(local.saved_provider(), None);
+    assert!(!local.worker_runs());
+    assert!(!local.dir.join("sync-state.json").exists());
+    assert_eq!(local.status()["state"], "off");
+    assert!(local.pending_is_set());
+}
+
+#[test]
+fn connecting_to_a_different_journal_keeps_the_old_login_running() {
+    let (cloud, fake, local) = cloud_and_local();
+    let empty = Arc::new(MemoryRemote::new());
+    fake.sign_in_as("account-0", empty);
+    assert_eq!(local.connect_outcome(), json!("connected"));
+    assert_eq!(local.saved_token().as_deref(), Some("refresh-1"));
+
+    fake.sign_in_as("account-2", cloud);
+    assert_eq!(local.connect_outcome(), json!("different_journal"));
+
+    assert_eq!(local.saved_token().as_deref(), Some("refresh-1"));
+    assert!(local.worker_runs());
+    assert_ne!(local.status()["state"], "off");
+}
+
+#[test]
+fn connecting_to_the_same_journal_connects() {
+    let remote = Arc::new(MemoryRemote::new());
+    let rig = Rig::new(remote.clone());
+    rig.unlock();
+    assert_eq!(rig.connect_outcome(), json!("connected"));
+    rig.ok("disconnect_remote", json!({}));
+    assert_eq!(rig.connect_outcome(), json!("connected"));
+    assert!(rig.worker_runs());
+}
+
+#[test]
+fn connecting_to_an_empty_cloud_connects() {
+    let rig = Rig::new(Arc::new(MemoryRemote::new()));
+    rig.unlock();
+    assert_eq!(rig.connect_outcome(), json!("connected"));
+    assert_eq!(rig.saved_provider().as_deref(), Some("fake"));
+}
+
+#[test]
+fn a_failed_probe_fails_the_connect_and_saves_nothing() {
+    let remote = Arc::new(MemoryRemote::new());
+    let rig = Rig::new(remote.clone());
+    rig.unlock();
+    remote.fail_next(RemoteError::Transient("offline".into()));
+
+    assert!(rig
+        .invoke("connect_remote", json!({ "provider": "fake" }))
+        .is_err());
+
+    assert_eq!(rig.saved_provider(), None);
+    assert!(!rig.worker_runs());
+    assert!(!rig.pending_is_set());
+}
+
+#[test]
+fn discarding_the_pending_login_revokes_it() {
+    let (_remote, fake, local) = cloud_and_local();
+    local.connect_outcome();
+
+    local.control.discard_pending_connection().unwrap();
+
+    assert!(!local.pending_is_set());
+    wait_for("the revoke", || fake.revoked() == ["refresh-1"]);
+}
+
+#[test]
+fn a_new_connect_discards_the_pending_login() {
+    let (_remote, fake, local) = cloud_and_local();
+    local.connect_outcome();
+    local.connect_outcome();
+
+    wait_for("the revoke", || fake.revoked() == ["refresh-1"]);
+    assert!(
+        local.pending_is_set(),
+        "the second grant is the pending one"
+    );
+}
+
+#[test]
+fn disconnecting_discards_the_pending_login() {
+    let (_remote, fake, local) = cloud_and_local();
+    local.connect_outcome();
+
+    local.control.disconnect().unwrap();
+
+    wait_for("the revoke", || fake.revoked() == ["refresh-1"]);
+    let lock = FakeLock::default();
+    assert_eq!(local.adopt(&lock).unwrap_err(), "Nothing is connected.");
+}
+
+#[test]
+fn adopting_moves_the_journal_aside_and_pulls_the_clouds() {
+    let (remote, _fake, local) = cloud_and_local();
+    local.connect_outcome();
+    let old_key = local.key_bytes().unwrap();
+    let old_entry = std::fs::read(local.journal().join(format!("{OTHER_ID}.json"))).unwrap();
+    let lock = FakeLock::default();
+
+    let adopted = local.adopt(&lock).unwrap();
+
+    assert!(adopted.ready);
+    assert_eq!(local.key_bytes().unwrap(), remote_key(&remote));
+    assert!(local.journal().join(format!("{ID}.json")).exists());
+    assert!(!local.journal().join(format!("{OTHER_ID}.json")).exists());
+    let backups = local.backups();
+    assert_eq!(backups.len(), 1);
+    assert_eq!(
+        adopted.backup_dir.as_deref(),
+        Some(backups[0].display().to_string().as_str())
+    );
+    assert_eq!(std::fs::read(backups[0].join(KEY)).unwrap(), old_key);
+    assert_eq!(
+        std::fs::read(backups[0].join(format!("{OTHER_ID}.json"))).unwrap(),
+        old_entry
+    );
+    assert_eq!(local.saved_token().as_deref(), Some("refresh-1"));
+    assert!(!local.pending_is_set());
+    assert_eq!((lock.locks(), lock.undos()), (1, 0));
+    // Nothing of the old journal reached the cloud.
+    assert!(!remote_has(&remote, &format!("{OTHER_ID}.json")));
+}
+
+#[test]
+fn adopting_revokes_the_replaced_login() {
+    let (cloud, fake, local) = cloud_and_local();
+    fake.sign_in_as("account-0", Arc::new(MemoryRemote::new()));
+    local.connect_outcome();
+    fake.sign_in_as("account-1", cloud);
+    assert_eq!(local.connect_outcome(), json!("different_journal"));
+
+    local.adopt(&FakeLock::default()).unwrap();
+
+    assert_eq!(local.saved_token().as_deref(), Some("refresh-2"));
+    wait_for("the revoke", || fake.revoked() == ["refresh-1"]);
+}
+
+#[test]
+fn adopting_from_the_halted_state_uses_the_saved_login() {
+    let (remote, _fake, local) = cloud_and_local();
+    // This device connected to an empty cloud, then the cloud got another
+    // journal's key.
+    let empty = Arc::new(MemoryRemote::new());
+    let fake = Fake::new("fake", empty.clone());
+    let halted = Rig::with_providers(vec![fake]);
+    halted.unlock();
+    halted.connect();
+    let name = BlobName::try_from(KEY).unwrap();
+    let rev = empty.get(&name).unwrap().unwrap().1;
+    empty
+        .put(&name, &remote_key(&remote), Precondition::Matches(rev))
+        .unwrap();
+    assert!(halted.control.sync_now().is_err());
+    drop(local);
+
+    let lock = FakeLock::default();
+    let adopted = halted.adopt(&lock).unwrap();
+
+    assert!(adopted.ready);
+    assert_eq!(halted.key_bytes().unwrap(), remote_key(&empty));
+    assert_eq!(halted.backups().len(), 1);
+    assert_eq!(halted.saved_token().as_deref(), Some("refresh-1"));
+    assert!(halted.worker_runs());
+}
+
+#[test]
+fn adopting_when_the_keys_match_moves_nothing() {
+    let (remote, _fake, local) = cloud_and_local();
+    local.connect_outcome();
+    // The cloud's key becomes this device's.
+    let name = BlobName::try_from(KEY).unwrap();
+    let rev = remote.get(&name).unwrap().unwrap().1;
+    remote
+        .put(
+            &name,
+            &local.key_bytes().unwrap(),
+            Precondition::Matches(rev),
+        )
+        .unwrap();
+    let lock = FakeLock::default();
+
+    assert!(local.adopt(&lock).is_err());
+
+    assert!(local.journal().join(KEY).exists());
+    assert!(local.backups().is_empty());
+    assert_eq!(lock.locks(), 0);
+    assert!(local.pending_is_set());
+}
+
+#[test]
+fn adopting_never_overwrites_an_existing_backup() {
+    let (_remote, _fake, local) = cloud_and_local();
+    local.connect_outcome();
+    let now = chrono::Utc::now();
+    for secs in -1..=4 {
+        let stamp = (now + chrono::Duration::seconds(secs)).format("%Y%m%dT%H%M%SZ");
+        std::fs::create_dir_all(local.dir.join(format!("entries.backup-{stamp}"))).unwrap();
+    }
+    let before = local.key_bytes().unwrap();
+    let lock = FakeLock::default();
+
+    let error = local.adopt(&lock).unwrap_err();
+
+    assert!(error.contains("already exists"), "{error}");
+    assert_eq!(local.key_bytes().unwrap(), before);
+    assert_eq!(lock.undos(), 1);
+    assert!(local.pending_is_set());
+    assert_eq!(
+        local.saved_provider(),
+        None,
+        "the pending login was not kept"
+    );
+}
+
+#[test]
+fn a_refused_vault_lock_changes_nothing() {
+    let (_remote, _fake, local) = cloud_and_local();
+    local.connect_outcome();
+    let lock = FakeLock::default();
+    lock.refuse.store(true, Ordering::SeqCst);
+    let before = local.key_bytes().unwrap();
+
+    assert!(local.adopt(&lock).is_err());
+
+    assert_eq!(local.key_bytes().unwrap(), before);
+    assert!(local.backups().is_empty());
+    assert_eq!(local.saved_provider(), None);
+    assert!(local.pending_is_set());
+}
+
+#[test]
+fn a_failed_state_erase_moves_nothing() {
+    let (_remote, _fake, local) = cloud_and_local();
+    local.connect_outcome();
+    // A directory with a file in it cannot be removed as the state file.
+    let state = local.dir.join("sync-state.json");
+    std::fs::create_dir_all(&state).unwrap();
+    std::fs::write(state.join("x"), b"x").unwrap();
+    let lock = FakeLock::default();
+
+    assert!(local.adopt(&lock).is_err());
+
+    assert!(local.journal().join(KEY).exists());
+    assert!(local.backups().is_empty());
+    assert_eq!(local.saved_provider(), None);
+    assert_eq!(lock.undos(), 1);
+    assert!(local.pending_is_set());
+}
+
+#[test]
+fn a_switch_interrupted_after_saving_the_login_halts_instead_of_deleting() {
+    let (remote, _fake, local) = cloud_and_local();
+    local.connect_outcome();
+    // What step 6 leaves: the new login saved, no state, the old journal.
+    let pending = local.control.take_pending().unwrap();
+    FileCredentialStore::new(local.dir.join("config").join("login"))
+        .save(&pending)
+        .unwrap();
+    let before = remote_key(&remote);
+    let listing = |r: &MemoryRemote| {
+        ["", ID, OTHER_ID]
+            .map(|id| remote_has(r, &format!("{id}.json")))
+            .to_vec()
+    };
+    let before_listing = listing(&remote);
+
+    local.control.resume();
+    assert!(local.control.sync_now().is_err());
+
+    assert_eq!(local.status()["state"], "key_mismatch");
+    assert_eq!(remote_key(&remote), before);
+    assert_eq!(listing(&remote), before_listing);
+}
+
+#[test]
+fn adopting_while_offline_reports_not_ready() {
+    let (remote, _fake, local) = cloud_and_local();
+    local.connect_outcome();
+    // The probe's `get` succeeds; the first pass's calls fail.
+    remote.fail_after(1, RemoteError::Transient("offline".into()));
+    remote.fail_after(0, RemoteError::Transient("offline".into()));
+
+    let adopted = local.adopt(&FakeLock::default()).unwrap();
+
+    assert!(!adopted.ready);
+    assert!(adopted.backup_dir.is_some());
+    assert_eq!(local.backups().len(), 1);
+}
+
+#[test]
+fn adopting_with_nothing_connected_fails() {
+    let rig = Rig::new(Arc::new(MemoryRemote::new()));
+    assert_eq!(
+        rig.adopt(&FakeLock::default()).unwrap_err(),
+        "Nothing is connected."
+    );
+}
+
+#[test]
+fn moving_a_missing_journal_reports_no_backup() {
+    let dir = std::env::temp_dir().join(format!("journal-aside-{}", std::process::id()));
+    assert_eq!(
+        move_journal_aside(&dir.join("entries"), "20261001T000000Z").unwrap(),
+        None
+    );
+    assert!(!dir.exists());
+}
+
+#[test]
+fn cloud_has_journal_reports_the_remote_key() {
+    let (_remote, _fake, local) = cloud_and_local();
+    assert_eq!(
+        local.control.cloud_has_journal().unwrap_err(),
+        "Nothing is connected."
+    );
+
+    // Connected, with the cloud's journal arriving: true.
+    local.connect_outcome();
+    local.adopt(&FakeLock::default()).unwrap();
+    assert!(local.control.cloud_has_journal().unwrap());
+
+    // Connected to a cloud with no key: false.
+    let blank = Rig::new(Arc::new(MemoryRemote::new()));
+    blank.connect();
+    assert!(!blank.control.cloud_has_journal().unwrap());
 }

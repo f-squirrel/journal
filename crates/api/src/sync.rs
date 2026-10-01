@@ -88,10 +88,67 @@ pub struct ProviderInfo {
     pub configured: bool,
 }
 
+/// What `connect_remote` found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(
+    feature = "ts",
+    derive(ts_rs::TS),
+    ts(export, export_to = "../../../src/bindings/")
+)]
+#[serde(rename_all = "snake_case")]
+pub enum ConnectOutcome {
+    /// The login is saved and sync is running.
+    Connected,
+    /// The cloud holds a different journal. Nothing was saved; the user
+    /// chooses between cancelling and using the cloud's journal.
+    DifferentJournal,
+}
+
+/// What `adopt_remote_journal` did.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(
+    feature = "ts",
+    derive(ts_rs::TS),
+    ts(export, export_to = "../../../src/bindings/")
+)]
+pub struct AdoptedJournal {
+    /// Where this device's journal was moved. `None` if there was none.
+    pub backup_dir: Option<String>,
+    /// The cloud's key arrived in the first pass.
+    pub ready: bool,
+}
+
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn connect_outcome_is_snake_case() {
+        assert_eq!(
+            serde_json::to_value(ConnectOutcome::DifferentJournal).unwrap(),
+            serde_json::json!("different_journal")
+        );
+        assert_eq!(
+            serde_json::to_value(ConnectOutcome::Connected).unwrap(),
+            serde_json::json!("connected")
+        );
+    }
+
+    #[test]
+    fn adopted_journal_serializes_backup_dir_and_ready() {
+        let adopted = AdoptedJournal {
+            backup_dir: Some("/data/entries.backup-20261001T000000Z".to_owned()),
+            ready: false,
+        };
+        assert_eq!(
+            serde_json::to_value(&adopted).unwrap(),
+            serde_json::json!({
+                "backup_dir": "/data/entries.backup-20261001T000000Z",
+                "ready": false,
+            })
+        );
+    }
 
     /// The frontend reads these keys and strings by name, and the wire format
     /// is `snake_case` on both sides (see the crate's other types).

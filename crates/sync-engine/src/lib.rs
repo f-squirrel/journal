@@ -33,7 +33,8 @@
 //! conflict is never settled by last-writer-wins. The other side's bytes are
 //! parked and the resolver decides. The sealed key blob is the exception (D5):
 //! it is never merged, and two different keys stop the pass with
-//! [`SyncError::KeyMismatch`].
+//! [`SyncError::KeyMismatch`]. [`probe_key`] answers the same question without
+//! running a pass, so a caller can ask before it saves a login.
 //!
 //! [`SyncEngine::status`] reports which local changes have not reached the
 //! remote yet, for the UI's per-entry marks.
@@ -45,11 +46,13 @@ mod engine;
 mod error;
 mod notify;
 mod pass;
+mod probe;
 mod state;
 mod status;
 
 pub use engine::{ConflictResolver, Immutable, Resolution, SyncEngine, SyncReport, KEY_BLOB};
 pub use error::{SyncError, SyncErrorKind};
 pub use notify::NotifyingStore;
+pub use probe::{probe_key, KeyProbe};
 pub use state::erase_state;
 pub use status::SyncStatus;

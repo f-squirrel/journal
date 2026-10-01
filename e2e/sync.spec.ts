@@ -13,6 +13,12 @@ import { test, expect, type Page } from "./coverage";
 //   ?fail=resolve               a conflict stays parked
 //   ?sync=reauth                start with a login the provider refuses
 //   ?sync=key_mismatch          start against a cloud holding another journal
+//   ?sync=other_journal         start off; connecting finds a cloud holding
+//                               another journal and asks before saving
+//   ?fail=adopt                 switching to the cloud's journal is refused
+//   ?slow=adopt                 the switch resolves before the journal has
+//                               arrived (1.5 s later)
+//   ?fail=cloud_has_journal     the login screen's check of the cloud rejects
 //   ?fail=sync                  every pass fails
 //   ?fail=connect               connecting is refused
 //   ?slow=sync                  a pass starts after 1.2 s, long enough to see
@@ -255,7 +261,8 @@ test("a cloud holding another journal says why and offers to disconnect", async 
   );
   // Retrying cannot help, and says so rather than looking like it worked.
   await section(page).getByRole("button", { name: "Sync now" }).click();
-  await expect(section(page).getByRole("alert")).toHaveCount(2);
+  // The message, the refusal, and the different-journal panel's own.
+  await expect(section(page).getByRole("alert")).toHaveCount(3);
 
   await section(page)
     .getByRole("button", { name: "Disconnect", exact: false })
@@ -511,4 +518,168 @@ test("a conflicted copy that fails to save can be retried", async ({
   await expect(retriedCopy).toBeVisible();
   await retriedCopy.click();
   await expect(page.getByTestId("entry-body")).toContainText("mine");
+});
+
+// --- a different journal in the cloud --------------------------------------
+
+function panel(page: Page) {
+  return page.getByTestId("different-journal");
+}
+
+async function connectDropbox(page: Page) {
+  await openSync(page);
+  await dropboxRow(page)
+    .getByRole("button", { name: "Connect", exact: true })
+    .click();
+}
+
+async function switchToCloud(page: Page) {
+  await panel(page)
+    .getByRole("button", { name: "Use the cloud's journal…" })
+    .click();
+  await page.getByTestId("use-cloud-journal").click();
+}
+
+test("connecting to a different journal asks before anything is saved", async ({
+  page,
+}) => {
+  await login(page, "?sync=other_journal");
+  await connectDropbox(page);
+
+  await expect(panel(page)).toContainText(
+    "This cloud holds a different journal",
+  );
+  await expectRail(page, "Sync is off");
+
+  await panel(page).getByRole("button", { name: "Cancel" }).click();
+  await expect(panel(page)).toHaveCount(0);
+  await expectRail(page, "Sync is off");
+});
+
+test("the export button opens the export dialog", async ({ page }) => {
+  await login(page, "?sync=other_journal");
+  await connectDropbox(page);
+
+  await panel(page)
+    .getByRole("button", { name: "Export this journal first" })
+    .click();
+  await expect(page.getByRole("dialog")).toBeVisible();
+});
+
+test("using the cloud's journal locks and asks for its passphrase", async ({
+  page,
+}) => {
+  await login(page, "?sync=other_journal");
+  await connectDropbox(page);
+
+  await panel(page)
+    .getByRole("button", { name: "Use the cloud's journal…" })
+    .click();
+  await expect(panel(page)).toContainText("backup folder");
+  await page.getByTestId("use-cloud-journal").click();
+
+  await expect(page.getByLabel("Passphrase")).toBeVisible();
+  await page.getByLabel("Passphrase").fill("the cloud's passphrase");
+  await page.getByRole("button", { name: "Sign in" }).click();
+
+  await expect(row(page, "Written on the laptop")).toBeVisible();
+  await expect(page.getByTestId("entry-row")).toHaveCount(1);
+  await expectRail(page, /^Synced/);
+});
+
+test("the halted state offers the cloud's journal too", async ({ page }) => {
+  await login(page, "?sync=key_mismatch");
+  await openSync(page);
+
+  await expect(panel(page)).toBeVisible();
+  await expect(panel(page).getByRole("button", { name: "Cancel" })).toHaveCount(
+    0,
+  );
+
+  await switchToCloud(page);
+  await page.getByLabel("Passphrase").fill("the cloud's passphrase");
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await expect(row(page, "Written on the laptop")).toBeVisible();
+  await openSync(page);
+  await expect(panel(page)).toHaveCount(0);
+});
+
+test("a failed switch keeps the journal open", async ({ page }) => {
+  await login(page, "?sync=other_journal&fail=adopt");
+  await connectDropbox(page);
+  await switchToCloud(page);
+
+  await expect(panel(page)).toContainText("Injected fault.");
+  await expect(page.getByTestId("sync-settings")).toBeVisible();
+  // Still unlocked: the rail and the entries are there, and an edit saves.
+  await expect(page.getByTestId("entry-row")).toHaveCount(2);
+  await writeEntry(page, "Still writing");
+  await expect(row(page, "Still writing")).toBeVisible();
+});
+
+test("the login screen waits for a journal still downloading", async ({
+  page,
+}) => {
+  await login(page, "?sync=other_journal&slow=adopt");
+  await connectDropbox(page);
+  await switchToCloud(page);
+
+  const waiting = page.getByTestId("awaiting-cloud-journal");
+  await expect(waiting).toContainText("Waiting for your journal to arrive");
+  await expect(page.getByRole("button", { name: "Create vault" })).toHaveCount(
+    0,
+  );
+  // The journal arrives, and the form becomes a sign-in.
+  await expect(page.getByRole("button", { name: "Sign in" })).toBeVisible();
+  await expect(waiting).toHaveCount(0);
+});
+
+test("the login screen never offers creation when the check fails", async ({
+  page,
+}) => {
+  await login(page, "?sync=other_journal&slow=adopt&fail=cloud_has_journal");
+  await connectDropbox(page);
+  await switchToCloud(page);
+
+  const waiting = page.getByTestId("awaiting-cloud-journal");
+  await expect(waiting).toContainText("Waiting for your journal to arrive");
+  await expect(
+    waiting.getByRole("button", { name: "Disconnect" }),
+  ).toBeVisible();
+  await expect(page.getByRole("button", { name: "Create vault" })).toHaveCount(
+    0,
+  );
+});
+
+test("disconnecting from the waiting notice offers creation again", async ({
+  page,
+}) => {
+  await login(page, "?sync=other_journal&slow=adopt&fail=cloud_has_journal");
+  await connectDropbox(page);
+  await switchToCloud(page);
+
+  const waiting = page.getByTestId("awaiting-cloud-journal");
+  await waiting.getByRole("button", { name: "Disconnect" }).click();
+
+  await expect(waiting).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Create vault" }),
+  ).toBeVisible();
+});
+
+test("the different-journal panel fits a phone", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 800 });
+  await login(page, "?sync=other_journal");
+  await page.getByRole("button", { name: "Open menu" }).click();
+  await rail(page).click();
+  await expect(page.getByTestId("sync-settings")).toBeVisible();
+  await dropboxRow(page)
+    .getByRole("button", { name: "Connect", exact: true })
+    .click();
+
+  await expect(panel(page)).toBeVisible();
+  const overflow = await page.evaluate(
+    () => document.documentElement.scrollWidth > window.innerWidth,
+  );
+  expect(overflow).toBe(false);
 });

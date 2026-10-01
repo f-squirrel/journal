@@ -20,4 +20,4 @@ pub use journal_settings::{
     ColorMode, DeviceSettings, DropboxSettings, JournalSettings, Settings, SyncProviders,
     TimeFormat, WeekStart,
 };
-pub use sync::{ProviderInfo, SyncState, SyncStatusPayload};
+pub use sync::{AdoptedJournal, ConnectOutcome, ProviderInfo, SyncState, SyncStatusPayload};
