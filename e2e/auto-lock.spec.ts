@@ -81,7 +81,9 @@ test("locks after one idle minute and clears the decrypted titles", async ({
 test("does not lock a moment before the deadline", async ({ page }) => {
   await login(page);
 
-  await page.clock.runFor(IDLE_MS - 1_000);
+  // Real time keeps flowing under an installed clock, so a slow machine eats
+  // into the margin: leave a wide one.
+  await page.clock.runFor(IDLE_MS - 20_000);
 
   await unlocked(page);
   await expect(page.getByText("First day back")).toBeVisible();

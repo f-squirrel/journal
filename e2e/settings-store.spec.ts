@@ -154,7 +154,7 @@ test("a rejected update shows the backend's value again", async ({ page }) => {
 test("a colour change and, at once, a shortcut change: both show at once, and the second request waits for the first", async ({
   page,
 }) => {
-  await login(page, "?slow=settings-first");
+  await login(page, "?slow=settings-first&slowMs=8000");
   const before = await currentMode(page);
 
   await modeToggle(page).click();
@@ -180,7 +180,7 @@ test("a colour change and, at once, a shortcut change: both show at once, and th
   expect((await backendCalls(page)).length).toBe(1);
 
   await expect
-    .poll(async () => (await backendCalls(page)).length, { timeout: 5_000 })
+    .poll(async () => (await backendCalls(page)).length, { timeout: 15_000 })
     .toBe(2);
   const calls = await backendCalls(page);
   expect(calls[0].patch).toHaveProperty("color_mode");

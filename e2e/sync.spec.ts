@@ -54,6 +54,13 @@ async function writeEntry(page: Page, title: string) {
   await page.getByPlaceholder("Title").fill(title);
   await page.getByTestId("entry-body").locator(".cm-content").fill("Words.");
   await expect(page.getByTestId("save-status")).toHaveText("Saved");
+  // The first write replaces the draft's history entry with the stored
+  // entry's, dropping `state.draft` (`EntryPane`). The URL does not change, so
+  // wait on the state: until then a Back click can be overridden by that
+  // redirect, which lands on the entry again.
+  await expect
+    .poll(() => page.evaluate(() => window.history.state?.usr?.draft ?? null))
+    .toBeNull();
 }
 
 function section(page: Page) {
@@ -348,7 +355,13 @@ test("on a phone the rail lives in the drawer, and a mark costs a row no height"
   const plain = await row(page, "Project ideas").boundingBox();
 
   await writeEntry(page, "Phone entry");
-  await page.getByRole("button", { name: "Back" }).click();
+  // `history.state` changes before React commits the redirect, so the Back
+  // button can be swapped out between mousedown and mouseup and the click is
+  // lost. Retry until the list is showing.
+  await expect(async () => {
+    await page.getByRole("button", { name: "Back" }).click({ timeout: 2_000 });
+    await expect(row(page, "Phone entry")).toBeVisible({ timeout: 2_000 });
+  }).toPass();
   const marked = await row(page, "Phone entry").boundingBox();
 
   await expect(
