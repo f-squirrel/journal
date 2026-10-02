@@ -20,3 +20,4 @@
 | [0016](0016-settings-as-device-and-journal-structs.md) | Define settings as a device struct and a journal struct, merged per field | Accepted |
 | [0017](0017-entry-version-snapshots-sync-like-entries.md) | Sync entry version snapshots like entries, with no engine changes | Accepted |
 | [0018](0018-store-media-as-immutable-per-entry-encrypted-blobs.md) | Store media as immutable per-entry encrypted blobs | Accepted |
+| [0019](0019-colour-schemes-as-ts-token-tables.md) | Define colour schemes as TS token tables chosen by a device setting | Accepted |
