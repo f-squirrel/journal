@@ -25,7 +25,14 @@ import { HEADER_HEIGHT, READING_WIDTH, TYPE, rem } from "../components/chrome";
 import { NEVER, minutesLabel, withCurrent } from "../components/minutesSelect";
 import { useAppState } from "../context/AppStateContext";
 import { useSettings } from "../context/SettingsContext";
-import type { ColorMode, SettingsPatch, TimeFormat, WeekStart } from "../types";
+import { SCHEMES, SCHEME_ORDER } from "../schemes";
+import type {
+  ColorMode,
+  ColorScheme,
+  SettingsPatch,
+  TimeFormat,
+  WeekStart,
+} from "../types";
 import { errorMessage } from "../utils/errors";
 
 const ENTRY_TEMPLATE_LIMIT = 10_000;
@@ -211,6 +218,51 @@ export default function SettingsPage() {
                 </ToggleButton>
               </ToggleButtonGroup>
             </Stack>
+
+            <TextField
+              select
+              label="Colour scheme"
+              sx={{ maxWidth: rem(280) }}
+              value={settings.color_scheme}
+              onChange={(event) => {
+                void change({
+                  color_scheme: event.target.value as ColorScheme,
+                });
+              }}
+            >
+              {SCHEME_ORDER.map((id) => (
+                <MenuItem key={id} value={id}>
+                  <Box
+                    aria-hidden
+                    sx={{
+                      display: "inline-flex",
+                      mr: 1.5,
+                      border: 1,
+                      borderColor: "divider",
+                      borderRadius: 1,
+                      overflow: "hidden",
+                    }}
+                  >
+                    {[
+                      SCHEMES[id].light.background.default,
+                      SCHEMES[id].light.primary.main,
+                      SCHEMES[id].dark.background.default,
+                      SCHEMES[id].dark.primary.main,
+                    ].map((color, i) => (
+                      <Box
+                        key={i}
+                        sx={{
+                          width: rem(12),
+                          height: rem(20),
+                          bgcolor: color,
+                        }}
+                      />
+                    ))}
+                  </Box>
+                  {SCHEMES[id].label}
+                </MenuItem>
+              ))}
+            </TextField>
 
             <TextField
               select

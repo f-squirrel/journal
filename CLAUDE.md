@@ -65,6 +65,10 @@ Frontend:
   scope, or images remount and decrypt again on every render. Frontend UUIDs
   (media ids too) come from `newEntryId()`, never `crypto.randomUUID()`.
 - Date pickers need `reduceAnimations` (ADR 0013).
+- Colours and the entry font live only in `src/schemes.ts`, keyed by the
+  device setting `color_scheme`; `theme.ts` reads them and nothing else holds a
+  hex. A new scheme is a `ColorScheme` variant in Rust, `make bindings`, a
+  table entry, `SCHEME_ORDER`, and the fallback's `COLOR_SCHEMES` set.
 - E2E specs import `test`/`expect`/`Page` from `./coverage`, not
   `@playwright/test`, or their coverage is silently lost.
 

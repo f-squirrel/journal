@@ -629,6 +629,7 @@ function EntryPane({ id, draft }: { id: string; draft: boolean }) {
                 fullWidth
                 sx={{
                   mb: 1.5,
+                  fontFamily: theme.typography.entryFontFamily,
                   fontSize: TYPE.entryTitle,
                   fontWeight: 700,
                   letterSpacing: TRACKING.tight,
@@ -649,7 +650,11 @@ function EntryPane({ id, draft }: { id: string; draft: boolean }) {
               <Typography
                 variant="h5"
                 component="h2"
-                sx={{ mb: 1.5, fontSize: TYPE.entryTitle }}
+                sx={{
+                  mb: 1.5,
+                  fontFamily: theme.typography.entryFontFamily,
+                  fontSize: TYPE.entryTitle,
+                }}
               >
                 {title || formatEntryHeading(entryDate)}
               </Typography>

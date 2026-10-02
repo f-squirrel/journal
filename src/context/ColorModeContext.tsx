@@ -1,6 +1,6 @@
 import { createContext, useContext, useMemo, type ReactNode } from "react";
 import { useMediaQuery, type PaletteMode } from "@mui/material";
-import type { ColorMode } from "../types";
+import type { ColorMode, ColorScheme } from "../types";
 import { useSettings } from "./SettingsContext";
 
 // Colour mode is now a device setting (`color_mode`), not
@@ -13,6 +13,8 @@ interface ColorModeContextValue {
   mode: PaletteMode;
   /// The stored three-way value, for the Settings page.
   setting: ColorMode;
+  /// The named palette and reading font (`src/schemes.ts`).
+  scheme: ColorScheme;
   /// Writes an explicit `light` or `dark` — never `system` — so a manual
   /// toggle always has a visible effect regardless of the OS setting.
   toggleMode: () => void;
@@ -24,6 +26,7 @@ export function ColorModeProvider({ children }: { children: ReactNode }) {
   const { settings, update } = useSettings();
   const prefersDark = useMediaQuery("(prefers-color-scheme: dark)");
   const setting = settings.color_mode;
+  const scheme = settings.color_scheme;
   const mode: PaletteMode =
     setting === "system" ? (prefersDark ? "dark" : "light") : setting;
 
@@ -31,6 +34,7 @@ export function ColorModeProvider({ children }: { children: ReactNode }) {
     () => ({
       mode,
       setting,
+      scheme,
       toggleMode: () => {
         // Fire-and-forget: a refusal re-fetches inside `SettingsContext` and
         // the rail button reverts on its own once `settings` updates.
@@ -39,7 +43,7 @@ export function ColorModeProvider({ children }: { children: ReactNode }) {
         });
       },
     }),
-    [mode, setting, update],
+    [mode, setting, scheme, update],
   );
 
   return (

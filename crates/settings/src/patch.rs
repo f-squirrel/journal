@@ -129,7 +129,7 @@ fn as_object<T: Serialize>(value: &T) -> Map<String, Value> {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
-    use crate::device::ColorMode;
+    use crate::device::{ColorMode, ColorScheme};
     use crate::journal::TimeFormat;
     use serde_json::json;
 
@@ -155,6 +155,20 @@ mod tests {
             patched.journal.as_ref().map(|j| j.time_format),
             Some(TimeFormat::H24)
         );
+    }
+
+    #[test]
+    fn a_scheme_patch_routes_to_the_device_half() {
+        let current = Settings::default();
+        let patch = map(json!({"color_scheme": "slate"}));
+
+        let patched = apply_patch(&current, patch).unwrap();
+
+        assert_eq!(
+            patched.device.as_ref().map(|d| d.color_scheme),
+            Some(ColorScheme::Slate)
+        );
+        assert!(patched.journal.is_none());
     }
 
     #[test]

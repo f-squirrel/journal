@@ -33,6 +33,23 @@ pub enum ColorMode {
     Dark,
 }
 
+/// Which named palette and reading font the UI uses. The palettes themselves
+/// live in the frontend (`src/schemes.ts`); the backend only stores the id.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "ts",
+    derive(ts_rs::TS),
+    ts(export, export_to = "../../../src/bindings/")
+)]
+#[serde(rename_all = "snake_case")]
+pub enum ColorScheme {
+    #[default]
+    Parchment,
+    Slate,
+    Ink,
+    Contrast,
+}
+
 /// Dropbox's own settings.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(
@@ -69,6 +86,7 @@ pub struct SyncProviders {
 #[serde(default)]
 pub struct DeviceSettings {
     pub color_mode: ColorMode,
+    pub color_scheme: ColorScheme,
     /// `None` = never lock on idle. Default `Some(5)`. Valid: 1..=240.
     pub idle_lock_minutes: Option<u16>,
     /// `None` = no periodic pass: sync only at startup, after saves, and on
@@ -87,6 +105,7 @@ impl Default for DeviceSettings {
     fn default() -> Self {
         Self {
             color_mode: ColorMode::default(),
+            color_scheme: ColorScheme::default(),
             idle_lock_minutes: Some(5),
             sync_interval_minutes: Some(1),
             shortcuts: BTreeMap::new(),
@@ -251,6 +270,7 @@ mod tests {
     fn defaults_are_d5_and_d6() {
         let defaults = DeviceSettings::default();
         assert_eq!(defaults.color_mode, ColorMode::System);
+        assert_eq!(defaults.color_scheme, ColorScheme::Parchment);
         assert_eq!(defaults.idle_lock_minutes, Some(5));
         assert_eq!(defaults.sync_interval_minutes, Some(1));
         assert!(defaults.shortcuts.is_empty());
@@ -406,6 +426,7 @@ mod tests {
         let file = DeviceSettingsFile::new(&path);
         let mut settings = DeviceSettings {
             color_mode: ColorMode::Light,
+            color_scheme: ColorScheme::Ink,
             idle_lock_minutes: None,
             ..Default::default()
         };

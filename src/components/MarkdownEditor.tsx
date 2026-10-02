@@ -83,7 +83,7 @@ function themeExtensions(theme: Theme): Extension {
         "&.cm-focused": { outline: "none" },
         ".cm-scroller": { fontFamily: "inherit", lineHeight: "1.75" },
         ".cm-content": {
-          fontFamily: theme.typography.fontFamily as string,
+          fontFamily: theme.typography.entryFontFamily,
           padding: 0,
           caretColor: theme.palette.text.primary,
         },
@@ -146,8 +146,7 @@ export default function MarkdownEditor({
   const themes = useRef(new Compartment());
   const theme = useTheme();
   // Read by the editor's own callbacks, which outlive the render that made
-  // them: `onChange` is rebuilt on every keystroke, and the MUI theme object
-  // is a new identity on every `ThemedApp` render.
+  // them: `onChange` is rebuilt on every keystroke.
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
   const themeRef = useRef(theme);
@@ -256,12 +255,13 @@ export default function MarkdownEditor({
     });
   }, [value]);
 
-  const mode = theme.palette.mode;
+  // `ThemedApp` memoises the theme per (mode, scheme), so its identity only
+  // changes when the palette or font does.
   useEffect(() => {
     view.current?.dispatch({
-      effects: themes.current.reconfigure(themeExtensions(themeRef.current)),
+      effects: themes.current.reconfigure(themeExtensions(theme)),
     });
-  }, [mode]);
+  }, [theme]);
 
   return (
     <Box

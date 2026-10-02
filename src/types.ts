@@ -21,6 +21,7 @@ export type { SyncProviders } from "./bindings/SyncProviders";
 export type { DropboxSettings } from "./bindings/DropboxSettings";
 export type { JournalSettings } from "./bindings/JournalSettings";
 export type { ColorMode } from "./bindings/ColorMode";
+export type { ColorScheme } from "./bindings/ColorScheme";
 export type { WeekStart } from "./bindings/WeekStart";
 export type { TimeFormat } from "./bindings/TimeFormat";
 

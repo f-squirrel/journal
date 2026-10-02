@@ -4,6 +4,9 @@
 @import "@fontsource/roboto/700.css";
 
 .markdown-body {
+  /* Set from the colour scheme by `ThemedApp`; the fallback keeps the
+     rendered view readable if the variable is ever missing. */
+  font-family: var(--journal-entry-font, inherit);
   line-height: 1.75;
   font-size: 1rem;
   word-wrap: break-word;

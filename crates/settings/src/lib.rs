@@ -25,7 +25,9 @@ mod patch;
 mod stamped;
 
 pub use decode::{decode_tolerant, Validate};
-pub use device::{ColorMode, DeviceSettings, DeviceSettingsFile, DropboxSettings, SyncProviders};
+pub use device::{
+    ColorMode, ColorScheme, DeviceSettings, DeviceSettingsFile, DropboxSettings, SyncProviders,
+};
 pub use error::SettingsError;
 pub use journal::{JournalSettings, TimeFormat, WeekStart};
 pub use patch::{apply_patch, Patched};
@@ -73,6 +75,7 @@ mod tests {
 
         for key in [
             "color_mode",
+            "color_scheme",
             "idle_lock_minutes",
             "sync_interval_minutes",
             "shortcuts",
@@ -113,6 +116,7 @@ mod tests {
         };
         let device: DeviceSettings = decode_tolerant(map);
         assert_eq!(device.color_mode, ColorMode::Dark);
+        assert_eq!(device.color_scheme, ColorScheme::Parchment);
         assert_eq!(device.idle_lock_minutes, Some(5));
         assert_eq!(device.sync_interval_minutes, Some(1));
     }
@@ -123,6 +127,7 @@ mod tests {
         // valid field.
         let value = json!({
             "color_mode": "not_a_color",
+            "color_scheme": "neon",
             "idle_lock_minutes": 500,
             "sync_interval_minutes": "soon",
             "week_starts_on": "monday",
@@ -132,6 +137,11 @@ mod tests {
         };
         let device: DeviceSettings = decode_tolerant(device_map);
         assert_eq!(device.color_mode, ColorMode::System, "unknown enum value");
+        assert_eq!(
+            device.color_scheme,
+            ColorScheme::Parchment,
+            "unknown scheme id"
+        );
         assert_eq!(device.idle_lock_minutes, Some(5), "out of range");
         assert_eq!(device.sync_interval_minutes, Some(1), "wrong type");
 

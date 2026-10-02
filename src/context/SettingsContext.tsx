@@ -23,6 +23,7 @@ import { onSyncChanged } from "../api/sync";
 /// the backend returned; a later successful `reload()` replaces this.
 const LOAD_FAILED_SETTINGS: Settings = {
   color_mode: "dark", // matches the login page today
+  color_scheme: "parchment",
   idle_lock_minutes: 5, // never null: keeps auto-lock on
   sync_interval_minutes: 1,
   shortcuts: {}, // default bindings

@@ -978,6 +978,7 @@ const DEVICE_STORAGE_KEY = "journal.fallback.device";
 
 const DEFAULT_DEVICE_SETTINGS: DeviceSettings = {
   color_mode: "system",
+  color_scheme: "parchment",
   idle_lock_minutes: 5,
   sync_interval_minutes: 1,
   shortcuts: {},
@@ -991,6 +992,7 @@ const DEFAULT_JOURNAL_SETTINGS: JournalSettings = {
 };
 
 const COLOR_MODES = new Set(["system", "light", "dark"]);
+const COLOR_SCHEMES = new Set(["parchment", "slate", "ink", "contrast"]);
 const WEEK_STARTS = new Set(["sunday", "monday", "saturday"]);
 const TIME_FORMATS = new Set(["locale", "h12", "h24"]);
 
@@ -1097,6 +1099,10 @@ function sanitizeDevice(raw: unknown): DeviceSettings {
     typeof obj.color_mode === "string" && COLOR_MODES.has(obj.color_mode)
       ? (obj.color_mode as DeviceSettings["color_mode"])
       : DEFAULT_DEVICE_SETTINGS.color_mode;
+  const colorScheme =
+    typeof obj.color_scheme === "string" && COLOR_SCHEMES.has(obj.color_scheme)
+      ? (obj.color_scheme as DeviceSettings["color_scheme"])
+      : DEFAULT_DEVICE_SETTINGS.color_scheme;
   const idleLockMinutes = readMinutesOrDefault(obj.idle_lock_minutes, 240);
   const syncIntervalMinutes = readMinutesOrDefault(
     obj.sync_interval_minutes,
@@ -1106,6 +1112,7 @@ function sanitizeDevice(raw: unknown): DeviceSettings {
     readShortcutsOrDefault(obj.shortcuts) ?? DEFAULT_DEVICE_SETTINGS.shortcuts;
   return {
     color_mode: colorMode,
+    color_scheme: colorScheme,
     idle_lock_minutes:
       idleLockMinutes === undefined
         ? DEFAULT_DEVICE_SETTINGS.idle_lock_minutes
@@ -1146,6 +1153,7 @@ let journalSettings: JournalSettings = { ...DEFAULT_JOURNAL_SETTINGS };
 
 const DEVICE_KEYS = new Set<string>([
   "color_mode",
+  "color_scheme",
   "idle_lock_minutes",
   "sync_interval_minutes",
   "shortcuts",
@@ -1196,6 +1204,11 @@ function applyPatch(patch: SettingsPatch): {
       if (key === "color_mode") {
         if (typeof value !== "string" || !COLOR_MODES.has(value)) {
           throw `invalid value for color_mode: ${JSON.stringify(value)}`;
+        }
+        devicePatch[key] = value;
+      } else if (key === "color_scheme") {
+        if (typeof value !== "string" || !COLOR_SCHEMES.has(value)) {
+          throw `invalid value for color_scheme: ${JSON.stringify(value)}`;
         }
         devicePatch[key] = value;
       } else if (key === "idle_lock_minutes") {

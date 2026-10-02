@@ -1,5 +1,5 @@
 import { useMemo, type ReactNode } from "react";
-import { CssBaseline, ThemeProvider } from "@mui/material";
+import { CssBaseline, GlobalStyles, ThemeProvider } from "@mui/material";
 import { LocalizationProvider } from "@mui/x-date-pickers/LocalizationProvider";
 import { AdapterDateFns } from "@mui/x-date-pickers/AdapterDateFns";
 import { enUS } from "date-fns/locale";
@@ -82,7 +82,8 @@ function weekStartsOnNumber(
 }
 
 function ThemedApp() {
-  const { mode } = useColorMode();
+  const { mode, scheme } = useColorMode();
+  const theme = useMemo(() => getTheme(mode, scheme), [mode, scheme]);
   const { settings } = useSettings();
   const weekStartsOn = weekStartsOnNumber(settings.week_starts_on);
   // `enUS` plus the one option this app ever changes on it. Recomputed only
@@ -94,8 +95,13 @@ function ThemedApp() {
   );
 
   return (
-    <ThemeProvider theme={getTheme(mode)}>
+    <ThemeProvider theme={theme}>
       <CssBaseline />
+      <GlobalStyles
+        styles={{
+          ":root": { "--journal-entry-font": theme.typography.entryFontFamily },
+        }}
+      />
       {/* The entry pane's date picker needs this. date-fns is the adapter
           because it is the one `@mui/x-date-pickers` supports that is plain
           `Date` in and out — the app's timestamps are ISO strings, so no other

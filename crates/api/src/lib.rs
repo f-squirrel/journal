@@ -17,7 +17,7 @@ pub use journal_entry::{
     Entry, Header, Id, ImageFormat, MediaId, MediaMeta, MediaVariant, SearchMatch,
 };
 pub use journal_settings::{
-    ColorMode, DeviceSettings, DropboxSettings, JournalSettings, Settings, SyncProviders,
-    TimeFormat, WeekStart,
+    ColorMode, ColorScheme, DeviceSettings, DropboxSettings, JournalSettings, Settings,
+    SyncProviders, TimeFormat, WeekStart,
 };
 pub use sync::{AdoptedJournal, ConnectOutcome, ProviderInfo, SyncState, SyncStatusPayload};
