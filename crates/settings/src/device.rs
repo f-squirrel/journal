@@ -47,6 +47,7 @@ pub enum ColorScheme {
     Parchment,
     Slate,
     Ink,
+    Catppuccin,
     Contrast,
 }
 

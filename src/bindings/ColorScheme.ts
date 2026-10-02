@@ -4,4 +4,4 @@
  * Which named palette and reading font the UI uses. The palettes themselves
  * live in the frontend (`src/schemes.ts`); the backend only stores the id.
  */
-export type ColorScheme = "parchment" | "slate" | "ink" | "contrast";
+export type ColorScheme = "parchment" | "slate" | "ink" | "catppuccin" | "contrast";

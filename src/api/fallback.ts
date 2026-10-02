@@ -992,7 +992,13 @@ const DEFAULT_JOURNAL_SETTINGS: JournalSettings = {
 };
 
 const COLOR_MODES = new Set(["system", "light", "dark"]);
-const COLOR_SCHEMES = new Set(["parchment", "slate", "ink", "contrast"]);
+const COLOR_SCHEMES = new Set([
+  "parchment",
+  "slate",
+  "ink",
+  "catppuccin",
+  "contrast",
+]);
 const WEEK_STARTS = new Set(["sunday", "monday", "saturday"]);
 const TIME_FORMATS = new Set(["locale", "h12", "h24"]);
 

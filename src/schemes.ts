@@ -143,12 +143,12 @@ function derive(base: Base, lightMode: boolean): SchemeColors {
   const primaryContainer = mix(
     base.paper,
     base.primary,
-    lightMode ? 0.28 : 0.4,
+    lightMode ? 0.28 : 0.3,
   );
   const secondaryContainer = mix(
     base.paper,
     base.secondary,
-    lightMode ? 0.28 : 0.4,
+    lightMode ? 0.28 : 0.3,
   );
   return {
     primary: swatch(base.primary, lightMode),
@@ -160,9 +160,9 @@ function derive(base: Base, lightMode: boolean): SchemeColors {
     },
     tonal: {
       primaryContainer,
-      onPrimaryContainer: mix(base.primary, base.text, 0.75),
+      onPrimaryContainer: mix(base.primary, base.text, 0.85),
       secondaryContainer,
-      onSecondaryContainer: mix(base.secondary, base.text, 0.75),
+      onSecondaryContainer: mix(base.secondary, base.text, 0.85),
       surfaceContainerLowest: mix(base.background, extreme, 0.7),
       surfaceContainerLow: surfaceLow,
       surfaceContainer: shade(0.5),
@@ -297,6 +297,36 @@ const ink: SchemeDef = {
   ),
 };
 
+// Catppuccin Latte (light) and Mocha (dark): base/mantle as paper/background,
+// surface1 as the darkest shade, mauve and blue as the accents.
+const catppuccin: SchemeDef = {
+  label: "Catppuccin",
+  entryFont: SANS,
+  light: derive(
+    {
+      background: "#E6E9EF",
+      paper: "#EFF1F5",
+      text: "#4C4F69",
+      primary: "#8839EF",
+      secondary: "#1E66F5",
+      surface: "#CCD0DA",
+      mutedText: 0.85,
+    },
+    true,
+  ),
+  dark: derive(
+    {
+      background: "#181825",
+      paper: "#1E1E2E",
+      text: "#CDD6F4",
+      primary: "#CBA6F7",
+      secondary: "#89B4FA",
+      surface: "#45475A",
+    },
+    false,
+  ),
+};
+
 const contrast: SchemeDef = {
   label: "High contrast",
   entryFont: SANS,
@@ -330,6 +360,7 @@ export const SCHEMES: Record<ColorScheme, SchemeDef> = {
   parchment,
   slate,
   ink,
+  catppuccin,
   contrast,
 };
 
@@ -337,5 +368,6 @@ export const SCHEME_ORDER: ColorScheme[] = [
   "parchment",
   "slate",
   "ink",
+  "catppuccin",
   "contrast",
 ];
