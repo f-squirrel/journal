@@ -4,7 +4,7 @@ import type { ColorMode, ColorScheme } from "../types";
 import { useSettings } from "./SettingsContext";
 
 // Colour mode is now a device setting (`color_mode`), not
-// `localStorage["journal.colorMode"]`: see the plan, D3. `system` resolves
+// `localStorage["journal.colorMode"]`. `system` resolves
 // here, through the OS media query, rather than in the backend, which has no
 // notion of it.
 

@@ -42,7 +42,7 @@ pub enum VaultError {
     #[error("failed to (de)serialize entry: {0}")]
     Serde(#[from] serde_json::Error),
     /// Transparent on purpose: `journal-key`'s `#[error]` strings are already
-    /// written for the user (P1-2), and a "vault error: " label in front of
+    /// written for the user, and a "vault error: " label in front of
     /// one would read as a developer's note wrapping a sentence.
     #[error(transparent)]
     Key(#[from] KeyError),
@@ -311,7 +311,7 @@ impl Vault {
     /// engine writes the bare `BlobStore` beneath this vault, from its own
     /// thread, so a pull that lands between the read below and the final
     /// write in [`write_entry`](Self::write_entry) is silently overwritten
-    /// (see the plan's Non-goals). On a save that does not cross
+    /// (a known gap). On a save that does not cross
     /// `snapshot::SNAPSHOT_MIN_AGE`, that window is still one read plus one
     /// encrypt plus one write. On a save that does, it now also contains a
     /// `store.list()` over every blob in the store and up to
@@ -1181,7 +1181,7 @@ mod tests {
         discard(&store);
     }
 
-    /// P2-2: a single unreadable entry must not fail the whole listing.
+    /// A single unreadable entry must not fail the whole listing.
     ///
     /// A *directory* named like an entry is the reachable case — a sync client
     /// or a stray `mkdir` is enough — and reading one yields an I/O error
@@ -1201,7 +1201,7 @@ mod tests {
         discard(&store);
     }
 
-    /// The other half of P2-2: a real file the process may not read.
+    /// The other half of the above: a real file the process may not read.
     #[cfg(unix)]
     #[test]
     fn list_entries_survives_an_entry_with_no_read_permission() {
@@ -1349,7 +1349,7 @@ mod tests {
         discard(&store);
     }
 
-    /// P1-2: `src-tauri` renders a command's error with `to_string()` and the
+    /// `src-tauri` renders a command's error with `to_string()` and the
     /// frontend shows that string verbatim, so these are user-facing copy and
     /// not developer notes. Two properties: the passphrase failure reads like
     /// copy, and `journal-key`'s own wording reaches the user unprefixed —
@@ -1372,8 +1372,8 @@ mod tests {
         }
     }
 
-    /// P1-4 guard (green before and after — atomicity is `rename`'s guarantee,
-    /// and racing threads can only ever fail to disprove it). Since P1-1 two
+    /// Regression guard (atomicity is `rename`'s guarantee,
+    /// and racing threads can only ever fail to disprove it). Since commands run concurrently two
     /// saves for the same id can interleave, so the store writes to scratch and
     /// renames; this asserts the invariant that leaves behind, one layer up
     /// from where the rename happens.
@@ -1755,7 +1755,7 @@ mod tests {
         discard(&store);
     }
 
-    /// Second review: an orphaned snapshot (its live entry gone, from a
+    /// An orphaned snapshot (its live entry gone, from a
     /// half-finished delete or a race with another device's delete) must
     /// never be restored into a fresh entry.
     #[test]

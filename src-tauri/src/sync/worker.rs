@@ -107,9 +107,8 @@ impl Schedule {
     /// Stores a new polling interval. Reschedules the periodic pass to
     /// `now + interval` (or clears it, for `None`) only while no backoff
     /// retry is pending — otherwise this would cancel that retry (`None`) or
-    /// bring it forward past the backoff (see the plan's "Runtime sync
-    /// interval") — and only while the current timer is not already due:
-    /// a settings change landing at (or after) the moment a pass, such as the
+    /// bring it forward past the backoff — and only while the current timer is not
+    /// already due: a settings change landing at (or after) the moment a pass, such as the
     /// startup one, was already due must not cancel or delay it.
     pub fn set_interval(&mut self, interval: Option<Duration>, now: Instant) {
         self.timing.interval = interval;

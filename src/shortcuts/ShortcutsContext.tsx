@@ -42,7 +42,7 @@ function effectiveOf(overrides: Overrides): Record<ActionId, string | null> {
 
 /// Sanitises `useSettings().settings.shortcuts` (the device setting), fed in
 /// as `unknown` because it crosses `invoke`/the fallback and is opaque to
-/// Rust beyond size limits (see the plan, `DeviceSettings.shortcuts`) — the
+/// Rust beyond size limits — the
 /// action registry and its chord rules live only here. Defensive like a
 /// preference file with no migration path: anything that doesn't look right
 /// is dropped rather than repaired. An id not in `ACTIONS` is dropped. A
@@ -267,7 +267,7 @@ function useShortcutsContext(): ShortcutsContextValue {
 /// Access to the registry and its per-device overrides: `bindingFor` and
 /// `labelFor` for showing a chord (rail tooltips, the `⋯` menu,
 /// `ShortcutsDialog`); `setBinding`, `resetBinding` and `resetAll` for
-/// rebinding it (WP5's dialog). `setBinding` and `resetBinding` return a
+/// rebinding it (the shortcuts dialog). `setBinding` and `resetBinding` return a
 /// user-facing refusal string, or `null` once the change is saved.
 export function useShortcuts(): Pick<
   ShortcutsContextValue,

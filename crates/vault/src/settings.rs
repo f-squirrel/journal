@@ -37,8 +37,8 @@ impl Vault {
     /// Validates `settings`, stamps whatever changed with `Utc::now()`, and
     /// writes the blob only if something did.
     ///
-    /// A thin wrapper over [`Vault::update_journal_settings`], kept because
-    /// it is in the plan's contract. **A caller that needs to change one
+    /// A thin wrapper over [`Vault::update_journal_settings`], kept as the
+    /// simple entry point. **A caller that needs to change one
     /// field while leaving the rest exactly as they are must use
     /// `update_journal_settings` instead**: building the "rest as they are"
     /// half from a read taken before this call, rather than from the read

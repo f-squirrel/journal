@@ -545,7 +545,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         if (attempt !== loginAttempt.current) return;
         setAuthenticated(true);
         // The journal half of settings comes back now that the vault can
-        // read it (see the plan, "Commands").
+        // read it.
         void reloadSettings();
       },
       // Locks whether or not the flush succeeded: the user asked, and a broken

@@ -1,11 +1,8 @@
 import { test, expect, type Page } from "./coverage";
 
-// WP1 covers only `search.focus`, migrated off its old hand-rolled listener
-// onto the shortcuts registry (`src/shortcuts/`). WP2 (below) wires up
-// `entry.new`, `entry.toggleMode`, `vault.lock` and `view.calendar`, and shows
-// their chords on the rail and the `⋯` menu. Later work packages add a
-// read-only dialog and then rebinding; see `.claude/plans/
-// keyboard-shortcuts.md`.
+// The shortcuts registry (`src/shortcuts/`): `search.focus`, then `entry.new`,
+// `entry.toggleMode`, `vault.lock` and `view.calendar` with their chords on
+// the rail and the `⋯` menu, then the read-only dialog and rebinding.
 //
 // `page.keyboard.press("ControlOrMeta+n")` and `"...+l"` were checked against
 // Playwright's Chromium (headless, the default here): unlike a real desktop
@@ -69,7 +66,7 @@ test("search.focus reaches the field from a non-Latin keyboard layout", async ({
   await expect(page.getByLabel("Search entries")).toBeFocused();
 });
 
-// WP2: entry.new, entry.toggleMode, vault.lock, view.calendar.
+// entry.new, entry.toggleMode, vault.lock, view.calendar.
 
 test("ControlOrMeta+n opens a new draft in edit mode", async ({ page }) => {
   await login(page);
@@ -190,7 +187,7 @@ test("shortcuts still fire on a phone with the list hidden behind an open pane",
   await expect(page).toHaveURL(/#\/login$/);
 });
 
-// WP3: the read-only shortcuts dialog.
+// The read-only shortcuts dialog.
 
 const ACTION_IDS = [
   "entry.new",
@@ -285,7 +282,7 @@ test("the rail button opens the shortcuts dialog", async ({ page }) => {
   await expect(shortcutsDialog(page)).toBeVisible();
 });
 
-// WP4: overrides are the `shortcuts` field of the device settings, in the
+// Overrides are the `shortcuts` field of the device settings, in the
 // fallback's `localStorage["journal.fallback.device"]`
 // (`DeviceSettings.shortcuts`), read through `useSettings()` rather than a
 // dedicated storage key. Each override is seeded with `page.addInitScript`,
@@ -382,7 +379,7 @@ test("a stored override that clashes with another action's chord is unbound, lea
 // private-mode browser); overrides now live behind `getSettings`, whose
 // backend equivalent is a settings load, so the same "the app still works
 // on broken storage" guarantee is exercised through `?fail=settings-load`
-// instead (see the plan, WP4 item 9): the app renders with
+// instead: the app renders with
 // `LOAD_FAILED_SETTINGS` — default bindings, dark mode, and the idle lock
 // still active.
 test("a failed settings load doesn't take the app down: default bindings, dark mode, idle lock active", async ({
@@ -428,9 +425,8 @@ test("the shortcuts dialog works at phone width, opened from the drawer", async 
   }
 });
 
-// WP5: rebinding through the dialog. Each row gets Change, Clear and a
-// conditional Reset; the footer gets Reset all. See
-// `.claude/plans/keyboard-shortcuts.md`.
+// Rebinding through the dialog. Each row gets Change, Clear and a
+// conditional Reset; the footer gets Reset all.
 
 function shortcutRow(page: Page, id: string) {
   return shortcutsDialog(page).getByTestId(`shortcut-row-${id}`);

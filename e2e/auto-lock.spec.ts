@@ -20,7 +20,7 @@ async function seedDeviceSettings(page: Page, device: Record<string, unknown>) {
 }
 
 /// `idleLockMinutes` seeds `DeviceSettings.idle_lock_minutes`; `null` means
-/// "never lock on idle" (see the plan, D7's neighbour in `DeviceSettings`).
+/// "never lock on idle".
 async function login(
   page: Page,
   query = "",
@@ -270,7 +270,7 @@ test("manual logout bounds a stalled flush to two seconds", async ({
   await unlocked(page);
 });
 
-// WP4: `idle_lock_minutes: null` disables the idle lock entirely
+// `idle_lock_minutes: null` disables the idle lock entirely
 // (`AppStateContext` passes `authenticated && idle_lock_minutes !== null` as
 // `useIdleLock`'s `active`).
 test("a null idle lock never locks", async ({ page }) => {

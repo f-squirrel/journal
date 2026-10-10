@@ -1,7 +1,7 @@
 //! `get_settings` and `update_settings`: the device half from an in-memory,
 //! file-backed copy, and the journal half from the vault.
 //!
-//! See `.claude/plans/device-and-journal-config.md`, "Commands". Step 0 of
+//! Step 0 of
 //! `update_settings` holds [`DeviceSettingsState::current`] for the whole
 //! call, across both writes: two updates racing (a shortcut rebind and a
 //! colour toggle, say) must not read the same starting device state and let
@@ -11,7 +11,7 @@
 //! closure, so the journal half is read, re-validated and written under the
 //! vault's own `settings_lock` too. Without that, a resolver merge landing
 //! between an outside read of the journal half and this write would be
-//! reverted (see the plan's WP2 amendment). Locked, the patch is applied
+//! reverted. Locked, the patch is applied
 //! against `JournalSettings::default()`, and a patch naming any journal key
 //! is refused with [`crate::vault::LOCKED_ERROR`] before anything is written.
 //!
@@ -134,10 +134,9 @@ impl DeviceSettingsState {
                     journal: JournalSettings::default(),
                 };
                 let patched = apply_patch(&settings, patch).map_err(|e| e.to_string())?;
-                // By key, not by whether the value actually changed: see the
-                // plan's "Commands" step 2 for why a patch that sets a
-                // journal field to the default it reads as while locked must
-                // still be refused.
+                // By key, not by whether the value actually changed: while locked the journal half
+                // reads as defaults, so a patch setting a journal field to
+                // one of them must still be refused, not silently dropped.
                 if patched.names_journal {
                     return Err(LOCKED_ERROR.to_owned());
                 }

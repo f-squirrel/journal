@@ -151,7 +151,7 @@ impl BlobStore for FsStore {
     /// *Atomicity* is the rename. A bare `fs::write` truncates before it
     /// writes, so a reader — or a second writer — that arrives mid-call sees a
     /// torn blob. Commands have run concurrently since they moved off the main
-    /// thread (P1-1), and the truncation window is an entry lost rather than an
+    /// thread, and the truncation window is an entry lost rather than an
     /// entry stale. Rename is atomic within a directory on every platform the
     /// app targets, so a reader sees either the old blob or the new one.
     ///
@@ -290,7 +290,7 @@ mod tests {
         fs::remove_dir_all(store.dir()).ok();
     }
 
-    /// R1-1 guard (green before and after): `put` grew a `File::create` and two
+    /// Regression guard: `put` grew a `File::create` and two
     /// syncs, and the directory it writes into is still created on first write.
     /// Dropping the `create_dir_all` would fail only on a first-ever save —
     /// the one case no other test here covers.
@@ -449,7 +449,7 @@ mod tests {
         fs::remove_dir_all(store.dir()).ok();
     }
 
-    /// P1-4 guard (green before and after): `put` is a write-then-rename, and
+    /// Regression guard: `put` is a write-then-rename, and
     /// what that must never do is leave its scratch file in the store — where
     /// `list` would report it as a blob and the vault above would try to
     /// decrypt half an entry.

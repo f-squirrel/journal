@@ -453,7 +453,7 @@ export function getHistoryEntry(
 /// live entry to restore into or no snapshot at `at`, and — like `saveEntry`
 /// — checks the same staleness precondition against the live entry. Pushes
 /// the pre-restore content into history first, unconditionally, mirroring
-/// the "always snapshot on restore" rule from the plan, not the throttle
+/// the "always snapshot on restore" rule, not the throttle
 /// `pushHistory`'s callers otherwise skip anyway.
 export function restoreEntryVersion(
   id: string,
@@ -967,7 +967,7 @@ export function onSyncChanged(handler: () => void): () => void {
 
 // --- settings ----------------------------------------------------------
 //
-// Mirrors the split in `journal-settings` (see the plan): the device half
+// Mirrors the split in `journal-settings`: the device half
 // persists to `localStorage["journal.fallback.device"]`, sanitised field by
 // field on read so garbage in storage falls back to a default rather than
 // breaking the app — the same tolerance `decode_tolerant` gives the real
@@ -1037,7 +1037,7 @@ function readSyncProviders(raw: unknown): SyncProviders | undefined {
 }
 
 /// `idle_lock_minutes`/`sync_interval_minutes`/`shortcuts`' size limits are
-/// specified in bytes (see the plan, "Validation bounds"), not UTF-16 code
+/// specified in bytes, not UTF-16 code
 /// units — a chord is ASCII in practice, but an id or value that wasn't
 /// would otherwise pass a `.length` check the real backend refuses.
 function byteLength(s: string): number {
@@ -1178,7 +1178,7 @@ function applyPatch(patch: SettingsPatch): {
   journalPatch: Partial<JournalSettings> | null;
   /// True when the patch names any journal key, even one whose value would
   /// come out unchanged — the locked check goes by this, not by whether the
-  /// journal half actually changed (see the plan, Commands, step 2).
+  /// journal half actually changed.
   namesJournal: boolean;
 } {
   let devicePatch: Record<string, unknown> | null = null;
@@ -1312,10 +1312,10 @@ export async function updateSettings(patch: SettingsPatch): Promise<Settings> {
 }
 
 // `settings-store.spec.ts` needs one thing no UI exposes, even now that
-// WP5's Settings page can write and read every setting through the ordinary
+// the Settings page can write and read every setting through the ordinary
 // controls: the backend's own settings, bypassing the frontend's optimistic
 // overlay (`confirmed ⊕ pending` in `SettingsContext`) — needed because the
-// Settings page sits behind unlock (see the plan, Non-goals), so nothing on
+// Settings page sits behind unlock, so nothing on
 // screen can show what the backend holds while the vault is locked. `calls`
 // and `loads` back the same file's checks that the request queue and the
 // lock/unlock reloads actually ran, which reading rendered text can't prove

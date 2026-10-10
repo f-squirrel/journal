@@ -106,7 +106,7 @@ function ThemedApp() {
           because it is the one `@mui/x-date-pickers` supports that is plain
           `Date` in and out — the app's timestamps are ISO strings, so no other
           date type ever enters the codebase. `adapterLocale` carries the
-          journal's week-start setting (see the plan, WP5). */}
+          journal's week-start setting. */}
       <LocalizationProvider
         dateAdapter={AdapterDateFns}
         adapterLocale={adapterLocale}

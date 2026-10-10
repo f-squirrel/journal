@@ -13,7 +13,7 @@
 //! timestamped storage form and its merge, and the device half's file store.
 //! `journal-vault` stores and merges the journal half; `journal-api`
 //! re-exports the wire types; `src-tauri` owns the device file store and
-//! applies patches. See `.claude/plans/device-and-journal-config.md`.
+//! applies patches.
 
 #![cfg_attr(all(test, coverage_nightly), feature(coverage_attribute))]
 

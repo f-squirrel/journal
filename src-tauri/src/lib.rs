@@ -221,7 +221,7 @@ mod tests {
         (state, dir)
     }
 
-    /// The defect P0-2 names: with no logger installed `log::max_level()` is
+    /// Regression guard: with no logger installed `log::max_level()` is
     /// `Off`, which is exactly the switch that makes `log::warn!` compile down
     /// to nothing — so entries skipped by `list_entries` vanish with no output.
     /// Must be the only test in this binary that touches the global logger.
@@ -811,7 +811,7 @@ mod tests {
         std::fs::remove_dir_all(dir).ok();
     }
 
-    /// R1-2: `unlock` opens the vault with the guard free, so a `lock` — an
+    /// Race guard: `unlock` opens the vault with the guard free, so a `lock` — an
     /// explicit logout — can land inside its ~1s of scrypt. Publishing the
     /// result unconditionally would put the vault back afterwards, leaving the
     /// session unlocked with every entry one command away.

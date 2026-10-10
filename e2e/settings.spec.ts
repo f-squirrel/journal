@@ -1,11 +1,11 @@
 import { test, expect, type Page } from "./coverage";
 
-// WP5: the Settings page (`src/pages/SettingsPage.tsx`) and the effects of
+// The Settings page (`src/pages/SettingsPage.tsx`) and the effects of
 // the journal settings it exposes — `formatTime`'s `TimeFormat`, the
-// calendar's week start, and the entry template's autosave guard. WP4 already
-// wired colour mode, shortcuts and the idle lock onto real settings and
-// covered the plumbing in `settings-store.spec.ts`; this file drives the
-// controls those tests could only reach through a debug hook.
+// calendar's week start, and the entry template's autosave guard. The
+// plumbing (colour mode, shortcuts, the idle lock) is covered in
+// `settings-store.spec.ts`; this file drives the controls those tests could
+// only reach through a debug hook.
 
 async function login(page: Page, query = "") {
   await page.goto(`/${query}`);

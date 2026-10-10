@@ -38,8 +38,7 @@ export default function JournalLayout() {
 
   // Mounted for every authenticated route and nothing else, so this is the
   // one place a shortcut that must always work — regardless of whether the
-  // sidebar or the list happen to be mounted right now — can register. See
-  // `.claude/plans/keyboard-shortcuts.md`, "Mounting traps".
+  // sidebar or the list happen to be mounted right now — can register.
   useShortcut("entry.new", () => {
     setDrawerOpen(false);
     newEntry();

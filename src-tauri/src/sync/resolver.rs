@@ -341,7 +341,7 @@ mod tests {
         std::fs::remove_dir_all(dir).ok();
     }
 
-    /// Review finding: `save_entry` now also snapshots on a `theirs_wins`
+    /// `save_entry` also snapshots on a `theirs_wins`
     /// overwrite, since `merge` writes the winner through it. With a gap of
     /// `SNAPSHOT_MIN_AGE` or more, the loser is expected to exist twice — as
     /// the conflicted copy `merge` always writes, and as a snapshot of the
@@ -409,7 +409,7 @@ mod tests {
         std::fs::remove_dir_all(dir).ok();
     }
 
-    /// Second review: two devices' independent encryptions of the same
+    /// Two devices' independent encryptions of the same
     /// snapshot collide on name; the resolver keeps ours without needing a
     /// key, rather than leaving the rail stuck on "Conflicts" forever.
     #[test]

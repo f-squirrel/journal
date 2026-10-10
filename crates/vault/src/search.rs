@@ -4,7 +4,7 @@
 //! needs a store or a key: the vault decrypts, this decides what matched.
 //!
 //! Matching is case-insensitive substring, and deliberately nothing more —
-//! no regex, no stemming, no ranking. See the plan's F2 section.
+//! no regex, no stemming, no ranking.
 
 /// Characters of context around the first match, in total. Wide enough to read
 /// a phrase, short enough for a list row.

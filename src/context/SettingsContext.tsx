@@ -13,7 +13,7 @@ import { getSettings, updateSettings } from "../api/settings";
 import { onSyncChanged } from "../api/sync";
 
 // One flat `Settings`, built by the backend from the device and journal
-// halves (see the plan, "Design → Frontend"). This context is the only
+// halves. This context is the only
 // thing in the app that calls `getSettings`/`updateSettings`; everything
 // else reads `useSettings().settings` and writes through `update`.
 
@@ -62,7 +62,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   // One promise queue: every `update` and `reload` chains onto it, so the
   // backend handles them in the order they were made and only one request is
   // ever in flight. Dropping "stale" responses by a counter does not work
-  // here — see the plan, "One request in flight at a time".
+  // here.
   const queue = useRef<Promise<void>>(Promise.resolve());
   const enqueue = useCallback(<T,>(fn: () => Promise<T>): Promise<T> => {
     const run = queue.current.then(fn);
@@ -122,7 +122,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   }, [reload]);
 
   // Reloads whenever a sync pass changed entries on disk, which includes a
-  // pulled or merged settings blob (see the plan, "Sync"). A listener that
+  // pulled or merged settings blob. A listener that
   // finishes registering after this effect was cleaned up (StrictMode runs
   // it twice in development) stops itself at once, mirroring
   // `AppStateContext`'s `keep`.

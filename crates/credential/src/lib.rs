@@ -633,7 +633,7 @@ mod tests {
         // apart: ext4 was observed here to immediately hand the
         // just-freed inode number back to the very next create in the same
         // directory, so an inode-number check would fail even though the
-        // file object is in fact new — see the WP5 hand-off note.)
+        // file object is in fact new.)
         fs::create_dir_all(store.path().parent().unwrap()).unwrap();
         fs::write(store.temp_path(), "junk").unwrap();
         fs::set_permissions(store.temp_path(), fs::Permissions::from_mode(0o644)).unwrap();

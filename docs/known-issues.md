@@ -11,7 +11,7 @@ Connecting compares the sealed `.vault-key` bytes of this device and the cloud
 a mismatch offers to switch to the cloud's journal. A future passphrase change
 re-seals the key, so its bytes change and every other device would read as
 holding a different journal. That feature must change `probe_key` and
-`sync_key` together before it ships (`.claude/plans/passphrase-and-recovery.md`).
+`sync_key` together before it ships.
 
 ## Images: gaps that are accepted for now
 

@@ -136,8 +136,7 @@ fn decrypt_with_passphrase(
 /// (`UnknownFormat`), damaged in transit (`InvalidMac`), or sealed to something
 /// other than a passphrase (`NoMatchingKeys`, which is what an entry blob
 /// written over the key looks like). Reporting any of those as a wrong
-/// passphrase sends the user round a loop no correct passphrase can exit, which
-/// is the whole of P2-3.
+/// passphrase sends the user round a loop no correct passphrase can exit.
 ///
 /// `ExcessiveWork` lands here too, and is the one approximation: the key blob
 /// demands more scrypt than [`MAX_WORK_FACTOR`] allows, so it was not written

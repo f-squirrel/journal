@@ -13,8 +13,7 @@ export function formatEntryHeading(timestamp: string): string {
 }
 
 /// `locale` (the default) leaves `hour12` unset, so the browser's own locale
-/// decides — deliberately not the date pickers' locale (see the plan, WP5,
-/// step 3): the two are allowed to disagree, as they already did before this
+/// decides — deliberately not the date pickers' locale: the two are allowed to disagree, as they already did before this
 /// setting existed. `h12` and `h24` override it explicitly.
 export function formatTime(timestamp: string, format: TimeFormat): string {
   const date = new Date(timestamp);

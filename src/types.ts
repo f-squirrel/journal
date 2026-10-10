@@ -26,7 +26,7 @@ export type { WeekStart } from "./bindings/WeekStart";
 export type { TimeFormat } from "./bindings/TimeFormat";
 
 // Not generated: ts-rs has no Rust struct for the patch `update_settings`
-// takes (see the plan, "No generated patch type"). A patch carries only the
+// takes. A patch carries only the
 // fields the user changed.
 import type { Settings } from "./bindings/Settings";
 export type SettingsPatch = Partial<Settings>;

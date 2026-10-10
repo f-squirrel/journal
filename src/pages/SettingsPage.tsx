@@ -81,7 +81,7 @@ export default function SettingsPage() {
   // half-typed template. Saves on blur, and also whenever the field goes away
   // with unsaved text: React does not fire `blur` for a focused element that
   // is removed, so an idle lock or a navigation would otherwise lose the
-  // edit. See the plan, WP5, step 1.
+  // edit.
   //
   // A save is decided by `dirtyRef`, not by comparing the field's text to
   // `settings.entry_template`: the field can be focused (so it hasn't taken a

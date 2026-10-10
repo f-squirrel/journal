@@ -6,7 +6,7 @@ import { test, expect, type Page } from "./coverage";
 // places a disabled button would otherwise drop focus to the body.
 
 // The idle lock now times out after the device setting `idle_lock_minutes`
-// (WP4, `.claude/plans/device-and-journal-config.md`) rather than a
+// rather than a
 // hard-coded 10 s; these two tests seed it to 1 minute through the
 // fallback's `localStorage["journal.fallback.device"]`.
 const IDLE_MS = 60_000;

@@ -14,16 +14,16 @@ declare global {
   }
 }
 
-// WP4's plumbing: `SettingsContext` (one promise queue, `confirmed ⊕
+// The plumbing: `SettingsContext` (one promise queue, `confirmed ⊕
 // pending`, reload on rejection) sitting on top of `src/api/settings.ts` and
-// the fallback's device/journal split. These tests drive the controls WP4
-// wires onto real settings directly — the rail's colour-mode toggle
-// (`color_mode`) and the shortcuts dialog's rebind (`shortcuts`) — and, since
-// WP5, the Settings page's own "Time format" control for the journal half.
+// the fallback's device/journal split. These tests drive the controls
+// wired onto real settings directly — the rail's colour-mode toggle
+// (`color_mode`) and the shortcuts dialog's rebind (`shortcuts`) — and the
+// Settings page's own "Time format" control for the journal half.
 // A debug hook the fallback exposes only for this file
 // (`window.__settingsTestHooks`; see `src/api/fallback.ts`) fills the one gap
 // no UI can: reading the backend's own settings while the vault is locked,
-// since the Settings page sits behind unlock (see the plan, Non-goals), and
+// since the Settings page sits behind unlock, and
 // counting `getSettings` calls to prove a reload actually happened.
 
 async function login(page: Page, query = "") {
@@ -270,7 +270,7 @@ test("journal settings read as defaults after lock and come back after unlock", 
   await login(page);
   const initial = await backendSettings(page);
 
-  // Written through the real control now that WP5's Settings page has one,
+  // Written through the real control now that the Settings page has one,
   // rather than the debug hook `settings-store.spec.ts` needed before it
   // existed. The hook stays for what still has no UI: reading the backend's
   // own value while locked (the Settings page sits behind unlock — see the
