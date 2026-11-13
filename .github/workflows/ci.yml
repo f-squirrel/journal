@@ -84,3 +84,29 @@ jobs:
           path: target/release/bundle/dmg/*.dmg
           if-no-files-found: error
           retention-days: 7
+
+  # iOS simulator build. `src-tauri/gen/apple` is not committed (only
+  # `gen/schemas` is tracked), so the Xcode project is generated here. The
+  # simulator target needs no signing identity, so no Apple secrets are used;
+  # this proves the app cross-compiles and links for iOS, not that it can be
+  # installed on a device.
+  ios:
+    name: tauri build (iOS simulator)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios-sim
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: brew install xcodegen
+      - run: make check-bindings
+      - run: npm run tauri ios init -- --ci
+      - run: npm run tauri ios build -- --ci --debug --target aarch64-sim
