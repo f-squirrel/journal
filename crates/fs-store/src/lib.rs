@@ -562,4 +562,18 @@ mod tests {
         assert!(BlobName::try_from("../escaped.json").is_err());
         fs::remove_dir_all(store.dir()).ok();
     }
+
+    #[test]
+    fn delete_and_list_report_errors_other_than_not_found() {
+        let store = temp_store();
+        // A directory where a blob should be: removing it as a file fails.
+        fs::create_dir_all(store.dir().join("a.json")).unwrap();
+        assert!(store.delete(&name("a.json")).is_err());
+        fs::remove_dir_all(store.dir()).ok();
+
+        // A file where the store's directory should be: not NotFound.
+        fs::write(store.dir(), b"x").unwrap();
+        assert!(store.list().is_err());
+        fs::remove_file(store.dir()).ok();
+    }
 }
