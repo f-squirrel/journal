@@ -19,7 +19,7 @@ First-time prerequisites: `cargo binstall cargo-llvm-cov`,
 
 1. Run it before committing. If the feature is already committed, set
    `COV_BASE` to the commit it started from:
-   `COV_BASE=$(git merge-base HEAD develop) make coverage`.
+   `COV_BASE=$(git merge-base HEAD main) make coverage`.
 2. Run `make coverage` and nothing else with it. Read the ~10 lines it prints.
 3. **Clean** (total at or above the floor, no negative delta, `patch` has no
    uncovered lines, no `not in the report` lines): say so in one line and

@@ -20,7 +20,7 @@ on:
       - Makefile
       - .github/workflows/setup.yml
   push:
-    branches: [main, develop]
+    branches: [main]
   schedule:
     - cron: "17 5 * * 1"
 
