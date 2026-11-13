@@ -739,3 +739,38 @@ fn a_remote_that_refuses_even_a_fresh_listing_is_a_failure() {
     // And the next one, with the remote sane again, is fine.
     b.sync();
 }
+
+#[test]
+fn a_blob_deleted_on_both_devices_is_forgotten_without_fuss() {
+    let remote = Arc::new(MemoryRemote::new());
+    let (a, b) = synced_pair(&remote, &[("x.json", b"one"), ("y.json", b"keep")]);
+
+    a.delete("x.json");
+    a.sync();
+    // B deleted it too before hearing about it.
+    b.delete("x.json");
+    assert_eq!(b.try_sync().unwrap().pushed, 0);
+    assert_eq!(b.read("x.json"), None);
+    assert_eq!(b.read("y.json").unwrap(), b"keep");
+    assert_eq!(b.sync(), SyncReport::default());
+    assert!(!remote_snapshot(&*remote).contains_key("x.json"));
+}
+
+#[test]
+fn a_key_missing_on_both_sides_is_forgotten_not_invented() {
+    use journal_remote::Precondition;
+
+    let remote = Arc::new(MemoryRemote::new());
+    let a = synced_with_key(&remote);
+
+    let (_, rev) = remote.get(&n(KEY_BLOB)).unwrap().unwrap();
+    remote
+        .delete(&n(KEY_BLOB), Precondition::Matches(rev))
+        .unwrap();
+    a.delete(KEY_BLOB);
+
+    a.sync();
+    assert_eq!(a.read(KEY_BLOB), None);
+    assert_eq!(remote.get(&n(KEY_BLOB)).unwrap(), None);
+    assert_eq!(a.read("a.json").unwrap(), b"entry a");
+}

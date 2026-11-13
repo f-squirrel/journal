@@ -501,4 +501,10 @@ mod tests {
         let id = MediaId::new();
         assert_eq!(id.to_string().parse::<MediaId>().unwrap(), id);
     }
+
+    #[test]
+    fn default_ids_are_fresh_and_distinct() {
+        assert_ne!(Id::default(), Id::default());
+        assert_ne!(MediaId::default(), MediaId::default());
+    }
 }

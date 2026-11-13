@@ -267,4 +267,153 @@ mod tests {
 
         fs::remove_dir_all(dir).ok();
     }
+
+    fn scratch(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "journal-sync-engine-state-{tag}-{}",
+            std::process::id()
+        ));
+        fs::remove_dir_all(&dir).ok();
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn name(s: &str) -> BlobName {
+        BlobName::try_from(s).unwrap()
+    }
+
+    fn base(rev: &str, bytes: &[u8]) -> Base {
+        Base {
+            rev: Revision::new(rev),
+            hash: Digest::of(bytes),
+        }
+    }
+
+    fn parked(rev: &str, bytes: &[u8]) -> Parked {
+        Parked {
+            rev: Revision::new(rev),
+            remote_hash: Digest::of(bytes),
+            theirs: bytes.to_vec(),
+        }
+    }
+
+    #[test]
+    fn state_round_trips_through_disk() {
+        let dir = scratch("roundtrip");
+        let path = dir.join("state.json");
+        let mut state = State::load(path.clone()).unwrap();
+        state.cursor = Some(Cursor::new("c1"));
+        state.record(&name("a.json"), base("1", b"a")).unwrap();
+        state.record(&name("b.json"), base("2", b"b")).unwrap();
+        state.park(&name("c.json"), parked("3", b"theirs")).unwrap();
+        state.forget(&name("b.json")).unwrap();
+
+        let loaded = State::load(path).unwrap();
+        assert_eq!(loaded.cursor, Some(Cursor::new("c1")));
+        assert_eq!(loaded.bases.len(), 1);
+        let a = &loaded.bases[&name("a.json")];
+        assert_eq!(a.rev, Revision::new("1"));
+        assert!(a.hash == Digest::of(b"a"));
+        let c = &loaded.parked[&name("c.json")];
+        assert_eq!(c.rev, Revision::new("3"));
+        assert_eq!(c.theirs, b"theirs");
+        assert!(c.remote_hash == Digest::of(b"theirs"));
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn unpark_drops_the_conflict_and_optionally_records_a_base() {
+        let dir = scratch("unpark");
+        let path = dir.join("state.json");
+        let mut state = State::load(path.clone()).unwrap();
+        state.park(&name("a.json"), parked("1", b"x")).unwrap();
+        state.park(&name("b.json"), parked("2", b"y")).unwrap();
+
+        state
+            .unpark(&name("a.json"), Some(base("5", b"m")))
+            .unwrap();
+        state.unpark(&name("b.json"), None).unwrap();
+        // Releasing what is not parked (its file already gone) is fine.
+        state.unpark(&name("b.json"), None).unwrap();
+
+        let loaded = State::load(path).unwrap();
+        assert!(loaded.parked.is_empty());
+        assert_eq!(loaded.bases[&name("a.json")].rev, Revision::new("5"));
+        assert!(!state.parked_path(&name("a.json")).exists());
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn an_unreadable_state_file_starts_over() {
+        let dir = scratch("corrupt");
+        let path = dir.join("state.json");
+        fs::write(&path, b"not json").unwrap();
+        let state = State::load(path).unwrap();
+        assert!(state.cursor.is_none());
+        assert!(state.bases.is_empty() && state.parked.is_empty());
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn a_state_file_that_cannot_be_read_is_an_error() {
+        let dir = scratch("unreadable");
+        // A directory where the file should be: not NotFound.
+        assert!(State::load(dir.clone()).is_err());
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn bad_names_and_orphaned_conflicts_are_dropped_on_load() {
+        let dir = scratch("dropped");
+        let path = dir.join("state.json");
+        let h = Digest::of(b"x");
+        let json = format!(
+            r#"{{"cursor":null,
+              "blobs":{{"../evil":{{"rev":"1","hash":"{h:?}"}},"ok.json":{{"rev":"2","hash":"{h:?}"}}}},
+              "conflicts":{{"../evil":{{"rev":"1","remote_hash":"{h:?}"}},
+                            "nobytes.json":{{"rev":"3","remote_hash":"{h:?}"}}}}}}"#
+        );
+        fs::write(&path, json).unwrap();
+
+        let state = State::load(path).unwrap();
+        assert_eq!(state.bases.len(), 1);
+        assert!(state.bases.contains_key(&name("ok.json")));
+        assert!(state.parked.is_empty());
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn failed_writes_are_reported_and_leave_no_temp_file() {
+        let dir = scratch("writefail");
+        // The parent "directory" is a file, so nothing can be created under it.
+        let blocker = dir.join("blocker");
+        fs::write(&blocker, b"x").unwrap();
+        assert!(write_atomic(&blocker.join("state.json"), b"{}").is_err());
+
+        // The destination is a directory, so the rename fails after the write.
+        let target = dir.join("target");
+        fs::create_dir_all(&target).unwrap();
+        assert!(write_atomic(&target, b"{}").is_err());
+        assert!(!dir.join("target.tmp").exists());
+
+        let mut state = State::load(dir.join("state.json")).unwrap();
+        state.path = blocker.join("state.json");
+        assert!(state.record(&name("a.json"), base("1", b"a")).is_err());
+        assert!(state.park(&name("a.json"), parked("1", b"a")).is_err());
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn erasing_reports_errors_other_than_not_found() {
+        let dir = scratch("erasefail");
+        let blocker = dir.join("blocker");
+        fs::write(&blocker, b"x").unwrap();
+        // "blocker/state.json.parked" fails with NotADirectory, not NotFound.
+        assert!(erase_state(&blocker.join("state.json")).is_err());
+        fs::remove_dir_all(dir).ok();
+    }
 }
