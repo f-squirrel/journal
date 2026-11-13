@@ -111,9 +111,38 @@ jobs:
       - run: npm run tauri ios init -- --ci
       - run: npm run tauri ios build -- --ci --debug --target aarch64-sim
 
-      # Experiment: a device build without a signing identity.
-      - name: Device build (unsigned)
-        continue-on-error: true
-        run: npm run tauri ios build -- --ci --target aarch64
-      - name: Locate outputs
-        run: find src-tauri/gen/apple -name "*.ipa" -o -name "*.xcarchive" -o -name "journal.app" | head
+      # Device build without a signing identity. Xcode refuses to build for a
+      # device without a development team, and `tauri ios build` cannot pass
+      # `CODE_SIGNING_ALLOWED=NO`, so signing is switched off in the generated
+      # project (`gen/apple/project.yml`) and the project is regenerated. The
+      # result is an unsigned .ipa to be re-signed with your own certificate.
+      - name: Disable code signing in the generated project
+        run: |
+          cat src-tauri/gen/apple/project.yml
+          ruby -ryaml -e '
+            f = "src-tauri/gen/apple/project.yml"
+            y = YAML.load_file(f)
+            y["targets"].each_value do |t|
+              b = ((t["settings"] ||= {})["base"] ||= {})
+              b["CODE_SIGNING_ALLOWED"] = "NO"
+              b["CODE_SIGNING_REQUIRED"] = "NO"
+              b["CODE_SIGN_IDENTITY"] = ""
+              b.delete("DEVELOPMENT_TEAM")
+            end
+            File.write(f, y.to_yaml)'
+          (cd src-tauri/gen/apple && xcodegen generate)
+      - run: npm run tauri ios build -- --ci --target aarch64
+      - name: Package unsigned .ipa
+        run: |
+          find src-tauri/gen/apple/build -name "*.app" -maxdepth 3
+          app=$(find src-tauri/gen/apple/build -name "journal.app" -not -path "*sim*" | head -1)
+          test -n "$app"
+          mkdir -p out/Payload
+          cp -R "$app" out/Payload/
+          (cd out && zip -qr journal-unsigned.ipa Payload)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: journal-ios-unsigned
+          path: out/journal-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 7
