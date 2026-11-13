@@ -190,6 +190,15 @@ export default function MarkdownEditor({
           keymap.of([...defaultKeymap, ...historyKeymap]),
           markdown({ base: markdownLanguage }),
           EditorView.lineWrapping,
+          // CodeMirror's content is a bare `contenteditable`, which iOS treats
+          // as a code surface: no suggestions bar, autocorrect or sentence
+          // capitalisation. These attributes tell it this is prose.
+          EditorView.contentAttributes.of({
+            autocorrect: "on",
+            autocapitalize: "sentences",
+            spellcheck: "true",
+            enterkeyhint: "enter",
+          }),
           cmPlaceholder(placeholder),
           themes.current.of(themeExtensions(themeRef.current)),
           EditorView.updateListener.of((update) => {
