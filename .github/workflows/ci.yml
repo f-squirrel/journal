@@ -109,19 +109,10 @@ jobs:
       - run: brew install xcodegen
       - run: make check-bindings
       - run: npm run tauri ios init -- --ci
-      # `ios init` fills the generated asset catalog with Tauri's stock logo and
-      # never reads `src-tauri/icons/ios`, so copy our icons over it (same file
-      # names as the catalog's Contents.json).
-      - name: Use the app icons in the generated project
-        run: |
-          catalog=src-tauri/gen/apple/Assets.xcassets/AppIcon.appiconset
-          cat "$catalog/Contents.json"
-          # Every file the catalog names must be one of ours.
-          for name in $(grep -o '"filename" *: *"[^"]*"' "$catalog/Contents.json" | sed 's/.*: *"\(.*\)"/\1/'); do
-            test -f "src-tauri/icons/ios/$name" || { echo "no icon for $name" >&2; exit 1; }
-          done
-          cp src-tauri/icons/ios/*.png "$catalog/"
-          ls "$catalog"
+      # `ios init` fills the generated asset catalog with Tauri's stock logo;
+      # `tauri icon` writes the real icons into it once it exists. Icons are
+      # flattened onto --ios-color (iOS wants opaque, square art).
+      - run: npm run tauri icon -- assets/icon.svg --ios-color '#0f1b3d'
       - run: npm run tauri ios build -- --ci --debug --target aarch64-sim
 
       # Device build without a signing identity. Xcode refuses to build for a
