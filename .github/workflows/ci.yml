@@ -57,3 +57,30 @@ jobs:
       # fallback in src/api/entries.ts, not the Rust backend.
       - run: npx playwright install --with-deps chromium
       - run: make test-e2e
+
+  # Native macOS build on the free runner (the repository is public, so macOS
+  # minutes cost nothing). Unsigned: it proves the app compiles and bundles
+  # against the macOS toolchain and system WebKit, not that it is releasable.
+  # The Dropbox key is optional at build time, so none is passed here.
+  macos:
+    name: tauri build (macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      # Fails on stale bindings, then runs `npm run tauri build`.
+      - run: make build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: journal-macos
+          path: target/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+          retention-days: 7
