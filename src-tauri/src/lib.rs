@@ -172,6 +172,8 @@ pub fn run() {
             }
 
             if let Some(window) = app.get_webview_window("main") {
+                // Maximizing is a desktop-window concept; mobile has no such method.
+                #[cfg(desktop)]
                 window.maximize()?;
                 window.show()?;
             }
