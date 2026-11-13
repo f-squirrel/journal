@@ -1,0 +1,59 @@
+vars: {d2-config: {layout-engine: elk}}
+direction: down
+
+ui: "Frontend (src/) — React 19 + MUI" {
+  pages: "Pages / components"
+  state: "AppStateContext\n(optimistic mutations)"
+  hooks: "useAutosave, useIdleLock,\nuseSettings, useShortcut"
+  api: "src/api/backend.ts\n(only Tauri-aware module)"
+  fallback: "fallback.ts\n(dev-only, browser)" {style.stroke-dash: 4}
+  pages -> state
+  pages -> hooks
+  state -> api
+  hooks -> api
+  api -> fallback: "DEV only" {style.stroke-dash: 4}
+}
+
+tauri: "src-tauri/ — thin glue" {
+  cmds: "async Tauri commands\n(entry, media, settings, sync, vault)\n+ blocking helper"
+  export: "export.rs\n(only plaintext write)"
+}
+
+ui.api -> tauri.cmds: "invoke (ts-rs bindings)"
+
+crates: "crates/ — synchronous backend" {
+  api: "journal-api\n(wire-only types)"
+  entry: "journal-entry\n(stored types)"
+  settings: "journal-settings\n(device + journal)"
+  vault: "journal-vault\n(entries, media, snapshots)"
+  key: "journal-key\n(age/scrypt, x25519)"
+  engine: "journal-sync-engine\n(local-first sync)"
+  remote: "journal-remote\n(RemoteStore trait)"
+  dropbox: "journal-dropbox"
+  credential: "journal-credential\n(OS keyring)"
+  store: "journal-store\n(BlobStore trait)"
+  fsstore: "journal-fs-store"
+
+  api -> entry
+  vault -> entry
+  vault -> key
+  vault -> settings
+  engine -> remote
+  dropbox -> remote: "implements"
+  dropbox -> credential
+  fsstore -> store: "implements"
+  remote -> store
+  vault -> fsstore
+  engine -> fsstore
+}
+
+tauri.cmds -> crates.vault
+tauri.cmds -> crates.engine
+tauri.cmds -> crates.api
+tauri.cmds -> crates.dropbox
+tauri.export -> crates.vault
+
+disk: "App data dir\n(encrypted blobs,\ndevice-settings.json)" {shape: cylinder}
+cloud: "Dropbox" {shape: cloud}
+crates.fsstore -> disk: "read/write"
+crates.dropbox -> cloud: "OAuth + HTTPS"

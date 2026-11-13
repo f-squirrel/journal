@@ -1,0 +1,36 @@
+vars: {d2-config: {layout-engine: elk}}
+direction: right
+
+user: "User" {shape: person}
+
+mem: "In memory (unlocked session only)" {
+  pass: "Passphrase\n(SecretString, zeroed on drop)"
+  ident: "X25519 identity\n(vault key)"
+  plain: "Plaintext entry / media"
+  ident -> plain: "age decrypt\n(no KDF, ~0.2 ms)"
+  plain -> ident: "age encrypt to\nX25519 recipient" {style.stroke-dash: 4}
+}
+
+user -> mem.pass: "types at login"
+
+disk: "Local store — journal-fs-store (one age-encrypted file per blob)" {
+  device: "device-settings.json\n(plaintext, device-only)" {style.stroke-dash: 4}
+  key: ".vault-key\nsealed with passphrase\n(scrypt recipient)" {shape: cylinder; style.stroke-width: 3}
+  entries: "<entry-id>.json\nwhole entry, title included" {shape: cylinder}
+  snaps: "<entry-id>.snap-<millis>.json\nthrottled snapshots of\noverwritten versions" {shape: cylinder}
+  media: "<entry-id>.media-<id>\noriginal bytes, immutable\n+ .thumb, + .display (HEIC/AVIF/TIFF)" {shape: cylinder}
+  settings: ".journal-settings\nsynced settings blob" {shape: cylinder}
+}
+
+mem.pass -> disk.key: "1× scrypt unseal\n(work factor pinned: 18, max 20)"
+disk.key -> mem.ident: "AGE-SECRET-KEY"
+mem.ident -> disk.entries: "seals"
+mem.ident -> disk.snaps: "seals"
+mem.ident -> disk.media: "seals"
+mem.ident -> disk.settings: "seals"
+
+cloud: "Dropbox (ciphertext only)" {shape: cloud}
+disk -> cloud: "sync engine copies\nsame ciphertext blobs"
+
+export: "Export folder\n(only plaintext write:\nempty dir, 0600, create_new)" {shape: page}
+mem.plain -> export: "user-initiated"
