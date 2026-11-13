@@ -51,7 +51,7 @@ that reviewer's **focus** section. Fill in the run directory and output file.
 
 ### Shared preamble (every reviewer)
 
-> You are reviewing code in the Journal repo (`/home/dima/personal/journal`),
+> You are reviewing code in the Journal repo (the current working directory),
 > a Tauri v2 journaling app: React/TS frontend, Rust workspace backend under
 > `crates/` and `src-tauri/`. Read `CLAUDE.md` first — it states the
 > architecture and several deliberate decisions (no data migrations, pinned
@@ -187,7 +187,7 @@ again in a single message: `subagent_type: "general-purpose"`,
 the report itself — pass only the paths.
 
 > You are auditing a code review of the Journal repo
-> (`/home/dima/personal/journal`). Read `CLAUDE.md`, then
+> (the current working directory). Read `CLAUDE.md`, then
 > `<run-dir>/scope.md` (and `scope.diff` if present), then the review at
 > `<run-dir>/<report>.md`.
 >
