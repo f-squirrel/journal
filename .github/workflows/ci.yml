@@ -131,12 +131,16 @@ jobs:
             end
             File.write(f, y.to_yaml)'
           (cd src-tauri/gen/apple && xcodegen generate)
-      - run: npm run tauri ios build -- --ci --target aarch64
+      # The archive succeeds unsigned; only tauri's final export to .ipa fails
+      # ("No Team Found in Archive"), so the step is allowed to fail and the
+      # .ipa is packaged from the archive below. The archive must exist.
+      - name: Archive for device
+        continue-on-error: true
+        run: npm run tauri ios build -- --ci --target aarch64
       - name: Package unsigned .ipa
         run: |
-          find src-tauri/gen/apple/build -name "*.app" -maxdepth 3
-          app=$(find src-tauri/gen/apple/build -name "journal.app" -not -path "*sim*" | head -1)
-          test -n "$app"
+          app=src-tauri/gen/apple/build/journal_iOS.xcarchive/Products/Applications/journal.app
+          test -d "$app"
           mkdir -p out/Payload
           cp -R "$app" out/Payload/
           (cd out && zip -qr journal-unsigned.ipa Payload)
