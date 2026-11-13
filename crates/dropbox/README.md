@@ -30,8 +30,9 @@ no async runtime in the tree (`cargo tree -p journal-dropbox` shows no `tokio`,
   another account of the same provider does not inherit the first one's sync
   state. Needs the `account_info.read` scope.
 
-The app registered with Dropbox needs "App folder" access, the redirect URI
-the app listens on (`http://127.0.0.1:53682/`), and four scopes ticked in its
+The app registered with Dropbox needs "App folder" access, the redirect URIs
+the app uses (`http://127.0.0.1:53682/` on desktop, `com.fsquirrel.journal:/oauth`
+on a phone), and four scopes ticked in its
 Permissions tab: `files.metadata.read`, `files.content.read`,
 `files.content.write` and `account_info.read`. Tokens issued before a scope
 was ticked never gain it: reconnect after changing them.

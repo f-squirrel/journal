@@ -5,11 +5,14 @@
 //! HTTP listener on 127.0.0.1 that the browser is sent back to, which reads the
 //! `code` and `state` off the request and answers with a page saying to return
 //! to the app. Desktop only in effect: a phone's browser cannot reach the
-//! app's loopback the way the flow needs, and its redirect is a deep link
-//! instead.
+//! app's loopback the way the flow needs (iOS suspends the app while the
+//! browser is in front, so nothing is listening), and its redirect is a deep
+//! link instead: [`DeepLink`].
 
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{Ipv4Addr, TcpListener, TcpStream};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::{Mutex, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -71,12 +74,7 @@ pub fn await_code(
         match listener.accept() {
             Ok((stream, _)) => match serve(stream, expected_state, provider) {
                 Redirect::Code(code) => return Ok(code),
-                Redirect::Denied(error) => {
-                    return Err(match error.as_str() {
-                        "access_denied" => format!("{provider} access was not granted"),
-                        other => format!("{provider} refused the connection: {other}"),
-                    })
-                }
+                Redirect::Denied(error) => return Err(denied(provider, &error)),
                 Redirect::Ignore => {}
             },
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
@@ -142,7 +140,11 @@ fn parse(request_line: &str, expected_state: &str) -> Redirect {
         // A browser also asks for /favicon.ico.
         return Redirect::Ignore;
     }
+    classify(&url, expected_state)
+}
 
+/// What a redirect's query says, whichever way it arrived.
+fn classify(url: &Url, expected_state: &str) -> Redirect {
     let param = |key: &str| {
         url.query_pairs()
             .find(|(k, _)| k == key)
@@ -157,6 +159,100 @@ fn parse(request_line: &str, expected_state: &str) -> Redirect {
     match param("code") {
         Some(code) if !code.is_empty() => Redirect::Code(code),
         _ => Redirect::Ignore,
+    }
+}
+
+/// The error for a refused login.
+fn denied(provider: &str, error: &str) -> String {
+    match error {
+        "access_denied" => format!("{provider} access was not granted"),
+        other => format!("{provider} refused the connection: {other}"),
+    }
+}
+
+/// Catching the redirect as a deep link, for a phone: the provider sends the
+/// browser to `<scheme>:/oauth?code=…&state=…`, the OS reopens the app, and the
+/// platform layer hands the URL to [`deliver`](Self::deliver). The scheme is
+/// fixed at build time (it is declared in the app's manifest), so it is the
+/// bundle identifier, and the user registers `<scheme>:/oauth` with the
+/// provider.
+pub struct DeepLink {
+    scheme: String,
+    waiting: Mutex<Option<Sender<Url>>>,
+}
+
+impl DeepLink {
+    // Only a phone's build constructs one and receives links.
+    #[cfg_attr(not(mobile), allow(dead_code))]
+    pub fn new(scheme: &str) -> Self {
+        Self {
+            scheme: scheme.to_owned(),
+            waiting: Mutex::new(None),
+        }
+    }
+
+    /// The redirect URI to register with the provider and send in the request.
+    pub fn redirect_uri(&self) -> String {
+        format!("{}:/oauth", self.scheme)
+    }
+
+    /// Starts listening, replacing any earlier wait (whose `await_code` then
+    /// ends as "interrupted"). Arm *before* the browser opens.
+    pub fn arm(&self) -> Receiver<Url> {
+        let (tx, rx) = mpsc::channel();
+        *self.waiting.lock().unwrap_or_else(PoisonError::into_inner) = Some(tx);
+        rx
+    }
+
+    /// Stops listening: a link arriving now is dropped.
+    pub fn disarm(&self) {
+        *self.waiting.lock().unwrap_or_else(PoisonError::into_inner) = None;
+    }
+
+    /// Hands over a URL the OS opened the app with. Anything that is not the
+    /// redirect is ignored by the waiter, which checks `state`.
+    #[cfg_attr(not(mobile), allow(dead_code))]
+    pub fn deliver(&self, url: Url) {
+        let waiting = self.waiting.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(tx) = waiting.as_ref() {
+            // The waiter may have given up; there is nobody to tell.
+            let _ = tx.send(url);
+        }
+    }
+
+    /// Waits for the redirect and returns its authorization code; the
+    /// counterpart of [`await_code`]. Links that are not ours (another scheme
+    /// or path, a wrong `state`) are ignored rather than ending the wait.
+    pub fn await_code(
+        &self,
+        links: &Receiver<Url>,
+        expected_state: &str,
+        timeout: Duration,
+        provider: &str,
+    ) -> Result<String, String> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            let url = match links.recv_timeout(left) {
+                Ok(url) => url,
+                Err(RecvTimeoutError::Timeout) => {
+                    return Err(format!(
+                        "timed out waiting for {provider}; try connecting again"
+                    ))
+                }
+                Err(RecvTimeoutError::Disconnected) => {
+                    return Err(format!("the {provider} connection was interrupted"))
+                }
+            };
+            if url.scheme() != self.scheme || url.path() != "/oauth" {
+                continue;
+            }
+            match classify(&url, expected_state) {
+                Redirect::Code(code) => return Ok(code),
+                Redirect::Denied(error) => return Err(denied(provider, &error)),
+                Redirect::Ignore => {}
+            }
+        }
     }
 }
 
@@ -267,5 +363,68 @@ mod tests {
         ] {
             assert_eq!(parse(line, "s"), Redirect::Ignore, "{line:?}");
         }
+    }
+
+    fn link(url: &str) -> Url {
+        Url::parse(url).unwrap()
+    }
+
+    #[test]
+    fn the_deep_link_redirect_uri_is_the_scheme_and_a_path() {
+        assert_eq!(
+            DeepLink::new("com.example.app").redirect_uri(),
+            "com.example.app:/oauth"
+        );
+    }
+
+    #[test]
+    fn a_deep_link_brings_the_code_and_skips_what_is_not_ours() {
+        let links = DeepLink::new("app.test");
+        let rx = links.arm();
+        links.deliver(link("other:/oauth?code=evil&state=s"));
+        links.deliver(link("app.test:/elsewhere?code=evil&state=s"));
+        links.deliver(link("app.test:/oauth?code=evil&state=wrong"));
+        links.deliver(link("app.test:/oauth?code=a%20b&state=s"));
+
+        let code = links
+            .await_code(&rx, "s", Duration::from_secs(5), "Dropbox")
+            .unwrap();
+        assert_eq!(code, "a b");
+    }
+
+    #[test]
+    fn a_deep_link_refusal_ends_the_wait_with_a_reason() {
+        let links = DeepLink::new("app.test");
+        let rx = links.arm();
+        links.deliver(link("app.test:/oauth?error=access_denied&state=s"));
+        let error = links
+            .await_code(&rx, "s", Duration::from_secs(5), "Dropbox")
+            .unwrap_err();
+        assert!(error.contains("not granted"), "{error}");
+    }
+
+    #[test]
+    fn no_deep_link_in_time_is_an_error() {
+        let links = DeepLink::new("app.test");
+        let rx = links.arm();
+        let error = links
+            .await_code(&rx, "s", Duration::from_millis(50), "Dropbox")
+            .unwrap_err();
+        assert!(error.contains("timed out"), "{error}");
+    }
+
+    #[test]
+    fn arming_again_interrupts_the_earlier_wait_and_disarming_drops_links() {
+        let links = DeepLink::new("app.test");
+        let first = links.arm();
+        let second = links.arm();
+        let error = links
+            .await_code(&first, "s", Duration::from_secs(5), "Dropbox")
+            .unwrap_err();
+        assert!(error.contains("interrupted"), "{error}");
+
+        links.disarm();
+        links.deliver(link("app.test:/oauth?code=late&state=s"));
+        assert!(second.try_recv().is_err());
     }
 }

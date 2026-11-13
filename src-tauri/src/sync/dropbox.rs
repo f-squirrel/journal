@@ -11,7 +11,8 @@ use super::{Connection, Provider};
 
 /// The port the redirect URI names. A fixed one, because Dropbox matches the
 /// redirect against URIs registered with the app (register
-/// `http://127.0.0.1:53682/` there). (rclone uses the same port for the same
+/// `http://127.0.0.1:53682/` there; a phone uses a deep link instead, see
+/// `oauth::DeepLink`). (rclone uses the same port for the same
 /// purpose, so the two cannot connect at once.)
 const REDIRECT_PORT: u16 = 53682;
 
@@ -67,8 +68,8 @@ impl Dropbox {
         self.app_key().ok_or_else(|| {
             format!(
                 "Dropbox has no app key: enter one in Settings › Sync, or register an app at \
-                 dropbox.com/developers (\"App folder\" access), allow the redirect URI \
-                 http://127.0.0.1:{REDIRECT_PORT}/, tick the scopes files.metadata.read, \
+                 dropbox.com/developers (\"App folder\" access), allow the redirect URIs \
+                 http://127.0.0.1:{REDIRECT_PORT}/ and <bundle id>:/oauth, tick the scopes files.metadata.read, \
                  files.content.read, files.content.write and account_info.read, and build \
                  with DROPBOX_APP_KEY set"
             )

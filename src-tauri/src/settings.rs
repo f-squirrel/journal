@@ -237,6 +237,7 @@ mod tests {
             )),
             state_path: dir.join("sync-state.json"),
             open_url: Arc::new(|_| Ok(())),
+            deep_link: None,
             timing: crate::sync::worker::Timing::default(),
         })
         .expect("sync control builds");

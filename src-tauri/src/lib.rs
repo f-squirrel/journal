@@ -67,7 +67,11 @@ fn logging_plugin<R: Runtime>() -> tauri::plugin::TauriPlugin<R> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // Receives the OAuth redirect on a phone (see `sync::oauth::DeepLink`).
+    #[cfg(mobile)]
+    let builder = builder.plugin(tauri_plugin_deep_link::init());
+    builder
         .plugin(logging_plugin())
         .plugin(tauri_plugin_opener::init())
         // The folder picker for `export_entries`; see `capabilities/default.json`
@@ -134,6 +138,23 @@ pub fn run() {
             };
             app.manage(device_settings);
 
+            // On a phone the browser comes back as a deep link, not to a socket
+            // (the OS suspends the app while the browser is in front).
+            #[cfg(mobile)]
+            let deep_link = {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                let link = Arc::new(sync::oauth::DeepLink::new(&app.config().identifier));
+                let on_link = link.clone();
+                app.deep_link().on_open_url(move |event| {
+                    for url in event.urls() {
+                        on_link.deliver(url);
+                    }
+                });
+                Some(link)
+            };
+            #[cfg(not(mobile))]
+            let deep_link = None;
+
             let handle = app.handle().clone();
             let opener = app.handle().clone();
             let control = Arc::new(SyncControl::new(sync::SyncConfig {
@@ -157,6 +178,7 @@ pub fn run() {
                         .open_url(url.as_str(), None::<&str>)
                         .map_err(|e| e.to_string())
                 }),
+                deep_link,
                 timing: sync::worker::Timing {
                     interval: initial_interval,
                     ..sync::worker::Timing::default()
