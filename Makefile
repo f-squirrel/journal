@@ -1,4 +1,4 @@
-.PHONY: setup run build test rust-test test-e2e bindings check-bindings check-no-fallback format rust-format ts-format coverage-rust coverage-web coverage coverage-summary coverage-open
+.PHONY: setup run build ios-install ios-install-ci test rust-test test-e2e bindings check-bindings check-no-fallback format rust-format ts-format coverage-rust coverage-web coverage coverage-summary coverage-open
 
 # Install everything needed to build, test and run the app; see
 # scripts/setup.sh. Idempotent.
@@ -14,6 +14,25 @@ run: bindings
 # build should fail on binding drift, not quietly paper over it.
 build: check-bindings
 	npm run tauri build
+
+# Sign an unsigned iOS .ipa (the CI artifact `journal-ios-unsigned`) with your
+# Apple ID and install it on a USB-connected iPhone, using xtool
+# (https://github.com/xtool-org/xtool; Linux AppImage in ~/.local/bin). A free
+# Apple ID's profile expires after 7 days: re-run this to renew, over the top
+# of the installed app (deleting it first wipes its data). One-time: `xtool
+# auth`, Developer Mode on the phone, and the `usbmuxd` service running.
+IPA ?= journal-unsigned.ipa
+
+ios-install:
+	@test -f "$(IPA)" || { echo "$(IPA) not found; download the journal-ios-unsigned CI artifact or pass IPA=path" >&2; exit 1; }
+	@command -v xtool >/dev/null || { echo "xtool not found; see https://github.com/xtool-org/xtool" >&2; exit 1; }
+	xtool install --usb "$(IPA)"
+
+# Download the latest successful iOS CI artifact (needs `gh`), then install it.
+ios-install-ci:
+	rm -rf out && gh run download --name journal-ios-unsigned --dir out \
+	  $$(gh run list --workflow ci.yml --branch $$(git branch --show-current) --status success --limit 1 --json databaseId --jq '.[0].databaseId')
+	$(MAKE) ios-install IPA=out/journal-unsigned.ipa
 
 # The whole suite: the Rust unit tests first, since they are the faster
 # feedback and the e2e run has to start a dev server.
