@@ -25,6 +25,13 @@
       "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' ipc: http://ipc.localhost; object-src 'none'; base-uri 'self'"
     }
   },
+  "plugins": {
+    "deep-link": {
+      "mobile": [
+        { "scheme": ["com.fsquirrel.journal"], "appLink": false }
+      ]
+    }
+  },
   "bundle": {
     "active": true,
     "targets": "all",

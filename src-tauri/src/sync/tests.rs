@@ -441,6 +441,7 @@ impl Rig {
                 credentials,
                 state_path: dir.join("sync-state.json"),
                 open_url: Arc::new(browser),
+                deep_link: None,
                 timing,
             })
             .unwrap(),

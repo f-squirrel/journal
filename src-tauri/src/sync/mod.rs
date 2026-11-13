@@ -172,6 +172,12 @@ pub trait Provider: Send + Sync {
     }
 }
 
+/// What is waiting for the browser to come back.
+enum Catcher {
+    Socket(std::net::TcpListener),
+    Link(Arc<oauth::DeepLink>, std::sync::mpsc::Receiver<Url>),
+}
+
 /// The running worker, present exactly while a provider is connected.
 ///
 /// Created before the vault's store, because that store's change callback
@@ -238,6 +244,9 @@ pub struct SyncConfig {
     pub state_path: PathBuf,
     /// Shows the user the provider's page.
     pub open_url: OpenUrl,
+    /// How the browser gets back to the app on a phone. `None` on desktop,
+    /// where a loopback listener catches the redirect.
+    pub deep_link: Option<Arc<oauth::DeepLink>>,
     pub timing: Timing,
 }
 
@@ -468,17 +477,36 @@ impl SyncControl {
         let cfg = &self.config;
         self.discard_pending();
         let provider = self.provider(provider_id)?;
-        let port = provider.redirect_port().unwrap_or(0);
-        let (listener, redirect_uri) = oauth::bind(port, provider.name())?;
+        // Either a loopback socket or, on a phone, a deep link. Bound or armed
+        // before the browser opens, so the redirect cannot arrive first.
+        let (catcher, redirect_uri) = match &cfg.deep_link {
+            Some(link) => (Catcher::Link(link.clone(), link.arm()), link.redirect_uri()),
+            None => {
+                let port = provider.redirect_port().unwrap_or(0);
+                let (listener, uri) = oauth::bind(port, provider.name())?;
+                (Catcher::Socket(listener), uri)
+            }
+        };
         let Connection {
             url,
             state,
             app,
             redeem,
         } = provider.begin(&redirect_uri)?;
-        (cfg.open_url)(&url).map_err(|e| format!("could not open the browser: {e}"))?;
-        let code = oauth::await_code(&listener, &state, LOGIN_TIMEOUT, provider.name())?;
-        drop(listener);
+        let opened = (cfg.open_url)(&url).map_err(|e| format!("could not open the browser: {e}"));
+        let code = opened.and_then(|()| match &catcher {
+            Catcher::Link(link, links) => {
+                link.await_code(links, &state, LOGIN_TIMEOUT, provider.name())
+            }
+            Catcher::Socket(listener) => {
+                oauth::await_code(listener, &state, LOGIN_TIMEOUT, provider.name())
+            }
+        });
+        if let Catcher::Link(link, _) = &catcher {
+            link.disarm();
+        }
+        drop(catcher);
+        let code = code?;
         let token = redeem(&code)?;
         let account = provider.account(app.as_deref(), &token)?;
         let mut credential = Credential::new(provider.id(), token)

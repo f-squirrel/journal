@@ -51,3 +51,6 @@ journal-remote = { path = "../crates/remote", features = ["testing"] }
 
 [lints]
 workspace = true
+
+[target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
+tauri-plugin-deep-link = "2"
