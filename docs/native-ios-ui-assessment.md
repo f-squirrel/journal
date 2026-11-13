@@ -24,8 +24,8 @@ Options:
 
 Option 1 is the realistic one. ADR 0001 already anticipated native UI.
 
-The Tauri mobile plugin and UniFFI details above come from general
-knowledge and were not checked against current docs.
+See "Validation against docs" at the end: the plugin and UniFFI details were
+checked, and several claims below were corrected there.
 
 ## Pros
 
@@ -83,3 +83,86 @@ worth owning a second UI, go with option 1: keep the crates, add
 `journal-ffi` (UniFFI) over `vault`/`sync-engine`/`settings`, move
 non-glue code out of `src-tauri`, then build SwiftUI screens one at a time,
 starting with the entry editor.
+
+## Validation against docs (2026-11-13)
+
+Checked with web searches against official docs and trackers. Sources are
+listed at the end. Search results are summaries, not a full read of each page.
+
+### Confirmed
+
+- **Swift plugins exist and are the supported native route.** A Tauri iOS
+  plugin is a Swift class extending `Plugin`, packaged as a Swift package;
+  commands are `@objc` methods taking an `Invoke`. So the "native pieces as
+  plugins" alternative is the documented path.
+- **UniFFI fits the crate layout.** It generates Swift bindings from a Rust
+  staticlib, with an Xcode/xcframework workflow documented. It supports
+  `async` by mapping to Swift async/await via a foreign executor. Because the
+  crates are synchronous, the FFI surface can be plain sync functions called
+  from a background `Task`; no Rust async runtime is needed. Caveats from the
+  docs: no cancellation support, and crates that start their own runtime
+  (e.g. reqwest starts tokio) need a deliberate bridge. Check `dropbox` and
+  `remote` for this before committing.
+- **iOS WKWebView keyboard/viewport problems are real.** WebKit bugs
+  (viewport offset while the keyboard is open, content left offscreen after
+  dismissal, `focus()` outside a user gesture not raising the keyboard) and a
+  Tauri-specific write-up (viewport does not resize with the keyboard,
+  scroll jumps on focus) match what I claimed. The Tauri write-up is one
+  author's notes, not official docs; whether these are fixed in current iOS
+  was not checked.
+
+### Corrected or weakened
+
+- **The editor gain is smaller than stated.** CodeMirror 6 had an iOS
+  missing-selection-handles problem, but `@codemirror/view` 6.43.0 (May 2026)
+  now draws its own handles on iOS, and this repo already resolves
+  6.43.12. Other reports found (autocorrect on Enter, read-only keyboard,
+  Japanese input) are older or unconfirmed for CM6. The remaining keyboard and
+  viewport issues are WKWebView problems, not CodeMirror ones. The app has no
+  `visualViewport`, safe-area or keyboard handling today, so those are
+  likely untested workarounds, not proven failures. Test on a device first.
+- **Face ID is not a custom plugin job.** An official
+  `tauri-plugin-biometric` exists (iOS and Android; needs
+  `NSFaceIDUsageDescription`). Note it only prompts for authentication. It
+  does not by itself bind the vault key to the Keychain or Secure Enclave;
+  that is a separate design question.
+- **A share extension is not "small".** Receiving shares on iOS needs a Share
+  Extension target in Xcode writing into an App Group container, with Rust
+  reading from it. Community plugins exist but are not official, and the
+  closest full example (a Tauri app with an App Group database) moves its
+  storage into the shared container. Here that would mean relocating the
+  vault and device-settings location, which touches `fs-store` and the
+  no-migration rule.
+- **PHPicker/HEIC plugin: unverified.** No Tauri-specific PHPicker plugin
+  turned up. PHPicker is the standard native picker and avoids the
+  canvas-decode limit only if it hands back original bytes (HEIC picking also
+  has known simulator limits). Treat "small Swift plugin" as an estimate to
+  prototype, not a fact.
+- **Native view embedded in the Tauri webview: no documentation found.** The
+  mobile plugin guide covers commands and events, not attaching a `UIView` or
+  view controller. The hybrid option (and the "native editor as a plugin"
+  experiment) should be treated as unsupported territory.
+
+### Net effect on the recommendation
+
+Unchanged in direction, firmer in order: (1) test the current editor on a real
+iPhone and add visualViewport/safe-area handling if needed; (2) adopt
+`tauri-plugin-biometric` for unlock; (3) prototype a photo picker plugin;
+(4) only then consider the share extension or a full native UI. If a native UI
+does happen, UniFFI over the existing synchronous crates is well supported and
+lower risk than assumed.
+
+### Sources
+
+- Tauri, Mobile Plugin Development: https://v2.tauri.app/develop/plugins/develop-mobile/
+- Tauri, Biometric plugin: https://v2.tauri.app/plugin/biometric/
+- UniFFI, Integrating with Xcode: https://mozilla.github.io/uniffi-rs/latest/swift/xcode.html
+- UniFFI, async overview: https://mozilla.github.io/uniffi-rs/latest/internals/async-overview.html
+- WKWebView gotchas in Tauri iOS (community): https://takazudo-zudo-tauri.pages.dev/pj/zudo-tauri/docs/mobile/wkwebview-gotchas
+- WebKit bug 195884 (focus without gesture): https://bugs.webkit.org/show_bug.cgi?id=195884
+- WebKit bug 292603 (viewport offset with keyboard): https://bugs.webkit.org/show_bug.cgi?id=292603
+- WebKit bug 192564 (content offscreen after keyboard): https://bugs.webkit.org/show_bug.cgi?id=192564
+- CodeMirror, iOS missing selection handles: https://discuss.codemirror.net/t/ios-safari-missing-selection-drag-handles/9679
+- `@codemirror/view` changelog 6.43.0: https://cdn.jsdelivr.net/npm/@codemirror/view@6.43.0/CHANGELOG.md
+- Share extension with App Group in a Tauri iOS app (Peek): https://tangled.org/burrito.space/peek/tree/main/docs/mobile.md
+- tauri-plugin-mobile-sharetarget: https://docs.rs/crate/tauri-plugin-mobile-sharetarget/latest
