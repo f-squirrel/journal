@@ -2,6 +2,8 @@
 name = "journal-sync-engine"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
+repository.workspace = true
 
 [dependencies]
 journal-remote = { path = "../remote" }

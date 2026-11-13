@@ -98,7 +98,7 @@ the keyring, not the other way round.
 
 `journal-vault` is the crate name a reader will reach for first, and it is
 now the one that holds the entry semantics. Old references to
-`journal-storage` in `docs/plans/` and in ADRs 0003, 0005, 0006 and 0009 are
+`journal-storage` in ADRs 0003, 0005, 0006 and 0009 are
 left as written: they are records of decisions made under the old names, and
 this ADR is the pointer that translates them.
 

@@ -17,10 +17,15 @@ The interface is built with React and runs in a native
 - A three-pane desktop interface that collapses to one column at phone width
 - Markdown editing with syntax highlighting and rendered read mode
 - Inline autosave—there is no Save button
-- Passphrase-protected journals that lock after 10 seconds without input
+- Passphrase-protected journals that lock after a period without input (5
+  minutes by default, configurable)
 - One independently encrypted blob per entry
+- Images in entries, stored as encrypted blobs and shown inline
+- Search across entries, and version history for each entry
+- Export of the whole journal as plain files
 - Local filesystem storage
-- Light and dark themes
+- Five colour schemes, each with light and dark modes, and rebindable
+  keyboard shortcuts
 - Dropbox sync, with per-entry upload and conflict marks; a second device
   joins an existing journal by connecting Dropbox from the login screen
 
@@ -32,7 +37,10 @@ Google Drive, iCloud, iOS, and Android support are planned.
 
 Run `make setup` (or `scripts/setup.sh`). It installs everything below on
 macOS (needs [Homebrew](https://brew.sh); prompts for the Xcode command line
-tools) and Debian/Ubuntu (uses `sudo` for apt), and is safe to re-run. It also
+tools) and Debian/Ubuntu (uses `sudo` for apt), and is safe to re-run. Other
+Linux distributions (Arch, Fedora, …) are not automated: install the
+[Tauri system dependencies](https://v2.tauri.app/start/prerequisites/#linux)
+for your distribution, then use the manual steps below. It also
 takes `--system`, `--rust`, `--js` and `--coverage` to run single steps;
 `make coverage` needs `scripts/setup.sh --coverage` once.
 
@@ -147,6 +155,7 @@ workspace crates:
 | `src-tauri/` | Native application setup and Tauri commands |
 | `crates/entry` | Shared entry and header types |
 | `crates/api` | Frontend contract: bridge-only types, entry types re-exported |
+| `crates/settings` | Device and journal settings, merged per field |
 | `crates/key` | Key creation, sealing, unlocking, and encryption |
 | `crates/vault` | Encrypted entry CRUD and journal rules |
 | `crates/store` | Abstract local blob-store interface |
@@ -178,8 +187,16 @@ guessing the passphrase offline.
 This design protects journal contents at rest, but it has not received an
 independent security audit. Losing either the passphrase or the sealed key
 means losing access to the journal. Sync is not a backup: deletions and edits
-propagate, and no earlier versions are kept. Backups and data migration are
-not implemented.
+propagate to every device. Entries keep a throttled history of earlier
+versions, but only inside the journal itself. Backups and data migration are
+not implemented. Please report security problems privately rather than in a
+public issue.
+
+## License
+
+[MIT](LICENSE). The Dropbox app key used for official builds is not part of the
+license: a fork needs its own Dropbox app and key (see
+[Enabling Dropbox sync](#enabling-dropbox-sync)).
 
 ## Further reading
 

@@ -7,8 +7,7 @@ Accepted — 2026-09-20
 Builds on [0009](0009-blob-store-seam-and-local-first-sync.md), which planned
 local-first sync over the blob store without choosing how. Written before the
 two-device checks of conflict, remote deletion, disconnect and revoke were run
-by hand against Dropbox (`.claude/plans/cloud-sync.md`, T9 results); those
-have run only against `MemoryRemote` and a scripted HTTP client so far. If
+by hand against Dropbox; those have run only against `MemoryRemote` and a scripted HTTP client so far. If
 they turn up behaviour that differs from what is recorded here, amend this
 record.
 

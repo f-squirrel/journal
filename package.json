@@ -1,6 +1,8 @@
 {
   "name": "journal",
   "private": true,
+  "license": "MIT",
+  "repository": "github:f-squirrel/journal",
   "version": "0.1.0",
   "type": "module",
   "scripts": {
