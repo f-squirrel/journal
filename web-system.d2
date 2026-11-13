@@ -1,0 +1,12 @@
+direction: right
+
+browser: Browser {shape: person}
+api: API server
+db: Postgres {shape: cylinder}
+queue: Job queue {shape: queue}
+worker: Worker
+
+browser -> api: HTTPS
+api -> db: read / write
+api -> queue: publish jobs
+queue -> worker: consume

@@ -305,4 +305,12 @@ mod tests {
             &header[..header.len().min(120)]
         );
     }
+
+    #[test]
+    fn debug_shows_the_public_key_and_never_the_secret() {
+        let keyring = detached();
+        let shown = format!("{keyring:?}");
+        assert!(shown.contains(&keyring.key.public().to_string()));
+        assert!(!shown.contains("AGE-SECRET-KEY"));
+    }
 }
