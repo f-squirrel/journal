@@ -3,6 +3,21 @@
 @import "@fontsource/roboto/500.css";
 @import "@fontsource/roboto/700.css";
 
+/* iOS only: make 1rem the user's Dynamic Type body size (17px by default,
+   growing with the system text-size setting) instead of WKWebView's fixed
+   16px. Every UI size is in `rem`, so the whole app follows. Both conditions
+   are needed: macOS WKWebView also supports the keyword but resolves it to
+   13px, which would shrink the desktop UI, and its pointer is not coarse.
+   The family the shorthand resets is set again by MUI's CssBaseline on body. */
+@media (pointer: coarse) {
+  @supports (font: -apple-system-body) {
+    html {
+      font: -apple-system-body;
+      -webkit-text-size-adjust: 100%;
+    }
+  }
+}
+
 .markdown-body {
   /* Set from the colour scheme by `ThemedApp`; the fallback keeps the
      rendered view readable if the variable is ever missing. */
