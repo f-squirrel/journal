@@ -19,6 +19,7 @@ import DarkModeIcon from "@mui/icons-material/DarkMode";
 import KeyboardIcon from "@mui/icons-material/Keyboard";
 import LightModeIcon from "@mui/icons-material/LightMode";
 import { useLocation, useNavigate } from "react-router-dom";
+import { isMobile } from "../platform";
 import ShortcutsDialog from "../components/ShortcutsDialog";
 import SyncSettings from "../components/SyncSettings";
 import { HEADER_HEIGHT, READING_WIDTH, TYPE, rem } from "../components/chrome";
@@ -288,14 +289,16 @@ export default function SettingsPage() {
               )}
             </TextField>
 
-            <Box>
-              <Button
-                startIcon={<KeyboardIcon />}
-                onClick={() => setShortcutsOpen(true)}
-              >
-                Keyboard shortcuts…
-              </Button>
-            </Box>
+            {!isMobile && (
+              <Box>
+                <Button
+                  startIcon={<KeyboardIcon />}
+                  onClick={() => setShortcutsOpen(true)}
+                >
+                  Keyboard shortcuts…
+                </Button>
+              </Box>
+            )}
           </Stack>
 
           <SyncSettings />

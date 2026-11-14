@@ -6,6 +6,7 @@ import { useNewEntry } from "../hooks/useNewEntry";
 import { useShortcut } from "../shortcuts/ShortcutsContext";
 import EntryList from "./EntryList";
 import Sidebar from "./Sidebar";
+import { isMobile } from "../platform";
 import ShortcutsDialog from "./ShortcutsDialog";
 
 /// The whole app, on one screen: journal sidebar, entry list, and a pane that
@@ -57,6 +58,7 @@ export default function JournalLayout() {
     navigate("/settings");
   });
   useShortcut("help.shortcuts", () => {
+    if (isMobile) return;
     setDrawerOpen(false);
     setShortcutsOpen(true);
   });
