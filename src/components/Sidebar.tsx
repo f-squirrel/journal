@@ -20,6 +20,7 @@ import { useColorMode } from "../context/ColorModeContext";
 import { useNewEntry } from "../hooks/useNewEntry";
 import { useNow } from "../hooks/useNow";
 import { ariaKeyshortcuts, formatBinding } from "../shortcuts/binding";
+import { isMobile } from "../platform";
 import { useShortcuts } from "../shortcuts/ShortcutsContext";
 import type { SyncState } from "../types";
 import { onThisDay } from "../utils/date";
@@ -287,12 +288,14 @@ export default function Sidebar({
             }
             onClick={toggleMode}
           />
-          <RailButton
-            label="Keyboard shortcuts"
-            icon={<KeyboardIcon fontSize="small" />}
-            onClick={onShowShortcuts}
-            shortcut={bindingFor("help.shortcuts")}
-          />
+          {!isMobile && (
+            <RailButton
+              label="Keyboard shortcuts"
+              icon={<KeyboardIcon fontSize="small" />}
+              onClick={onShowShortcuts}
+              shortcut={bindingFor("help.shortcuts")}
+            />
+          )}
           <RailButton
             label="Settings"
             icon={<SettingsIcon fontSize="small" />}
