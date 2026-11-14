@@ -10,6 +10,13 @@ const ACTIVITY_EVENTS = [
 
 /// Calls `onIdle` once `ms` pass with no input while `active`.
 ///
+/// The countdown is a timer *and* a wall-clock deadline. A webview's timers run
+/// on a monotonic clock that stops while the app is suspended (iOS backgrounding
+/// or a locked screen), so a timer alone never fires for time spent away. The
+/// last-activity timestamp is therefore re-checked whenever the page comes back
+/// (`visibilitychange`, `pageshow`, `focus`) and on the first input after, and
+/// the lock goes through at once if the deadline passed in the meantime.
+///
 /// `onIdle` may take a while (the lock has to write pending drafts first), so
 /// it is handed `stillIdle`, which turns false the moment the user touches
 /// anything or the hook is torn down. It resolves `false` to decline — the
@@ -33,6 +40,8 @@ export function useIdleLock(
 
     let timer: ReturnType<typeof setTimeout> | undefined;
     let activity = 0;
+    let lastActive = Date.now();
+    let firing = false;
     let disposed = false;
 
     function arm() {
@@ -41,21 +50,50 @@ export function useIdleLock(
     }
 
     async function fire() {
-      const seen = activity;
-      const done = await onIdleRef.current(
-        () => !disposed && activity === seen,
-      );
-      if (!done && !disposed) arm();
+      if (firing) return;
+      firing = true;
+      try {
+        const seen = activity;
+        const done = await onIdleRef.current(
+          () => !disposed && activity === seen,
+        );
+        if (!done && !disposed) {
+          // Declined: a fresh quiet period, on the wall clock too.
+          lastActive = Date.now();
+          arm();
+        }
+      } finally {
+        firing = false;
+      }
+    }
+
+    function expired() {
+      return Date.now() - lastActive >= ms;
     }
 
     function onActivity() {
+      // The first touch after a long suspension must not rescue the session.
+      if (expired()) {
+        void fire();
+        return;
+      }
       activity++;
+      lastActive = Date.now();
       arm();
+    }
+
+    function onResume() {
+      if (document.visibilityState === "hidden") return;
+      if (expired()) void fire();
+      else arm();
     }
 
     for (const type of ACTIVITY_EVENTS) {
       window.addEventListener(type, onActivity, { passive: true });
     }
+    document.addEventListener("visibilitychange", onResume);
+    window.addEventListener("pageshow", onResume);
+    window.addEventListener("focus", onResume);
     arm();
 
     return () => {
@@ -64,6 +102,9 @@ export function useIdleLock(
       for (const type of ACTIVITY_EVENTS) {
         window.removeEventListener(type, onActivity);
       }
+      document.removeEventListener("visibilitychange", onResume);
+      window.removeEventListener("pageshow", onResume);
+      window.removeEventListener("focus", onResume);
     };
   }, [active, ms]);
 }

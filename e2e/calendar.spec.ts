@@ -149,6 +149,14 @@ test("resurfaces earlier years on this day, and the rail says so", async ({
 
 test("groups memories by year, nearest first", async ({ page }) => {
   const now = "2027-06-12T12:00:00Z";
+  // The clock jumps a year mid-test, which the idle lock rightly reads as a
+  // long suspension; this test is not about locking, so it is turned off.
+  await page.addInitScript(() => {
+    window.localStorage.setItem(
+      "journal.fallback.device",
+      JSON.stringify({ idle_lock_minutes: null }),
+    );
+  });
   await login(page, now);
   // A fresh draft's title defaults to its date (`EntryPane`'s `title`
   // state); "now" is fixed for this whole test, so both drafts default to

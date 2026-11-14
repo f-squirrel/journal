@@ -282,3 +282,44 @@ test("a null idle lock never locks", async ({ page }) => {
   await unlocked(page);
   await expect(page.getByText("First day back")).toBeVisible();
 });
+
+// A suspended webview (iOS backgrounding, a locked screen) stops its timers
+// but not the wall clock. `setSystemTime` moves `Date` without firing any
+// timer, which is exactly that: the countdown never ran, yet time passed.
+test("locks on return from a suspension the timer never counted", async ({
+  page,
+}) => {
+  await login(page);
+  await expect(page.getByText("First day back")).toBeVisible();
+
+  await page.clock.setSystemTime(Date.now() + IDLE_MS * 10);
+  await page.evaluate(() =>
+    document.dispatchEvent(new Event("visibilitychange")),
+  );
+
+  await locked(page);
+  await expect(page.getByText("First day back")).toHaveCount(0);
+});
+
+test("the first touch after a suspension does not rescue the session", async ({
+  page,
+}) => {
+  await login(page);
+
+  await page.clock.setSystemTime(Date.now() + IDLE_MS * 10);
+  await page.evaluate(() => window.dispatchEvent(new Event("touchstart")));
+
+  await locked(page);
+});
+
+test("returning before the deadline keeps the session", async ({ page }) => {
+  await login(page);
+
+  await page.clock.setSystemTime(Date.now() + IDLE_MS / 2);
+  await page.evaluate(() =>
+    document.dispatchEvent(new Event("visibilitychange")),
+  );
+  await page.clock.runFor(1_000);
+
+  await unlocked(page);
+});
